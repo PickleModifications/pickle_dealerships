@@ -1,0 +1,44 @@
+fx_version "cerulean"
+game "gta5"
+author "Pickle Mods"
+description "Advanced player-owned dealership system for FiveM."
+version "v1.0.0"
+
+ui_page "nui/index.html"
+
+files {
+    "nui/index.html",
+    "nui/assets/**/*.*",
+}
+
+shared_scripts {
+    "@ox_lib/init.lua",
+    "config.lua",
+    "locales/locale.lua",
+    "locales/translations/*.lua",
+    "core/shared.lua",
+}
+
+client_scripts {
+    "bridge/**/**/client.lua",
+    "core/client.lua",
+    "modules/**/client.lua",
+}
+
+server_scripts {
+    "@oxmysql/lib/MySQL.lua",
+    "bridge/**/**/server.lua",
+    "core/server.lua",
+    "modules/**/server.lua",
+}
+
+lua54 'yes'
+
+escrow_ignore {
+    "config.lua",
+    "core/*.*",
+    "bridge/**/**/*.*",
+    "bridge/**/*.*",
+    "locales/locale.lua",
+    "locales/translations/*.lua",
+}
