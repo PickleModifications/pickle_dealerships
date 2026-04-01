@@ -1,315 +1,222 @@
-import { useState, useEffect, useMemo } from 'react'
-import { Search, ShoppingCart, Package, Loader2, Sparkles } from 'lucide-react'
-import { fetchNui, formatCurrency, cn, isEnvBrowser } from '@/lib/utils'
-import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import { Input } from '@/components/ui/input'
-import { Select } from '@/components/ui/select'
-import { Progress } from '@/components/ui/progress'
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from '@/components/ui/dialog'
-import type { CatalogItem } from '@/types'
+import { useEffect, useState } from 'react'
+import { Card, CardContent } from '../components/ui/card'
+import { Badge } from '../components/ui/badge'
+import { Button } from '../components/ui/button'
+import { Input } from '../components/ui/input'
+import { ScrollArea } from '../components/ui/scroll-area'
+import { Separator } from '../components/ui/separator'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog'
+import { fetchNui, formatCurrency } from '../lib/utils'
+import { X, Search, ShoppingCart, Truck, Lock } from 'lucide-react'
+import type { DealershipData, CatalogItem } from '../types'
 
-const TIER_STYLES: Record<string, { bg: string; text: string; border: string; label: string }> = {
-  basic:     { bg: 'bg-slate-500/10', text: 'text-slate-300', border: 'border-slate-500/20', label: 'Basic' },
-  expanded:  { bg: 'bg-blue-500/10', text: 'text-blue-300', border: 'border-blue-500/20', label: 'Expanded' },
-  full:      { bg: 'bg-violet-500/10', text: 'text-violet-300', border: 'border-violet-500/20', label: 'Full' },
-  exclusive: { bg: 'bg-gradient-to-r from-amber-500/15 to-orange-500/15', text: 'text-amber-300', border: 'border-amber-500/20', label: 'Exclusive' },
+interface Props {
+  data: DealershipData
+  onClose: () => void
 }
 
-const CLASS_COLORS: Record<string, string> = {
-  sports: 'bg-violet-500',
-  sedan: 'bg-blue-500',
-  suv: 'bg-emerald-500',
-  muscle: 'bg-red-500',
-  super: 'bg-amber-500',
-  coupe: 'bg-cyan-500',
-  compact: 'bg-teal-500',
-  offroad: 'bg-orange-500',
-  motorcycle: 'bg-pink-500',
-  van: 'bg-slate-400',
-  truck: 'bg-stone-400',
-  boat: 'bg-blue-400',
-  helicopter: 'bg-sky-400',
-  plane: 'bg-indigo-400',
+const tierOrder = ['basic', 'expanded', 'full', 'exclusive']
+const tierColors: Record<string, string> = {
+  basic: 'bg-zinc-500/20 text-zinc-300',
+  expanded: 'bg-blue-500/20 text-blue-300',
+  full: 'bg-purple-500/20 text-purple-300',
+  exclusive: 'bg-amber-500/20 text-amber-300',
 }
 
-const TIER_CAPACITY: Record<number, number> = { 1: 10, 2: 25, 3: 50, 4: 100 }
-const IMPORT_TAX_RATE = 0.10
-
-export function CatalogPage({ data }: { data: any }) {
-  const dealershipId = data?.dealershipId as number
-  const tier = (data?.tier as number) ?? 1
-  const dealershipName = (data?.dealershipName as string) ?? ''
-  const stockCount = (data?.stockCount as number) ?? 0
-
+export default function CatalogPage({ data, onClose }: Props) {
   const [catalog, setCatalog] = useState<CatalogItem[]>([])
-  const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
-  const [typeFilter, setTypeFilter] = useState('all')
   const [classFilter, setClassFilter] = useState('all')
-  const [selectedItem, setSelectedItem] = useState<CatalogItem | null>(null)
-  const [ordering, setOrdering] = useState(false)
-  const [currentStock, setCurrentStock] = useState(stockCount)
-
-  const maxCapacity = TIER_CAPACITY[tier] ?? 10
-  const capacityPercent = Math.min((currentStock / maxCapacity) * 100, 100)
+  const [tierFilter, setTierFilter] = useState('all')
+  const [loading, setLoading] = useState(true)
+  const [ordering, setOrdering] = useState<CatalogItem | null>(null)
+  const [retailPrice, setRetailPrice] = useState('')
+  const [quantity, setQuantity] = useState('1')
 
   useEffect(() => {
-    setLoading(true)
-    if (isEnvBrowser()) {
-      setTimeout(() => { setCatalog([]); setLoading(false) }, 400)
-      return
-    }
-    fetchNui<CatalogItem[]>('getCatalog', { dealershipId })
-      .then((res) => { if (Array.isArray(res)) setCatalog(res) })
-      .catch(() => {})
-      .finally(() => setLoading(false))
-  }, [dealershipId])
+    fetchNui<{ catalog: CatalogItem[] }>('getCatalog', {
+      dealershipId: data.dealershipId,
+      location: data.location,
+      type: data.type,
+    }).then((res) => {
+      if (res && Array.isArray(res.catalog)) setCatalog(res.catalog)
+      else if (Array.isArray(res)) setCatalog(res)
+      setLoading(false)
+    }).catch(() => setLoading(false))
+  }, [data.dealershipId])
 
-  const vehicleTypes = useMemo(() => {
-    const types = new Set(catalog.map((c) => c.vehicleType))
-    return [{ value: 'all', label: 'All Types' }, ...Array.from(types).sort().map((t) => ({ value: t, label: t }))]
-  }, [catalog])
+  const classes = [...new Set(catalog.map((v) => v.class))].sort()
 
-  const vehicleClasses = useMemo(() => {
-    const classes = new Set(catalog.map((c) => c.class))
-    return [{ value: 'all', label: 'All Classes' }, ...Array.from(classes).sort().map((c) => ({ value: c, label: c }))]
-  }, [catalog])
+  const filtered = catalog
+    .filter((v) => (v.label || v.model).toLowerCase().includes(search.toLowerCase()))
+    .filter((v) => classFilter === 'all' || v.class === classFilter)
+    .filter((v) => tierFilter === 'all' || v.tier === tierFilter)
+    .sort((a, b) => tierOrder.indexOf(a.tier) - tierOrder.indexOf(b.tier) || a.wholesale - b.wholesale)
 
-  const filtered = useMemo(() => {
-    return catalog.filter((item) => {
-      if (search && !item.label.toLowerCase().includes(search.toLowerCase()) && !item.model.toLowerCase().includes(search.toLowerCase())) return false
-      if (typeFilter !== 'all' && item.vehicleType !== typeFilter) return false
-      if (classFilter !== 'all' && item.class !== classFilter) return false
-      return true
+  const handleOrder = () => {
+    if (!ordering) return
+    const price = parseInt(retailPrice) || Math.round(ordering.wholesale * 1.3)
+    const qty = parseInt(quantity) || 1
+    fetchNui('orderVehicle', {
+      dealershipId: data.dealershipId,
+      location: data.location,
+      model: ordering.model,
+      wholesale: ordering.wholesale,
+      retailPrice: price,
+      quantity: qty,
+    }).then(() => {
+      setOrdering(null)
+      setRetailPrice('')
+      setQuantity('1')
     })
-  }, [catalog, search, typeFilter, classFilter])
-
-  const handleOrder = async () => {
-    if (!selectedItem) return
-    setOrdering(true)
-    try {
-      await fetchNui('orderVehicle', { model: selectedItem.model, dealershipId })
-      setCurrentStock((prev) => prev + 1)
-      setSelectedItem(null)
-    } catch {
-      // handled by game
-    } finally {
-      setOrdering(false)
-    }
   }
 
   return (
-    <div className="flex flex-col h-full p-5 gap-4">
-      {/* Top Bar */}
-      <div className="flex items-center gap-3 animate-slideUp shrink-0">
-        {/* Search */}
-        <div className="relative flex-1 max-w-xs">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
-          <Input
-            placeholder="Search vehicles..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="pl-9 bg-white/[0.03] border-white/[0.06] text-white placeholder:text-slate-600 h-9"
-          />
-        </div>
-
-        {/* Filters */}
-        <Select
-          options={vehicleTypes}
-          value={typeFilter}
-          onChange={setTypeFilter}
-          placeholder="Vehicle Type"
-          className="w-36"
-        />
-        <Select
-          options={vehicleClasses}
-          value={classFilter}
-          onChange={setClassFilter}
-          placeholder="Class"
-          className="w-36"
-        />
-
-        {/* Stock Capacity */}
-        <div className="ml-auto flex items-center gap-3 glass-subtle rounded-lg px-3 py-2">
-          <div className="text-right">
-            <p className="text-[10px] uppercase tracking-wider text-slate-500">Stock</p>
-            <p className="text-sm font-semibold text-white">
-              {currentStock}
-              <span className="text-slate-500 font-normal">/{maxCapacity}</span>
-            </p>
+    <>
+      {!data.embedded && (
+        <>
+          <div className="flex items-center justify-between p-5 pb-0">
+            <div>
+              <h1 className="text-xl font-bold">Wholesale Catalog</h1>
+              <p className="text-sm text-muted-foreground">Order vehicles for your dealership</p>
+            </div>
+            <Button variant="ghost" size="icon" onClick={onClose}>
+              <X className="h-5 w-5" />
+            </Button>
           </div>
-          <div className="w-20">
-            <Progress
-              value={capacityPercent}
-              className={cn(
-                'h-1.5',
-                capacityPercent >= 90 ? '[&>div]:bg-gradient-to-r [&>div]:from-red-500 [&>div]:to-red-400' :
-                capacityPercent >= 70 ? '[&>div]:bg-gradient-to-r [&>div]:from-amber-500 [&>div]:to-amber-400' :
-                ''
-              )}
-            />
-          </div>
-        </div>
-      </div>
 
-      {/* Results count */}
-      {!loading && (
-        <div className="text-xs text-slate-500 shrink-0">
-          {filtered.length} vehicle{filtered.length !== 1 ? 's' : ''} available
-        </div>
+          <div className="px-5 pt-3 flex flex-wrap gap-2">
+            <div className="relative flex-1 min-w-[200px]">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input placeholder="Search..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" />
+            </div>
+            <Select value={classFilter} onValueChange={setClassFilter}>
+              <SelectTrigger className="w-[140px]">
+                <SelectValue placeholder="Class" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Classes</SelectItem>
+                {classes.map((c) => (
+                  <SelectItem key={c} value={c} className="capitalize">{c}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={tierFilter} onValueChange={setTierFilter}>
+              <SelectTrigger className="w-[140px]">
+                <SelectValue placeholder="Tier" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Tiers</SelectItem>
+                {tierOrder.map((t) => (
+                  <SelectItem key={t} value={t} className="capitalize">{t}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <Separator className="mt-3" />
+        </>
       )}
 
-      {/* Vehicle Grid */}
-      <div className="flex-1 overflow-y-auto pr-1">
+      <div className="relative flex-1 flex flex-col overflow-hidden">
+      <ScrollArea className="flex-1 p-5">
         {loading ? (
-          <div className="flex items-center justify-center h-48">
-            <div className="flex flex-col items-center gap-3">
-              <Loader2 className="h-6 w-6 animate-spin text-violet-400" />
-              <p className="text-xs text-slate-500">Loading catalog...</p>
-            </div>
-          </div>
+          <div className="flex items-center justify-center h-48 text-muted-foreground">Loading catalog...</div>
         ) : filtered.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-48">
-            <div className="w-16 h-16 rounded-2xl bg-white/[0.03] border border-white/[0.06] flex items-center justify-center mb-3">
-              <Package className="h-8 w-8 text-slate-600" />
-            </div>
-            <p className="text-sm font-medium text-slate-400">No vehicles found</p>
-            <p className="text-xs text-slate-600 mt-1">
-              {catalog.length === 0 ? 'The catalog is empty' : 'Try adjusting your search or filters'}
-            </p>
-          </div>
+          <div className="flex items-center justify-center h-48 text-muted-foreground">No vehicles found</div>
         ) : (
-          <div className="grid grid-cols-3 gap-3">
-            {filtered.map((item, index) => {
-              const tierStyle = TIER_STYLES[item.tier] ?? TIER_STYLES.basic
-              const classColor = CLASS_COLORS[item.class?.toLowerCase()] ?? 'bg-slate-500'
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {filtered.map((item) => {
+              const locked = !canAccessTier(item.tier, data.tier)
               return (
-                <div
-                  key={item.model}
-                  className="glass-subtle glass-hover rounded-xl p-4 flex flex-col gap-3 cursor-pointer transition-all duration-300 animate-slideUp group"
-                  style={{ animationDelay: `${Math.min(index * 30, 300)}ms` }}
-                  onClick={() => setSelectedItem(item)}
-                >
-                  {/* Icon + Class indicator */}
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-center gap-2.5">
-                      <div className={cn('w-3 h-3 rounded-full shadow-lg', classColor)} />
+                <Card key={item.model} className={`overflow-hidden transition-colors ${locked ? 'opacity-50' : 'hover:border-accent/50'}`}>
+                  <CardContent className="p-4">
+                    <div className="flex items-start justify-between mb-2">
                       <div>
-                        <h4 className="text-sm font-medium text-white leading-tight line-clamp-1 group-hover:text-violet-200 transition-colors">
-                          {item.label}
-                        </h4>
-                        <p className="text-[10px] text-slate-500 capitalize mt-0.5">{item.class}</p>
+                        <h3 className="font-semibold">{item.label}</h3>
+                        <p className="text-xs text-muted-foreground font-mono">{item.model}</p>
                       </div>
+                      <Badge className={`${tierColors[item.tier] || ''} border-0 text-xs capitalize`}>
+                        {item.tier}
+                      </Badge>
                     </div>
-                    <Badge className={cn('text-[10px] px-1.5 py-0 border', tierStyle.bg, tierStyle.text, tierStyle.border)}>
-                      {tierStyle.label}
-                    </Badge>
-                  </div>
-
-                  {/* Price */}
-                  <div className="mt-auto">
-                    <p className="text-lg font-bold gradient-text">{formatCurrency(item.wholesale)}</p>
-                    <p className="text-[10px] text-slate-500">wholesale price</p>
-                  </div>
-
-                  {/* Order button */}
-                  <Button
-                    size="sm"
-                    className="w-full h-8 text-xs"
-                    disabled={currentStock >= maxCapacity}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setSelectedItem(item)
-                    }}
-                  >
-                    <ShoppingCart className="h-3 w-3 mr-1.5" />
-                    Order
-                  </Button>
-                </div>
+                    <p className="text-xs text-muted-foreground capitalize mb-3">{item.class}</p>
+                    <div className="flex items-center justify-between">
+                      <p className="font-bold">{formatCurrency(item.wholesale)}</p>
+                      {locked ? (
+                        <Badge variant="outline" className="gap-1 text-muted-foreground">
+                          <Lock className="h-3 w-3" /> Locked
+                        </Badge>
+                      ) : (
+                        <Button size="sm" onClick={() => { setOrdering(item); setRetailPrice(String(Math.round(item.wholesale * 1.3))) }}>
+                          <ShoppingCart className="h-3 w-3" /> Order
+                        </Button>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
               )
             })}
           </div>
         )}
-      </div>
+      </ScrollArea>
 
-      {/* Order Confirmation Dialog */}
-      <Dialog open={!!selectedItem} onOpenChange={(open) => { if (!open) setSelectedItem(null) }}>
-        <DialogContent className="bg-[rgba(12,12,24,0.95)] border-white/[0.06] backdrop-blur-2xl">
-          {selectedItem && (
-            <>
-              <DialogHeader>
-                <DialogTitle className="gradient-text">Confirm Order</DialogTitle>
-                <DialogDescription className="text-slate-500">
-                  Review the order details before confirming
-                </DialogDescription>
-              </DialogHeader>
-
-              <div className="space-y-0 my-2">
-                {/* Vehicle name */}
-                <div className="flex items-center justify-between py-3 border-b border-white/[0.04]">
-                  <span className="text-sm text-slate-500">Vehicle</span>
-                  <span className="text-sm font-medium text-white">{selectedItem.label}</span>
-                </div>
-
-                {/* Wholesale */}
-                <div className="flex items-center justify-between py-3 border-b border-white/[0.04]">
-                  <span className="text-sm text-slate-500">Wholesale Price</span>
-                  <span className="text-sm text-white">{formatCurrency(selectedItem.wholesale)}</span>
-                </div>
-
-                {/* Tax */}
-                <div className="flex items-center justify-between py-3 border-b border-white/[0.04]">
-                  <span className="text-sm text-slate-500">Import Tax (10%)</span>
-                  <span className="text-sm text-amber-400">+{formatCurrency(selectedItem.wholesale * IMPORT_TAX_RATE)}</span>
-                </div>
-
-                {/* Total */}
-                <div className="flex items-center justify-between py-3">
-                  <span className="text-sm font-semibold text-white">Total Cost</span>
-                  <span className="text-lg font-bold gradient-text">
-                    {formatCurrency(selectedItem.wholesale * (1 + IMPORT_TAX_RATE))}
-                  </span>
-                </div>
+      <Dialog open={!!ordering} onOpenChange={(open) => !open && setOrdering(null)}>
+        <DialogContent onClose={() => setOrdering(null)}>
+          <DialogHeader>
+            <DialogTitle>Order {ordering?.label}</DialogTitle>
+            <DialogDescription>Set the retail price and quantity for this order.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 pt-2">
+            <div>
+              <p className="text-sm text-muted-foreground mb-1">Wholesale Cost</p>
+              <p className="text-lg font-bold">{formatCurrency(ordering?.wholesale || 0)}</p>
+            </div>
+            <div>
+              <label className="text-sm font-medium">Retail Price</label>
+              <Input
+                type="number"
+                value={retailPrice}
+                onChange={(e) => setRetailPrice(e.target.value)}
+                placeholder="Set retail price..."
+                className="mt-1"
+              />
+              {retailPrice && ordering && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  Markup: {formatCurrency(parseInt(retailPrice) - ordering.wholesale)} ({Math.round(((parseInt(retailPrice) - ordering.wholesale) / ordering.wholesale) * 100)}%)
+                </p>
+              )}
+            </div>
+            <div>
+              <label className="text-sm font-medium">Quantity</label>
+              <Input
+                type="number"
+                min="1"
+                max="10"
+                value={quantity}
+                onChange={(e) => setQuantity(e.target.value)}
+                className="mt-1"
+              />
+            </div>
+            <div className="flex items-center justify-between pt-2 border-t border-border">
+              <div>
+                <p className="text-xs text-muted-foreground">Total Cost (with tax)</p>
+                <p className="font-bold">{formatCurrency(Math.round((ordering?.wholesale || 0) * 1.1 * (parseInt(quantity) || 1)))}</p>
               </div>
-
-              <DialogFooter>
-                <Button
-                  variant="outline"
-                  className="bg-white/[0.03] border-white/[0.06] text-slate-400 hover:text-white"
-                  onClick={() => setSelectedItem(null)}
-                  disabled={ordering}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  onClick={handleOrder}
-                  disabled={ordering || currentStock >= maxCapacity}
-                >
-                  {ordering ? (
-                    <>
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      Processing...
-                    </>
-                  ) : (
-                    <>
-                      <ShoppingCart className="h-4 w-4 mr-2" />
-                      Confirm Order
-                    </>
-                  )}
-                </Button>
-              </DialogFooter>
-            </>
-          )}
+              <Button onClick={handleOrder} className="gap-2">
+                <Truck className="h-4 w-4" /> Place Order
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
-    </div>
+      </div>
+    </>
   )
+}
+
+function canAccessTier(vehicleTier: string, dealershipTier: number): boolean {
+  const tierMap: Record<string, number> = { basic: 1, expanded: 2, full: 3, exclusive: 4 }
+  return dealershipTier >= (tierMap[vehicleTier] || 1)
 }

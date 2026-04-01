@@ -5,6 +5,10 @@ CreateThread(function()
     local results = MySQL.query.await('SELECT * FROM dealerships')
     if results then
         for _, row in ipairs(results) do
+            local meta = row.metadata
+            if type(meta) == "string" then
+                meta = json.decode(meta) or {}
+            end
             dealershipCache[row.location] = {
                 id = row.id,
                 location = row.location,
@@ -12,42 +16,105 @@ CreateThread(function()
                 owner_citizenid = row.owner_citizenid,
                 balance = row.balance or 0,
                 tier = row.tier or 1,
+                type = row.type or "car",
+                mode = row.mode or "public",
+                metadata = meta or {},
                 created_at = row.created_at,
             }
         end
     end
 end)
 
---- Returns summary data for all dealership locations (config + DB merged)
+--- Builds a resolved config for a dealership from its DB metadata
+---@param cached table
+---@return table|nil
+local function ResolveDealershipConfig(cached)
+    if not cached then return nil end
+    local meta = cached.metadata or {}
+    local defaults = Config.DealershipDefaults or {}
+
+    -- Must have coords to be a valid placed dealership
+    if not meta.coords then return nil end
+
+    local resolved = {
+        label = cached.name or "Dealership",
+        mode = cached.mode or "player-owned",
+        type = cached.type or "car",
+        purchasePrice = meta.purchasePrice or 0,
+        selfService = meta.selfService or defaults.selfService or false,
+        deliveryMode = meta.deliveryMode or defaults.deliveryMode or "timed",
+        colorMode = meta.colorMode or defaults.colorMode or "rgb_wheel",
+        acceptedCurrency = meta.acceptedCurrency or defaults.acceptedCurrency or "both",
+        blip = meta.blip or defaults.blip or { sprite = 326, color = 3, scale = 0.8 },
+    }
+
+    -- Coords
+    resolved.coords = vector3(meta.coords.x, meta.coords.y, meta.coords.z)
+    resolved.heading = meta.coords.w or 0.0
+    resolved.zones = {
+        { coords = vector3(meta.coords.x, meta.coords.y, meta.coords.z), radius = meta.zoneRadius or defaults.zoneRadius or 40.0 },
+    }
+
+    -- Spawn point
+    if meta.spawnPoint then
+        resolved.spawnPoint = vector4(meta.spawnPoint.x, meta.spawnPoint.y, meta.spawnPoint.z, meta.spawnPoint.w or 0.0)
+    end
+
+    -- Interaction points
+    if meta.interactionPoints then
+        resolved.interactionPoints = {}
+        for pointType, point in pairs(meta.interactionPoints) do
+            resolved.interactionPoints[pointType] = vector4(point.x, point.y, point.z, point.w or 0.0)
+        end
+    end
+
+    -- Display spots
+    if meta.displaySpots then
+        resolved.displaySpots = {}
+        for _, spot in ipairs(meta.displaySpots) do
+            resolved.displaySpots[#resolved.displaySpots + 1] = vector4(spot.x, spot.y, spot.z, spot.w or 0.0)
+        end
+    end
+
+    -- NPC spawn points
+    if meta.npcSpawnPoints then
+        resolved.npcSpawnPoints = {}
+        for _, point in ipairs(meta.npcSpawnPoints) do
+            resolved.npcSpawnPoints[#resolved.npcSpawnPoints + 1] = vector4(point.x, point.y, point.z, point.w or 0.0)
+        end
+    end
+
+    return resolved
+end
+
+--- Returns summary data for all dealership locations
 ---@param source number
 lib.callback.register('pickle_dealerships:getDealerships', function(source)
     local dealerships = {}
 
-    for locationKey, locationConfig in pairs(Config.Dealerships) do
-        local cached = dealershipCache[locationKey]
-        local stockCount = 0
-
-        if cached then
+    for locationKey, cached in pairs(dealershipCache) do
+        local resolved = ResolveDealershipConfig(cached)
+        if resolved then
+            local stockCount = 0
             local result = MySQL.scalar.await(
-                'SELECT COUNT(*) FROM dealership_stock WHERE dealership_id = ? AND sold = 0',
+                'SELECT COUNT(*) FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NULL',
                 { cached.id }
             )
             stockCount = result or 0
-        end
 
-        dealerships[locationKey] = {
-            location = locationKey,
-            name = cached and cached.name or locationConfig.name,
-            mode = locationConfig.mode,
-            type = locationConfig.type or 'car',
-            owner_citizenid = cached and cached.owner_citizenid or nil,
-            purchasePrice = locationConfig.purchasePrice,
-            tier = cached and cached.tier or locationConfig.defaultTier or 1,
-            coords = locationConfig.coords,
-            blip = locationConfig.blip,
-            stockCount = stockCount,
-            owned = cached and cached.owner_citizenid ~= nil or false,
-        }
+            dealerships[locationKey] = {
+                location = locationKey,
+                name = cached.name,
+                mode = cached.mode or "player-owned",
+                type = cached.type or "car",
+                owner_citizenid = cached.owner_citizenid,
+                purchasePrice = resolved.purchasePrice,
+                tier = cached.tier or 1,
+                stockCount = stockCount,
+                owned = cached.owner_citizenid ~= nil,
+                resolvedConfig = resolved,
+            }
+        end
     end
 
     return dealerships
@@ -57,17 +124,16 @@ end)
 ---@param source number
 ---@param locationKey string
 lib.callback.register('pickle_dealerships:getDealershipData', function(source, locationKey)
-    local locationConfig = Config.Dealerships[locationKey]
-    if not locationConfig then return nil end
-
     local cached = dealershipCache[locationKey]
+    local resolved = ResolveDealershipConfig(cached)
+    if not resolved then return nil end
 
     local stock = {}
     local employees = {}
 
     if cached then
         local stockResults = MySQL.query.await(
-            'SELECT * FROM dealership_stock WHERE dealership_id = ? AND sold = 0',
+            'SELECT * FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NULL',
             { cached.id }
         )
         stock = stockResults or {}
@@ -79,21 +145,25 @@ lib.callback.register('pickle_dealerships:getDealershipData', function(source, l
         employees = employeeResults or {}
     end
 
+    local tierCfg = Config.Tiers[cached and cached.tier or 1]
+
     return {
+        id = cached and cached.id or nil,
         location = locationKey,
-        name = cached and cached.name or locationConfig.name,
-        mode = locationConfig.mode,
-        type = locationConfig.type or 'car',
+        name = cached and cached.name or resolved.label,
+        mode = resolved.mode,
+        type = resolved.type or 'car',
         owner_citizenid = cached and cached.owner_citizenid or nil,
         balance = cached and cached.balance or 0,
-        tier = cached and cached.tier or locationConfig.defaultTier or 1,
-        purchasePrice = locationConfig.purchasePrice,
-        coords = locationConfig.coords,
-        displaySpots = locationConfig.displaySpots or {},
-        deliveryMode = locationConfig.deliveryMode or 'instant',
+        tier = cached and cached.tier or 1,
+        purchasePrice = resolved.purchasePrice or 0,
+        coords = resolved.coords,
+        displaySpots = resolved.displaySpots or {},
+        deliveryMode = resolved.deliveryMode or 'timed',
+        selfService = resolved.selfService or false,
         stock = stock,
         employees = employees,
-        stockCapacity = locationConfig.stockCapacity or Config.DefaultStockCapacity or 20,
+        stockCapacity = tierCfg and tierCfg.stockCap or 20,
     }
 end)
 
@@ -101,112 +171,81 @@ end)
 ---@param source number
 ---@param locationKey string
 lib.callback.register('pickle_dealerships:purchaseDealership', function(source, locationKey)
-    local locationConfig = Config.Dealerships[locationKey]
-    if not locationConfig then
-        return false, 'Invalid dealership location.'
-    end
-
-    if locationConfig.mode ~= 'player-owned' then
-        return false, 'This dealership cannot be purchased.'
-    end
-
     local cached = dealershipCache[locationKey]
-    if cached and cached.owner_citizenid then
-        return false, 'This dealership is already owned.'
+    local resolved = ResolveDealershipConfig(cached)
+    if not resolved then
+        return { success = false, error = 'Invalid dealership location.' }
     end
 
-    local price = locationConfig.purchasePrice or 0
+    if resolved.mode ~= 'player-owned' then
+        return { success = false, error = 'This dealership cannot be purchased.' }
+    end
+
+    if cached and cached.owner_citizenid then
+        return { success = false, error = 'This dealership is already owned.' }
+    end
+
+    local price = resolved.purchasePrice or 0
     local citizenid = GetIdentifier(source)
     if not citizenid then
-        return false, 'Unable to identify player.'
+        return { success = false, error = 'Unable to identify player.' }
     end
 
     local money = GetMoney(source, 'bank')
     if money < price then
-        return false, 'You do not have enough money.'
+        return { success = false, error = 'You do not have enough money.' }
     end
 
-    local success = RemoveMoney(source, 'bank', price)
+    local success = RemoveMoney(source, price, 'bank')
     if not success then
-        return false, 'Failed to deduct payment.'
+        return { success = false, error = 'Failed to deduct payment.' }
     end
 
-    if cached then
-        MySQL.update.await(
-            'UPDATE dealerships SET owner_citizenid = ?, name = ?, balance = 0 WHERE location = ?',
-            { citizenid, locationConfig.name, locationKey }
-        )
-        cached.owner_citizenid = citizenid
-        cached.balance = 0
-    else
-        local id = MySQL.insert.await(
-            'INSERT INTO dealerships (location, name, owner_citizenid, balance, tier) VALUES (?, ?, ?, 0, ?)',
-            { locationKey, locationConfig.name, citizenid, locationConfig.defaultTier or 1 }
-        )
-        dealershipCache[locationKey] = {
-            id = id,
-            location = locationKey,
-            name = locationConfig.name,
-            owner_citizenid = citizenid,
-            balance = 0,
-            tier = locationConfig.defaultTier or 1,
-        }
-    end
+    MySQL.update.await(
+        'UPDATE dealerships SET owner_citizenid = ?, balance = 0 WHERE id = ?',
+        { citizenid, cached.id }
+    )
+    cached.owner_citizenid = citizenid
+    cached.balance = 0
 
-    ShowNotification(source, 'You purchased the dealership for $' .. price .. '!', 'success')
-    return true
+    ShowNotification(source, 'You purchased the dealership for $' .. price .. '!')
+    return { success = true }
 end)
 
 --- Owner sells their dealership back
 ---@param source number
 ---@param locationKey string
 lib.callback.register('pickle_dealerships:sellDealership', function(source, locationKey)
-    local locationConfig = Config.Dealerships[locationKey]
-    if not locationConfig then
-        return false, 'Invalid dealership location.'
+    local cached = dealershipCache[locationKey]
+    local resolved = ResolveDealershipConfig(cached)
+    if not resolved then
+        return { success = false, error = 'Invalid dealership location.' }
     end
 
-    local cached = dealershipCache[locationKey]
     if not cached or not cached.owner_citizenid then
-        return false, 'This dealership is not owned.'
+        return { success = false, error = 'This dealership is not owned.' }
     end
 
     local citizenid = GetIdentifier(source)
     if citizenid ~= cached.owner_citizenid then
-        return false, 'You do not own this dealership.'
+        return { success = false, error = 'You do not own this dealership.' }
     end
 
     local sellbackRate = Config.SellbackRate or 0.5
-    local refund = math.floor((locationConfig.purchasePrice or 0) * sellbackRate)
+    local refund = math.floor((resolved.purchasePrice or 0) * sellbackRate)
 
-    -- Remove all employees
-    MySQL.update.await(
-        'DELETE FROM dealership_employees WHERE dealership_id = ?',
-        { cached.id }
-    )
-
-    -- Clear all unsold stock
-    MySQL.update.await(
-        'DELETE FROM dealership_stock WHERE dealership_id = ? AND sold = 0',
-        { cached.id }
-    )
-
-    -- Clear ownership
-    MySQL.update.await(
-        'UPDATE dealerships SET owner_citizenid = NULL, balance = 0 WHERE id = ?',
-        { cached.id }
-    )
+    MySQL.update.await('DELETE FROM dealership_employees WHERE dealership_id = ?', { cached.id })
+    MySQL.update.await('DELETE FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NULL', { cached.id })
+    MySQL.update.await('UPDATE dealerships SET owner_citizenid = NULL, balance = 0 WHERE id = ?', { cached.id })
 
     cached.owner_citizenid = nil
     cached.balance = 0
 
-    AddMoney(source, 'bank', refund)
-    ShowNotification(source, 'You sold the dealership and received $' .. refund .. '.', 'success')
-
-    -- Notify clients to refresh display vehicles
+    AddMoney(source, refund, 'bank')
+    ShowNotification(source, 'You sold the dealership and received $' .. refund .. '.')
     TriggerClientEvent('pickle_dealerships:refreshDisplay', -1, locationKey)
 
-    return true
+    return { success = true, refund = refund }
 end)
 
 --- Owner renames their dealership
@@ -216,26 +255,22 @@ end)
 lib.callback.register('pickle_dealerships:renameDealership', function(source, locationKey, newName)
     local cached = dealershipCache[locationKey]
     if not cached or not cached.owner_citizenid then
-        return false, 'This dealership is not owned.'
+        return { success = false, error = 'This dealership is not owned.' }
     end
 
     local citizenid = GetIdentifier(source)
     if citizenid ~= cached.owner_citizenid then
-        return false, 'You do not own this dealership.'
+        return { success = false, error = 'You do not own this dealership.' }
     end
 
     if not newName or #newName < 1 or #newName > 50 then
-        return false, 'Invalid name. Must be between 1 and 50 characters.'
+        return { success = false, error = 'Invalid name. Must be between 1 and 50 characters.' }
     end
 
-    MySQL.update.await(
-        'UPDATE dealerships SET name = ? WHERE id = ?',
-        { newName, cached.id }
-    )
-
+    MySQL.update.await('UPDATE dealerships SET name = ? WHERE id = ?', { newName, cached.id })
     cached.name = newName
-    ShowNotification(source, 'Dealership renamed to "' .. newName .. '".', 'success')
-    return true
+    ShowNotification(source, 'Dealership renamed to "' .. newName .. '".')
+    return { success = true }
 end)
 
 --- Returns the player's role at a specific dealership
@@ -248,12 +283,10 @@ lib.callback.register('pickle_dealerships:getPlayerRole', function(source, locat
     local cached = dealershipCache[locationKey]
     if not cached then return nil end
 
-    -- Check if owner
     if cached.owner_citizenid == citizenid then
         return 'owner'
     end
 
-    -- Check if employee
     local employee = MySQL.single.await(
         'SELECT role FROM dealership_employees WHERE dealership_id = ? AND citizenid = ?',
         { cached.id, citizenid }
@@ -263,7 +296,6 @@ lib.callback.register('pickle_dealerships:getPlayerRole', function(source, locat
         return employee.role
     end
 
-    -- Check if admin
     if IsPlayerAdmin(source) then
         return 'admin'
     end

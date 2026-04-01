@@ -151,6 +151,24 @@ CreateThread(function()
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ]])
 
+        -- wholesale_catalog (admin-managed vehicle catalog)
+        MySQL.Async.execute([[
+            CREATE TABLE IF NOT EXISTS `wholesale_catalog` (
+                `id`              INT UNSIGNED   NOT NULL AUTO_INCREMENT,
+                `model`           VARCHAR(100)   NOT NULL,
+                `label`           VARCHAR(150)   NOT NULL,
+                `wholesale`       BIGINT         NOT NULL DEFAULT 0,
+                `tier`            VARCHAR(30)    NOT NULL DEFAULT 'basic',
+                `class`           VARCHAR(50)    NOT NULL DEFAULT 'sedan',
+                `vehicle_type`    VARCHAR(30)    NOT NULL DEFAULT 'car',
+                `created_at`      TIMESTAMP      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (`id`),
+                UNIQUE KEY `idx_model` (`model`),
+                KEY `idx_type`    (`vehicle_type`),
+                KEY `idx_tier`    (`tier`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ]])
+
         -- Load dealerships into cache after tables are ready
         LoadDealerships()
     end)

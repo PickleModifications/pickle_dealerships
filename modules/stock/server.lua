@@ -1,23 +1,64 @@
---- Returns the wholesale catalog filtered by dealership tier and type
+--- Returns the wholesale catalog filtered by dealership tier and type (DB-driven)
 ---@param source number
 ---@param locationKey string
 lib.callback.register('pickle_dealerships:getCatalog', function(source, locationKey)
-    local cfg = Config.Dealerships[locationKey]
-    if not cfg then return {} end
-
     local dealership = MySQL.single.await(
         'SELECT * FROM dealerships WHERE location = ?',
         { locationKey }
     )
+    if not dealership then return {} end
 
-    local tier = dealership and dealership.tier or cfg.defaultTier or 1
-    local vehicleType = cfg.type or 'car'
+    local tier = dealership.tier or 1
+    local vehicleType = dealership.type or 'car'
 
-    local catalog = GetCatalogForDealership(vehicleType, tier)
-    return catalog or {}
+    -- Build type filter
+    local types = {}
+    if vehicleType == 'mixed' then
+        types = { 'car', 'boat', 'air' }
+    else
+        types = { vehicleType }
+    end
+
+    -- Get access level for this tier
+    local accessLevel = Config.Tiers[tier] and Config.Tiers[tier].catalogAccess or 'basic'
+    local hierarchy = { basic = 1, expanded = 2, full = 3, exclusive = 4 }
+    local accessNum = hierarchy[accessLevel] or 1
+
+    -- Tiers the dealership can access
+    local allowedTiers = {}
+    for tierName, tierNum in pairs(hierarchy) do
+        if tierNum <= accessNum then
+            allowedTiers[#allowedTiers + 1] = tierName
+        end
+    end
+
+    if #allowedTiers == 0 then return {} end
+
+    -- Build query with placeholders
+    local typePlaceholders = {}
+    local tierPlaceholders = {}
+    local params = {}
+
+    for _, t in ipairs(types) do
+        typePlaceholders[#typePlaceholders + 1] = '?'
+        params[#params + 1] = t
+    end
+    for _, t in ipairs(allowedTiers) do
+        tierPlaceholders[#tierPlaceholders + 1] = '?'
+        params[#params + 1] = t
+    end
+
+    local query = string.format(
+        'SELECT * FROM wholesale_catalog WHERE vehicle_type IN (%s) AND tier IN (%s) ORDER BY wholesale ASC',
+        table.concat(typePlaceholders, ','),
+        table.concat(tierPlaceholders, ',')
+    )
+
+    local results = MySQL.query.await(query, params)
+    return results or {}
 end)
 
---- Returns all available (unsold) stock for a dealership
+--- Returns all unsold stock for a dealership (including pending deliveries)
 ---@param source number
 ---@param locationKey string
 lib.callback.register('pickle_dealerships:getStock', function(source, locationKey)
@@ -28,7 +69,7 @@ lib.callback.register('pickle_dealerships:getStock', function(source, locationKe
     if not dealership then return {} end
 
     local stock = MySQL.query.await(
-        'SELECT * FROM dealership_stock WHERE dealership_id = ? AND sold = 0 AND (delivered_at IS NOT NULL OR delivered_at <= NOW())',
+        'SELECT * FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NULL ORDER BY ordered_at DESC',
         { dealership.id }
     )
 
@@ -41,9 +82,6 @@ end)
 ---@param model string
 ---@param wholesalePrice number
 lib.callback.register('pickle_dealerships:orderVehicle', function(source, locationKey, model, wholesalePrice)
-    local cfg = Config.Dealerships[locationKey]
-    if not cfg then return false, 'Invalid dealership.' end
-
     -- Verify player role
     local citizenid = GetIdentifier(source)
     if not citizenid then return false, 'Unable to identify player.' end
@@ -67,34 +105,31 @@ lib.callback.register('pickle_dealerships:orderVehicle', function(source, locati
         end
     end
 
-    -- Verify the model is in the catalog for this dealership
-    local tier = dealership.tier or cfg.defaultTier or 1
-    local vehicleType = cfg.type or 'car'
-    local catalog = GetCatalogForDealership(vehicleType, tier)
-    local catalogEntry = nil
-
-    if catalog then
-        for _, entry in ipairs(catalog) do
-            if entry.model == model then
-                catalogEntry = entry
-                break
-            end
-        end
-    end
+    -- Verify the model is in the DB catalog
+    local catalogEntry = MySQL.single.await(
+        'SELECT * FROM wholesale_catalog WHERE model = ?',
+        { model }
+    )
 
     if not catalogEntry then
-        return false, 'This vehicle is not available in your catalog.'
+        return false, 'This vehicle is not available in the catalog.'
+    end
+
+    -- Verify tier access
+    if not CanAccessCatalogTier(dealership.tier or 1, catalogEntry.tier) then
+        return false, 'Your dealership tier cannot access this vehicle.'
     end
 
     -- Verify wholesale price matches
-    if catalogEntry.wholesalePrice ~= wholesalePrice then
+    if catalogEntry.wholesale ~= wholesalePrice then
         return false, 'Price mismatch. Please refresh the catalog.'
     end
 
     -- Check stock capacity
-    local stockCapacity = cfg.stockCapacity or Config.DefaultStockCapacity or 20
+    local tierCfg = Config.Tiers[dealership.tier or 1]
+    local stockCapacity = (tierCfg and tierCfg.stockCap) or 20
     local currentCount = MySQL.scalar.await(
-        'SELECT COUNT(*) FROM dealership_stock WHERE dealership_id = ? AND sold = 0',
+        'SELECT COUNT(*) FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NULL',
         { dealership.id }
     )
 
@@ -103,7 +138,7 @@ lib.callback.register('pickle_dealerships:orderVehicle', function(source, locati
     end
 
     -- Calculate total cost with import tax
-    local importTax = Config.ImportTaxRate or 0
+    local importTax = Config.ImportTax or 0
     local totalCost = math.floor(wholesalePrice * (1 + importTax))
 
     -- Check dealership balance
@@ -119,20 +154,24 @@ lib.callback.register('pickle_dealerships:orderVehicle', function(source, locati
 
     -- Determine delivery time
     local deliveredAt = nil
-    local deliveryMode = cfg.deliveryMode or 'instant'
+    local meta = dealership.metadata
+    if type(meta) == "string" then meta = json.decode(meta) or {} end
+    if type(meta) ~= "table" then meta = {} end
+    local deliveryMode = (meta and meta.deliveryMode) or (Config.DealershipDefaults and Config.DealershipDefaults.deliveryMode) or 'timed'
 
     if deliveryMode == 'instant' then
         deliveredAt = os.date('%Y-%m-%d %H:%M:%S')
     elseif deliveryMode == 'timed' then
-        local deliverySeconds = Config.DeliveryTimeSeconds or 300
-        deliveredAt = os.date('%Y-%m-%d %H:%M:%S', os.time() + deliverySeconds)
+        local deliveryMinutes = Config.DeliveryTime or 20
+        deliveredAt = os.date('%Y-%m-%d %H:%M:%S', os.time() + (deliveryMinutes * 60))
     end
     -- For 'trucking' mode, delivered_at stays NULL until delivery mission completes
 
     -- Create stock entry
+    local retailPrice = math.floor(wholesalePrice * 1.3)
     local stockId = MySQL.insert.await(
-        'INSERT INTO dealership_stock (dealership_id, model, wholesale_price, retail_price, delivered_at, sold, display_spot) VALUES (?, ?, ?, ?, ?, 0, NULL)',
-        { dealership.id, model, wholesalePrice, catalogEntry.defaultRetailPrice or math.floor(wholesalePrice * 1.2), deliveredAt }
+        'INSERT INTO dealership_stock (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, ordered_at, delivered_at) VALUES (?, ?, ?, ?, ?, NOW(), ?)',
+        { dealership.id, model, catalogEntry.label or model, wholesalePrice, retailPrice, deliveredAt }
     )
 
     -- Create ledger entry
@@ -182,7 +221,7 @@ lib.callback.register('pickle_dealerships:setRetailPrice', function(source, loca
 
     -- Verify stock belongs to this dealership
     local stock = MySQL.single.await(
-        'SELECT * FROM dealership_stock WHERE id = ? AND dealership_id = ? AND sold = 0',
+        'SELECT * FROM dealership_stock WHERE id = ? AND dealership_id = ? AND sold_at IS NULL',
         { stockId, dealership.id }
     )
     if not stock then return false, 'Stock item not found.' end
@@ -225,7 +264,7 @@ lib.callback.register('pickle_dealerships:setDisplaySpot', function(source, loca
 
     -- Verify stock belongs to this dealership and is delivered
     local stock = MySQL.single.await(
-        'SELECT * FROM dealership_stock WHERE id = ? AND dealership_id = ? AND sold = 0',
+        'SELECT * FROM dealership_stock WHERE id = ? AND dealership_id = ? AND sold_at IS NULL',
         { stockId, dealership.id }
     )
     if not stock then return false, 'Stock item not found.' end
@@ -233,7 +272,7 @@ lib.callback.register('pickle_dealerships:setDisplaySpot', function(source, loca
     if spot then
         -- Check if spot is already occupied by another vehicle
         local existing = MySQL.single.await(
-            'SELECT id FROM dealership_stock WHERE dealership_id = ? AND display_spot = ? AND sold = 0 AND id != ?',
+            'SELECT id FROM dealership_stock WHERE dealership_id = ? AND display_spot = ? AND sold_at IS NULL AND id != ?',
             { dealership.id, spot, stockId }
         )
         if existing then
@@ -269,7 +308,7 @@ lib.callback.register('pickle_dealerships:checkDeliveries', function(source, loc
 
     -- Find items that have a future delivered_at that has now passed
     local delivered = MySQL.query.await(
-        'SELECT * FROM dealership_stock WHERE dealership_id = ? AND sold = 0 AND delivered_at IS NOT NULL AND delivered_at <= NOW()',
+        'SELECT * FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NULL AND delivered_at IS NOT NULL AND delivered_at <= NOW()',
         { dealership.id }
     )
 
@@ -281,30 +320,17 @@ CreateThread(function()
     while true do
         Wait(60000)
 
-        for locationKey, cfg in pairs(Config.Dealerships) do
-            if cfg.deliveryMode == 'timed' then
-                local dealership = MySQL.single.await(
-                    'SELECT id FROM dealerships WHERE location = ?',
-                    { locationKey }
+        local dealerships = MySQL.query.await('SELECT id, location FROM dealerships')
+        if dealerships then
+            for _, dealership in ipairs(dealerships) do
+                -- Check if any vehicles were recently delivered
+                local deliveredCount = MySQL.scalar.await(
+                    'SELECT COUNT(*) FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NULL AND delivered_at IS NOT NULL AND delivered_at <= NOW()',
+                    { dealership.id }
                 )
 
-                if dealership then
-                    -- Count newly delivered items
-                    local newlyDelivered = MySQL.scalar.await(
-                        'SELECT COUNT(*) FROM dealership_stock WHERE dealership_id = ? AND sold = 0 AND delivered_at IS NOT NULL AND delivered_at <= NOW() AND notified = 0',
-                        { dealership.id }
-                    )
-
-                    if newlyDelivered and newlyDelivered > 0 then
-                        -- Mark as notified
-                        MySQL.update.await(
-                            'UPDATE dealership_stock SET notified = 1 WHERE dealership_id = ? AND sold = 0 AND delivered_at <= NOW() AND notified = 0',
-                            { dealership.id }
-                        )
-
-                        -- Notify clients to refresh display
-                        TriggerClientEvent('pickle_dealerships:refreshDisplay', -1, locationKey)
-                    end
+                if deliveredCount and deliveredCount > 0 then
+                    TriggerClientEvent('pickle_dealerships:refreshDisplay', -1, dealership.location)
                 end
             end
         end

@@ -171,21 +171,23 @@ lib.callback.register("pickle_dealerships:adminCreateDealership", function(sourc
     end
 
     if not data.label or data.label == "" then
-        return { success = false, message = "Dealership label is required." }
+        return { success = false, message = "Dealership name is required." }
     end
 
-    if not data.location then
-        return { success = false, message = "Location is required." }
-    end
+    -- Generate a location key from the DB id (set after insert)
+    local mode = data.mode or "player-owned"
+    local dealershipType = data.type or "car"
 
-    local id = MySQL.insert.await("INSERT INTO dealerships (label, location, mode, tier, balance, reputation, created_at) VALUES (?, ?, ?, 1, 0, 0, NOW())", {
-        data.label,
-        data.location,
-        data.mode or "public",
-    })
+    local id = MySQL.insert.await(
+        "INSERT INTO dealerships (name, location, type, mode, tier, balance, reputation) VALUES (?, ?, ?, ?, 1, 0, 0)",
+        { data.label, "pending", dealershipType, mode }
+    )
 
     if id then
-        -- Reload dealership cache
+        -- Set location to the DB id so it's always unique
+        local location = "dealership_" .. id
+        MySQL.update.await("UPDATE dealerships SET location = ? WHERE id = ?", { location, id })
+
         LoadDealerships()
 
         local adminName = GetPlayerCharacterName(source) or GetPlayerName(source)
@@ -195,6 +197,143 @@ lib.callback.register("pickle_dealerships:adminCreateDealership", function(sourc
     else
         return { success = false, message = "Failed to create dealership in database." }
     end
+end)
+
+--- Save dealership position data from gizmo placement
+lib.callback.register("pickle_dealerships:adminSavePosition", function(source, data)
+    if not IsPlayerAdmin(source) then
+        return { success = false, message = "You do not have admin permissions." }
+    end
+
+    local dealershipId = data.dealershipId
+    if not dealershipId then
+        return { success = false, message = "Missing dealership ID." }
+    end
+
+    local dealership = GetDealership(dealershipId)
+    if not dealership then
+        return { success = false, message = "Dealership not found." }
+    end
+
+    -- Get existing metadata or start fresh
+    local metadata = dealership.metadata
+    if type(metadata) == "string" then
+        metadata = json.decode(metadata) or {}
+    elseif type(metadata) ~= "table" then
+        metadata = {}
+    end
+
+    -- Update the specific field
+    local field = data.field
+    local value = data.value
+
+    if field == "coords" or field == "spawnPoint" then
+        metadata[field] = value
+    elseif field == "displaySpot" then
+        if not metadata.displaySpots then
+            metadata.displaySpots = {}
+        end
+        metadata.displaySpots[#metadata.displaySpots + 1] = value
+    elseif field == "interactionPoint" then
+        if not metadata.interactionPoints then
+            metadata.interactionPoints = {}
+        end
+        metadata.interactionPoints[data.pointType] = value
+    elseif field == "zone" then
+        if not metadata.zones then
+            metadata.zones = {}
+        end
+        metadata.zones[#metadata.zones + 1] = value
+    end
+
+    MySQL.update.await("UPDATE dealerships SET metadata = ? WHERE id = ?", { json.encode(metadata), dealershipId })
+    UpdateDealershipCache(dealershipId, { metadata = metadata })
+
+    return { success = true, metadata = metadata, message = "Position saved." }
+end)
+
+-- ─── Catalog Management ─────────────────────────────────────────────────────
+
+--- Get all catalog vehicles
+lib.callback.register("pickle_dealerships:adminGetCatalog", function(source)
+    if not IsPlayerAdmin(source) then return nil end
+    local results = MySQL.query.await("SELECT * FROM wholesale_catalog ORDER BY vehicle_type ASC, tier ASC, wholesale ASC")
+    return results or {}
+end)
+
+--- Add a vehicle to the catalog
+lib.callback.register("pickle_dealerships:adminAddCatalogVehicle", function(source, data)
+    if not IsPlayerAdmin(source) then
+        return { success = false, message = "You do not have admin permissions." }
+    end
+
+    if not data.model or data.model == "" then
+        return { success = false, message = "Vehicle model is required." }
+    end
+    if not data.label or data.label == "" then
+        return { success = false, message = "Vehicle label is required." }
+    end
+
+    local existing = MySQL.single.await("SELECT id FROM wholesale_catalog WHERE model = ?", { data.model })
+    if existing then
+        return { success = false, message = "Vehicle model '" .. data.model .. "' already exists in catalog." }
+    end
+
+    local id = MySQL.insert.await(
+        "INSERT INTO wholesale_catalog (model, label, wholesale, tier, class, vehicle_type) VALUES (?, ?, ?, ?, ?, ?)",
+        {
+            data.model,
+            data.label,
+            tonumber(data.wholesale) or 0,
+            data.tier or "basic",
+            data.class or "sedan",
+            data.vehicleType or "car",
+        }
+    )
+
+    if id then
+        return { success = true, id = id, message = "'" .. data.label .. "' added to catalog." }
+    end
+    return { success = false, message = "Failed to add vehicle." }
+end)
+
+--- Update a catalog vehicle
+lib.callback.register("pickle_dealerships:adminUpdateCatalogVehicle", function(source, data)
+    if not IsPlayerAdmin(source) then
+        return { success = false, message = "You do not have admin permissions." }
+    end
+
+    if not data.id then
+        return { success = false, message = "Missing vehicle ID." }
+    end
+
+    MySQL.update.await(
+        "UPDATE wholesale_catalog SET label = ?, wholesale = ?, tier = ?, class = ?, vehicle_type = ? WHERE id = ?",
+        {
+            data.label,
+            tonumber(data.wholesale) or 0,
+            data.tier or "basic",
+            data.class or "sedan",
+            data.vehicleType or "car",
+            data.id,
+        }
+    )
+
+    return { success = true, message = "Vehicle updated." }
+end)
+
+--- Remove a vehicle from the catalog
+lib.callback.register("pickle_dealerships:adminRemoveCatalogVehicle", function(source, data)
+    if not IsPlayerAdmin(source) then
+        return { success = false, message = "You do not have admin permissions." }
+    end
+
+    if not data.id then
+        return { success = false, message = "Missing vehicle ID." }
+    end
+
+    MySQL.update.await("DELETE FROM wholesale_catalog WHERE id = ?", { data.id })
+    return { success = true, message = "Vehicle removed from catalog." }
 end)
 
 --- Admin command to open admin panel

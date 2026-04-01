@@ -64,7 +64,7 @@ lib.callback.register("pickle_dealerships:withdrawFunds", function(source, data)
     UpdateDealershipCache(dealershipId, { balance = newBalance })
 
     -- Add to player bank
-    AddMoney(source, "bank", amount)
+    AddMoney(source, amount, "bank")
 
     local identifier = GetIdentifier(source)
     local playerName = GetPlayerCharacterName(source) or "Unknown"
@@ -104,12 +104,12 @@ lib.callback.register("pickle_dealerships:depositFunds", function(source, data)
     end
 
     -- Check player has enough cash
-    local playerCash = GetMoney(source, "cash")
+    local playerCash = GetMoney(source, "money")
     if playerCash < amount then
         return { success = false, message = "You don't have enough cash." }
     end
 
-    RemoveMoney(source, "cash", amount)
+    RemoveMoney(source, amount, "money")
 
     local newBalance = (dealership.balance or 0) + amount
     MySQL.update.await("UPDATE dealerships SET balance = ? WHERE id = ?", { newBalance, dealershipId })
@@ -292,42 +292,73 @@ lib.callback.register("pickle_dealerships:getDashboardStats", function(source, d
         return nil
     end
 
-    -- Total sales count
-    local salesCount = MySQL.scalar.await("SELECT COUNT(*) FROM dealership_sales WHERE dealership_id = ?", { dealershipId }) or 0
+    local dealership = GetDealership(dealershipId)
+    local tierCfg = Config.Tiers[dealership and dealership.tier or 1]
 
-    -- Revenue by day (last 7 days)
-    local revenueByDay = MySQL.query.await([[
-        SELECT DATE(created_at) AS sale_date, SUM(sale_price) AS revenue, COUNT(*) AS count
-        FROM dealership_sales
-        WHERE dealership_id = ? AND created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
-        GROUP BY DATE(created_at)
-        ORDER BY sale_date ASC
-    ]], { dealershipId }) or {}
+    -- Total sales (sold stock items)
+    local totalSales = MySQL.scalar.await(
+        "SELECT COUNT(*) FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NOT NULL",
+        { dealershipId }
+    ) or 0
 
-    -- Top selling vehicles
-    local topVehicles = MySQL.query.await([[
-        SELECT s.vehicle_model, COUNT(*) AS sold, SUM(s.sale_price) AS total_revenue
-        FROM dealership_sales s
-        WHERE s.dealership_id = ?
-        GROUP BY s.vehicle_model
-        ORDER BY sold DESC
-        LIMIT 10
-    ]], { dealershipId }) or {}
+    -- Total revenue from sold stock
+    local totalRevenue = MySQL.scalar.await(
+        "SELECT COALESCE(SUM(retail_price), 0) FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NOT NULL",
+        { dealershipId }
+    ) or 0
 
-    -- Employee performance rankings
-    local employeePerformance = MySQL.query.await([[
-        SELECT s.seller_id, COUNT(*) AS sales_count, SUM(s.sale_price) AS total_revenue
-        FROM dealership_sales s
-        WHERE s.dealership_id = ?
-        GROUP BY s.seller_id
-        ORDER BY total_revenue DESC
-        LIMIT 10
-    ]], { dealershipId }) or {}
+    -- Total profit (revenue - wholesale cost)
+    local totalCost = MySQL.scalar.await(
+        "SELECT COALESCE(SUM(wholesale_cost), 0) FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NOT NULL",
+        { dealershipId }
+    ) or 0
+    local totalProfit = totalRevenue - totalCost
+
+    -- Total commission paid (from ledger)
+    local totalCommission = MySQL.scalar.await(
+        "SELECT COALESCE(SUM(amount), 0) FROM dealership_ledger WHERE dealership_id = ? AND type = 'commission'",
+        { dealershipId }
+    ) or 0
+
+    -- Sales this week
+    local salesThisWeek = MySQL.scalar.await(
+        "SELECT COUNT(*) FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NOT NULL AND sold_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)",
+        { dealershipId }
+    ) or 0
+
+    local revenueThisWeek = MySQL.scalar.await(
+        "SELECT COALESCE(SUM(retail_price), 0) FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NOT NULL AND sold_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)",
+        { dealershipId }
+    ) or 0
+
+    -- Top seller
+    local topSellerRow = MySQL.single.await(
+        "SELECT sold_by, COUNT(*) AS sales FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NOT NULL AND sold_by IS NOT NULL GROUP BY sold_by ORDER BY sales DESC LIMIT 1",
+        { dealershipId }
+    )
+
+    -- Current stock & employee counts
+    local stockCount = MySQL.scalar.await(
+        "SELECT COUNT(*) FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NULL",
+        { dealershipId }
+    ) or 0
+
+    local employeeCount = MySQL.scalar.await(
+        "SELECT COUNT(*) FROM dealership_employees WHERE dealership_id = ?",
+        { dealershipId }
+    ) or 0
 
     return {
-        totalSales          = salesCount,
-        revenueByDay        = revenueByDay,
-        topVehicles         = topVehicles,
-        employeePerformance = employeePerformance,
+        totalSales       = totalSales,
+        totalRevenue     = totalRevenue,
+        totalProfit      = totalProfit,
+        totalCommission  = totalCommission,
+        salesThisWeek    = salesThisWeek,
+        revenueThisWeek  = revenueThisWeek,
+        topSeller        = topSellerRow and { name = topSellerRow.sold_by, sales = topSellerRow.sales } or nil,
+        stockCount       = stockCount,
+        stockCapacity    = tierCfg and tierCfg.stockCap or 20,
+        employeeCount    = employeeCount,
+        employeeCapacity = tierCfg and tierCfg.employeeCap or 2,
     }
 end)

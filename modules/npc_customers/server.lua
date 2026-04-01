@@ -352,7 +352,7 @@ lib.callback.register("pickle_dealerships:completeNPCSale", function(source, dat
     local commissionRate = Config.NPCCustomers.commissionRate or 0.10
     local commission = math.floor(adjustedAmount * commissionRate)
     if commission > 0 then
-        AddMoney(source, "bank", commission)
+        AddMoney(source, commission, "bank")
         ShowNotification(source, "You earned " .. GetCurrencyString(commission) .. " commission!")
     end
 

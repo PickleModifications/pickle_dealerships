@@ -1,258 +1,218 @@
-import { useState } from "react";
-import { Plus, Users, UserCog, Percent, Trash2, Shield, BadgeCheck } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { cn, formatCurrency, fetchNui } from "@/lib/utils";
+import { useEffect, useState } from 'react'
+import { Card, CardContent } from '../components/ui/card'
+import { Badge } from '../components/ui/badge'
+import { Button } from '../components/ui/button'
+import { Input } from '../components/ui/input'
+import { ScrollArea } from '../components/ui/scroll-area'
+import { Separator } from '../components/ui/separator'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog'
+import { fetchNui } from '../lib/utils'
+import { X, UserPlus, UserX, Clock, Shield, Briefcase } from 'lucide-react'
+import type { DealershipData, Employee } from '../types'
 
-const mockEmployees = [
-  { id: 1, name: "Alex Rivera", role: "manager", commission: 8, sales: 24, revenue: 1850000 },
-  { id: 2, name: "Jordan Kim", role: "salesperson", commission: 5, sales: 12, revenue: 450000 },
-  { id: 3, name: "Sam Taylor", role: "salesperson", commission: 5, sales: 18, revenue: 720000 },
-];
-
-const isBrowser = !(window as any).invokeNative;
-
-function getInitials(name: string) {
-  return name
-    .split(" ")
-    .map((n) => n[0])
-    .join("")
-    .toUpperCase()
-    .slice(0, 2);
+interface Props {
+  data: DealershipData
+  onClose: () => void
 }
 
-function formatCompact(value: number) {
-  if (value >= 1000000) return `$${(value / 1000000).toFixed(1)}M`;
-  if (value >= 1000) return `$${(value / 1000).toFixed(0)}K`;
-  return formatCurrency(value);
-}
+export default function EmployeesPage({ data, onClose }: Props) {
+  const [employees, setEmployees] = useState<Employee[]>([])
+  const [loading, setLoading] = useState(true)
+  const [hireDialogOpen, setHireDialogOpen] = useState(false)
+  const [hireId, setHireId] = useState('')
+  const [hireRole, setHireRole] = useState<string>('salesperson')
 
-export default function EmployeesPage({ data }: { data: any }) {
-  const employees = data?.employees ?? (isBrowser ? mockEmployees : []);
-  const maxEmployees = data?.maxEmployees ?? 6;
+  const loadEmployees = () => {
+    setLoading(true)
+    fetchNui<{ employees: Employee[] } | Employee[]>('getEmployees', {
+      dealershipId: data.dealershipId,
+    }).then((res) => {
+      if (Array.isArray(res)) setEmployees(res)
+      else if (res && 'employees' in res) setEmployees(res.employees)
+      setLoading(false)
+    }).catch(() => setLoading(false))
+  }
 
-  const [hireOpen, setHireOpen] = useState(false);
-  const [fireTarget, setFireTarget] = useState<any>(null);
-  const [hireServerId, setHireServerId] = useState("");
-  const [hireRole, setHireRole] = useState<"manager" | "salesperson">("salesperson");
+  useEffect(() => { loadEmployees() }, [data.dealershipId])
 
   const handleHire = () => {
-    fetchNui("employees:hire", { serverId: hireServerId, role: hireRole });
-    setHireOpen(false);
-    setHireServerId("");
-    setHireRole("salesperson");
-  };
+    if (!hireId.trim()) return
+    fetchNui('hireEmployee', {
+      dealershipId: data.dealershipId,
+      citizenid: hireId.trim(),
+      role: hireRole,
+    }).then(() => {
+      setHireDialogOpen(false)
+      setHireId('')
+      loadEmployees()
+    })
+  }
 
-  const handleFire = () => {
-    if (!fireTarget) return;
-    fetchNui("employees:fire", { employeeId: fireTarget.id });
-    setFireTarget(null);
-  };
+  const handleFire = (employeeId: number) => {
+    fetchNui('fireEmployee', {
+      dealershipId: data.dealershipId,
+      employeeId,
+    }).then(() => loadEmployees())
+  }
 
-  const handleEditRole = (employee: any) => {
-    fetchNui("employees:editRole", { employeeId: employee.id });
-  };
+  const handleSetRole = (employeeId: number, role: string) => {
+    fetchNui('setEmployeeRole', {
+      dealershipId: data.dealershipId,
+      employeeId,
+      role,
+    }).then(() => loadEmployees())
+  }
 
-  const handleSetCommission = (employee: any) => {
-    fetchNui("employees:setCommission", { employeeId: employee.id });
-  };
+  const handleSetCommission = (employeeId: number, rate: string) => {
+    const parsed = parseFloat(rate)
+    if (isNaN(parsed) || parsed < 0 || parsed > 100) return
+    fetchNui('setCommissionRate', {
+      dealershipId: data.dealershipId,
+      employeeId,
+      commissionRate: parsed / 100,
+    }).then(() => loadEmployees())
+  }
+
+  const canManage = data.role === 'owner' || data.role === 'admin'
 
   return (
-    <div className="animate-fadeIn space-y-4">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <h2 className="text-white font-semibold text-lg">Employees</h2>
-          <Badge variant="outline" className="text-xs">
-            {employees.length}/{maxEmployees}
-          </Badge>
-        </div>
-        <Button onClick={() => setHireOpen(true)} size="sm">
-          <Plus className="w-4 h-4 mr-1.5" />
-          Hire Employee
-        </Button>
-      </div>
+    <>
+      {!data.embedded && (
+        <>
+          <div className="flex items-center justify-between p-5 pb-0">
+            <div>
+              <h1 className="text-xl font-bold">Employees</h1>
+              <p className="text-sm text-muted-foreground">{data.dealershipName} &mdash; {employees.length} staff</p>
+            </div>
+            <div className="flex gap-2">
+              {canManage && (
+                <Button size="sm" onClick={() => setHireDialogOpen(true)} className="gap-1">
+                  <UserPlus className="h-4 w-4" /> Hire
+                </Button>
+              )}
+              <Button variant="ghost" size="icon" onClick={onClose}>
+                <X className="h-5 w-5" />
+              </Button>
+            </div>
+          </div>
 
-      {/* Employee List */}
-      {employees.length > 0 ? (
-        <ScrollArea className="max-h-[500px]">
-          <div className="space-y-2">
-            {employees.map((emp: any) => (
-              <Card
-                key={emp.id}
-                className="glass-subtle glass-hover p-4 animate-slideUp"
-              >
-                <div className="flex items-center gap-3">
-                  {/* Avatar */}
-                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center shrink-0 shadow-lg shadow-violet-500/20">
-                    <span className="text-white text-sm font-bold">
-                      {getInitials(emp.name)}
-                    </span>
-                  </div>
+          <Separator className="mt-4" />
+        </>
+      )}
 
-                  {/* Info */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <p className="text-white font-medium truncate">{emp.name}</p>
-                      <Badge
-                        variant={emp.role === "manager" ? "default" : "info"}
-                        className="text-[10px] shrink-0"
-                      >
-                        {emp.role === "manager" ? (
-                          <Shield className="w-3 h-3 mr-1" />
+      <div className="relative flex-1 flex flex-col overflow-hidden">
+      <ScrollArea className="flex-1 p-5">
+        {loading ? (
+          <div className="flex items-center justify-center h-48 text-muted-foreground">Loading employees...</div>
+        ) : employees.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
+            <Briefcase className="h-10 w-10 mb-2 opacity-50" />
+            <p>No employees hired yet</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {employees.map((emp) => (
+              <Card key={emp.id} className="overflow-hidden">
+                <CardContent className="p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="h-10 w-10 rounded-full bg-muted flex items-center justify-center">
+                        {emp.role === 'manager' ? (
+                          <Shield className="h-5 w-5 text-accent" />
                         ) : (
-                          <BadgeCheck className="w-3 h-3 mr-1" />
+                          <Briefcase className="h-5 w-5 text-muted-foreground" />
                         )}
-                        {emp.role === "manager" ? "Manager" : "Salesperson"}
-                      </Badge>
+                      </div>
+                      <div>
+                        <p className="font-semibold">{emp.name || emp.citizenid}</p>
+                        <div className="flex items-center gap-2">
+                          <Badge variant={emp.role === 'manager' ? 'default' : 'secondary'} className="text-xs capitalize">
+                            {emp.role}
+                          </Badge>
+                          {emp.clocked_in && (
+                            <Badge variant="outline" className="gap-1 text-xs text-emerald-400 border-emerald-400/50">
+                              <Clock className="h-3 w-3" /> On Duty
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                    <p className="text-slate-400 text-xs mt-0.5">
-                      Commission: {emp.commission}%
-                    </p>
-                    <p className="text-slate-500 text-xs">
-                      {emp.sales} sales · {formatCompact(emp.revenue)} revenue
-                    </p>
-                  </div>
 
-                  {/* Actions */}
-                  <div className="flex items-center gap-1 shrink-0">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8 text-slate-400 hover:text-violet-300"
-                      onClick={() => handleEditRole(emp)}
-                    >
-                      <UserCog className="w-4 h-4" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8 text-slate-400 hover:text-violet-300"
-                      onClick={() => handleSetCommission(emp)}
-                    >
-                      <Percent className="w-4 h-4" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8 text-red-400/60 hover:text-red-400 hover:bg-red-500/10"
-                      onClick={() => setFireTarget(emp)}
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
+                    <div className="flex items-center gap-3">
+                      <div className="text-right">
+                        <p className="text-xs text-muted-foreground">Commission</p>
+                        <p className="text-sm font-medium">{Math.round(emp.commission_rate * 100)}%</p>
+                      </div>
+
+                      {canManage && (
+                        <div className="flex gap-1">
+                          <Select
+                            value={emp.role}
+                            onValueChange={(val) => handleSetRole(emp.id, val)}
+                          >
+                            <SelectTrigger className="w-[120px] h-8 text-xs">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="salesperson">Salesperson</SelectItem>
+                              <SelectItem value="manager">Manager</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-destructive hover:text-destructive"
+                            onClick={() => handleFire(emp.id)}
+                          >
+                            <UserX className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
+                </CardContent>
               </Card>
             ))}
           </div>
-        </ScrollArea>
-      ) : (
-        <Card className="glass-subtle p-10 text-center">
-          <Users className="w-10 h-10 text-slate-500 mx-auto mb-3" />
-          <p className="text-slate-400 text-sm font-medium">No employees yet</p>
-          <p className="text-slate-500 text-xs mt-1">Hire your first employee to get started</p>
-        </Card>
-      )}
+        )}
+      </ScrollArea>
 
-      {/* Hire Dialog */}
-      <Dialog open={hireOpen} onOpenChange={setHireOpen}>
-        <DialogContent className="glass border-white/10">
+      <Dialog open={hireDialogOpen} onOpenChange={setHireDialogOpen}>
+        <DialogContent onClose={() => setHireDialogOpen(false)}>
           <DialogHeader>
-            <DialogTitle className="text-white flex items-center gap-2">
-              <div className="w-8 h-8 rounded-lg bg-violet-500/20 flex items-center justify-center">
-                <Plus className="w-4 h-4 text-violet-400" />
-              </div>
-              Hire Employee
-            </DialogTitle>
-            <DialogDescription className="text-slate-400">
-              Enter the player's server ID to hire them
-            </DialogDescription>
+            <DialogTitle>Hire Employee</DialogTitle>
+            <DialogDescription>Enter the player's citizen ID to hire them.</DialogDescription>
           </DialogHeader>
-
-          <div className="space-y-4 py-2">
-            <div className="space-y-2">
-              <label className="text-xs text-slate-400 font-medium uppercase tracking-wider">
-                Server ID
-              </label>
+          <div className="space-y-4 pt-2">
+            <div>
+              <label className="text-sm font-medium">Citizen ID</label>
               <Input
-                type="number"
-                value={hireServerId}
-                onChange={(e) => setHireServerId(e.target.value)}
-                placeholder="Enter player server ID..."
+                value={hireId}
+                onChange={(e) => setHireId(e.target.value)}
+                placeholder="Enter citizen ID..."
+                className="mt-1"
               />
             </div>
-
-            <div className="space-y-2">
-              <label className="text-xs text-slate-400 font-medium uppercase tracking-wider">
-                Role
-              </label>
-              <div className="flex gap-2">
-                {[
-                  { key: "manager", label: "Manager", icon: Shield },
-                  { key: "salesperson", label: "Salesperson", icon: BadgeCheck },
-                ].map(({ key, label, icon: Icon }) => (
-                  <button
-                    key={key}
-                    onClick={() => setHireRole(key as any)}
-                    className={cn(
-                      "px-3 py-1.5 rounded-lg text-xs font-medium border transition-all flex items-center gap-1.5 flex-1 justify-center",
-                      hireRole === key
-                        ? "bg-violet-500/20 text-violet-300 border-violet-500/30"
-                        : "bg-white/5 text-slate-400 border-white/10 hover:bg-white/10"
-                    )}
-                  >
-                    <Icon className="w-3.5 h-3.5" />
-                    {label}
-                  </button>
-                ))}
-              </div>
+            <div>
+              <label className="text-sm font-medium">Role</label>
+              <Select value={hireRole} onValueChange={setHireRole}>
+                <SelectTrigger className="mt-1">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="salesperson">Salesperson</SelectItem>
+                  <SelectItem value="manager">Manager</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
+            <Button className="w-full" onClick={handleHire}>
+              <UserPlus className="h-4 w-4" /> Hire Employee
+            </Button>
           </div>
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setHireOpen(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleHire} disabled={!hireServerId}>
-              <Plus className="w-4 h-4 mr-1.5" />
-              Hire
-            </Button>
-          </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      {/* Fire Confirmation Dialog */}
-      <Dialog open={!!fireTarget} onOpenChange={() => setFireTarget(null)}>
-        <DialogContent className="glass border-white/10">
-          <DialogHeader>
-            <DialogTitle className="text-white flex items-center gap-2">
-              <div className="w-8 h-8 rounded-lg bg-red-500/20 flex items-center justify-center">
-                <Trash2 className="w-4 h-4 text-red-400" />
-              </div>
-              Fire Employee
-            </DialogTitle>
-            <DialogDescription className="text-slate-400">
-              Are you sure you want to fire{" "}
-              <span className="text-white font-medium">{fireTarget?.name}</span>?
-              This action cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setFireTarget(null)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={handleFire}>
-              <Trash2 className="w-4 h-4 mr-1.5" />
-              Fire Employee
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </div>
-  );
+      </div>
+    </>
+  )
 }

@@ -1,73 +1,182 @@
 export interface DealershipData {
-  id: number; name: string; location: string; type: string; mode: string;
-  owner_citizenid: string | null; tier: number; balance: number; reputation: number;
-  metadata: Record<string, unknown> | null;
-  stockCount?: number; employeeCount?: number;
+  dealershipId: number
+  dealershipName: string
+  role: 'owner' | 'manager' | 'salesperson' | 'customer' | 'admin'
+  tier: number
+  location?: string
+  type?: string
+  selfService?: boolean
+  setupDealershipId?: number
+  metadata?: DealershipMetadata
+  embedded?: boolean
+  initialTab?: string
+  isOwned?: boolean
+  purchasePrice?: number
+  mode?: string
+}
+
+export interface DealershipMetadata {
+  coords?: PositionData
+  spawnPoint?: PositionData
+  displaySpots?: PositionData[]
+  interactionPoints?: Record<string, PositionData>
+  zones?: PositionData[]
+}
+
+export interface PositionData {
+  x: number
+  y: number
+  z: number
+  w?: number
 }
 
 export interface StockItem {
-  id: number; dealership_id: number; vehicle_model: string; vehicle_label: string;
-  retail_price: number; wholesale_cost: number; display_spot: number | null;
-  color: VehicleColor | null; condition: 'new' | 'used';
-  ordered_at: string; delivered_at: string | null; sold_at: string | null;
-  sold_to: string | null; sold_by: string | null;
+  id: number
+  dealership_id: number
+  vehicle_model: string
+  vehicle_label: string
+  retail_price: number
+  wholesale_cost: number
+  display_spot: number | null
+  color: VehicleColor | null
+  condition: 'new' | 'used'
+  ordered_at: string
+  delivered_at: string | null
+  sold_at: string | null
+  sold_to: string | null
+  sold_by: string | null
 }
 
 export interface VehicleColor {
-  primary: { r: number; g: number; b: number };
-  secondary: { r: number; g: number; b: number };
-  type: 'rgb' | 'id';
+  r?: number
+  g?: number
+  b?: number
+  colorId?: number
+  type?: 'rgb' | 'id'
 }
 
 export interface CatalogItem {
-  model: string; label: string; wholesale: number; tier: string;
-  class: string; vehicleType: string;
+  model: string
+  label: string
+  wholesale: number
+  tier: string
+  class: string
 }
 
 export interface Employee {
-  id: number; dealership_id: number; citizenid: string; role: string;
-  commission_rate: number | null; hired_at: string;
-  name?: string; totalSales?: number; totalRevenue?: number; totalCommission?: number;
+  id: number
+  dealership_id: number
+  citizenid: string
+  name?: string
+  role: 'manager' | 'salesperson'
+  commission_rate: number
+  hired_at: string
+  clocked_in?: boolean
+  metadata?: Record<string, unknown>
 }
 
 export interface LedgerEntry {
-  id: number; dealership_id: number; type: string; amount: number;
-  description: string; citizenid: string; created_at: string;
-}
-
-export interface FinancingPlan {
-  id: number; dealership_id: number; citizenid: string; vehicle_plate: string;
-  total_amount: number; amount_paid: number; installment_amount: number;
-  interest_rate: number; next_payment: string; missed_payments: number;
-  status: string;
+  id: number
+  dealership_id: number
+  type: string
+  amount: number
+  description: string
+  citizenid: string
+  created_at: string
 }
 
 export interface Coupon {
-  id: number; dealership_id: number | null; code: string;
-  discount_type: 'percent' | 'flat'; discount_value: number;
-  max_uses: number; uses: number; min_purchase: number;
-  vehicle_filter: unknown; expires_at: string | null;
-  created_by: string; created_at: string;
+  id: number
+  dealership_id: number | null
+  code: string
+  discount_type: 'percent' | 'flat'
+  discount_value: number
+  max_uses: number
+  uses: number
+  min_purchase: number
+  vehicle_filter: string[] | null
+  expires_at: string | null
+  created_by: string
+  created_at: string
 }
 
-export interface NPCProfile {
-  budgetTier: string; budgetMin: number; budgetMax: number;
-  personality: string; typePreference: string; colorPreference: unknown;
-  priorityStat: string; flexibility: number; pedModel: string;
-  greeting: string;
-}
-
-export interface NegotiationState {
-  round: number; maxRounds: number; askingPrice: number; currentOffer: number;
-  emotionState: string; npcProfile: NPCProfile; stockItem: StockItem;
-  dealershipId: number; dialogue: string;
+export interface FinancingAgreement {
+  id: number
+  dealership_id: number
+  citizenid: string
+  vehicle_plate: string
+  vehicle_label?: string
+  total_amount: number
+  amount_paid: number
+  installment_amount: number
+  interest_rate: number
+  next_payment: string
+  missed_payments: number
+  status: 'active' | 'paid' | 'defaulted' | 'repossessed'
+  created_at: string
 }
 
 export interface DashboardStats {
-  totalSales: number; totalRevenue: number; todaySales: number; todayRevenue: number;
-  revenueByDay: { date: string; revenue: number }[];
-  topVehicles: { model: string; label: string; count: number }[];
-  employeeRankings: { name: string; sales: number; revenue: number }[];
+  totalSales: number
+  totalRevenue: number
+  totalProfit: number
+  totalCommission: number
+  salesThisWeek: number
+  revenueThisWeek: number
+  topSeller?: { name: string; sales: number }
+  stockCount: number
+  stockCapacity: number
+  employeeCount: number
+  employeeCapacity: number
 }
 
-export type PageType = 'catalog' | 'stock' | 'sales' | 'employees' | 'finances' | 'dashboard' | 'coupons' | 'negotiation' | 'admin' | 'financing' | null;
+export interface NPCProfile {
+  budgetTier: string
+  budgetMin: number
+  budgetMax: number
+  typePreference: string
+  colorPreference: string | null
+  priorityStat: string
+  flexibility: number
+  personality: string
+  patienceTime: number
+  pedModel: string
+}
+
+export interface AdminDealership {
+  id: number
+  location: string
+  name: string
+  mode: string
+  type: string
+  owner_citizenid: string | null
+  owner_name?: string
+  tier: number
+  balance: number
+  metadata?: DealershipMetadata | string | null
+}
+
+export type PageType =
+  | 'dashboard'
+  | 'stock'
+  | 'catalog'
+  | 'sales'
+  | 'employees'
+  | 'finances'
+  | 'financing'
+  | 'coupons'
+  | 'negotiation'
+  | 'admin'
+  | 'management'
+  | 'vehicleDetails'
+
+export interface NuiMessage {
+  type: string
+  page?: PageType
+  data?: DealershipData
+  accentColor?: string
+  profile?: NPCProfile
+  greeting?: string
+  newTier?: number
+  newBalance?: number
+}

@@ -156,6 +156,13 @@ Language["en"] = {
     admin_mode_toggled = "Dealership mode changed to %s.",
     admin_dealership_created = "New dealership created at %s.",
 
+    -- Gizmo / Object Placement
+    objects_freeze = "Freeze",
+    objects_unfreeze = "Unfreeze",
+    objects_save = "Save Position",
+    objects_cancel = "Cancel",
+    objects_position = "[Mouse]     - Move Position  \n[Scroll / Arrow Keys]     - Rotate  \n",
+
     -- Webhooks
     webhook_sale = "Vehicle Sold",
     webhook_order = "Vehicle Ordered",

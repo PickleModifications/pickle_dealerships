@@ -4,6 +4,7 @@ local dealershipBlips = {}
 local dealershipZones = {}
 local interactionIds = {}
 local isNuiOpen = false
+DealershipConfigs = {} -- resolved configs from server, shared across modules
 
 -- Create blips and zones on resource start
 CreateThread(function()
@@ -12,11 +13,14 @@ CreateThread(function()
     if not dealerships then return end
 
     for locationKey, data in pairs(dealerships) do
-        local cfg = Config.Dealerships[locationKey]
+        local cfg = data.resolvedConfig
         if not cfg then goto continue end
 
+        -- Store resolved config for later use
+        DealershipConfigs[locationKey] = cfg
+
         -- Create map blip
-        if cfg.blip then
+        if cfg.blip and cfg.coords then
             local blip = CreateBlip({
                 coords = cfg.coords,
                 sprite = cfg.blip.sprite,
@@ -137,46 +141,29 @@ function OnExitDealership(locationKey)
     end
 end
 
---- Opens the management menu for dealership owners/managers
+--- Opens the management UI for dealership owners/managers
 function OpenManagementMenu(locationKey)
     local role = lib.callback.await('pickle_dealerships:getPlayerRole', false, locationKey)
     local data = lib.callback.await('pickle_dealerships:getDealershipData', false, locationKey)
     if not data then return end
 
-    local cfg = Config.Dealerships[locationKey]
-    if not cfg then return end
-
-    -- If dealership is unowned and player-owned mode, offer purchase
+    -- If dealership is unowned and player-owned mode, open purchase UI
     if not data.owner_citizenid and data.mode == 'player-owned' then
-        lib.registerContext({
-            id = 'dealership_purchase',
-            title = (cfg.label or 'Dealership') .. ' - For Sale',
-            options = {
-                {
-                    title = _L("menu_purchase_dealership"),
-                    description = string.format(_L("menu_purchase_dealership_desc"), GetCurrencyString(cfg.purchasePrice or 0)),
-                    icon = 'fas fa-dollar-sign',
-                    onSelect = function()
-                        local confirm = lib.alertDialog({
-                            header = _L("sale_confirm_title"),
-                            content = 'Purchase this dealership for ' .. GetCurrencyString(cfg.purchasePrice or 0) .. '?',
-                            centered = true,
-                            cancel = true,
-                        })
-                        if confirm == 'confirm' then
-                            local result = lib.callback.await('pickle_dealerships:purchaseDealership', false, locationKey)
-                            if result and result.success then
-                                ShowNotification(string.format(_L("dealership_purchased"), cfg.label))
-                            else
-                                ShowNotification(result and result.error or _L("something_went_wrong"))
-                            end
-                        end
-                    end,
-                },
-            },
-        })
-        lib.showContext('dealership_purchase')
-        return
+        -- Still allow admins to access management
+        if not role then
+            OpenNui('management', {
+                dealershipId = data.id,
+                dealershipName = data.name or "Dealership",
+                role = 'customer',
+                tier = data.tier or 1,
+                location = locationKey,
+                type = data.type,
+                isOwned = false,
+                purchasePrice = data.purchasePrice or 0,
+                mode = data.mode,
+            })
+            return
+        end
     end
 
     -- If no role access, deny
@@ -185,175 +172,17 @@ function OpenManagementMenu(locationKey)
         return
     end
 
-    local options = {
-        {
-            title = _L("menu_stock_catalog"),
-            description = _L("menu_stock_catalog_desc"),
-            icon = 'fas fa-warehouse',
-            onSelect = function()
-                OpenNui('stock', {
-                    dealershipId = data.id,
-                    dealershipName = data.name,
-                    role = role,
-                    tier = data.tier,
-                    location = locationKey,
-                })
-            end,
-        },
-        {
-            title = 'Order Vehicles',
-            description = 'Browse wholesale catalog and order stock',
-            icon = 'fas fa-truck-loading',
-            onSelect = function()
-                OpenNui('catalog', {
-                    dealershipId = data.id,
-                    dealershipName = data.name,
-                    role = role,
-                    tier = data.tier,
-                    location = locationKey,
-                    type = data.type,
-                })
-            end,
-        },
-    }
-
-    -- Manager+ options
-    if role == 'owner' or role == 'manager' or role == 'admin' then
-        options[#options + 1] = {
-            title = _L("menu_employees"),
-            description = _L("menu_employees_desc"),
-            icon = 'fas fa-users',
-            onSelect = function()
-                OpenNui('employees', {
-                    dealershipId = data.id,
-                    dealershipName = data.name,
-                    role = role,
-                    tier = data.tier,
-                })
-            end,
-        }
-        options[#options + 1] = {
-            title = _L("menu_finances"),
-            description = _L("menu_finances_desc") .. ' | Balance: ' .. GetCurrencyString(data.balance or 0),
-            icon = 'fas fa-chart-line',
-            onSelect = function()
-                OpenNui('finances', {
-                    dealershipId = data.id,
-                    dealershipName = data.name,
-                    role = role,
-                    tier = data.tier,
-                })
-            end,
-        }
-        options[#options + 1] = {
-            title = _L("menu_dashboard"),
-            description = _L("menu_dashboard_desc"),
-            icon = 'fas fa-chart-bar',
-            onSelect = function()
-                OpenNui('dashboard', {
-                    dealershipId = data.id,
-                    dealershipName = data.name,
-                    role = role,
-                    tier = data.tier,
-                })
-            end,
-        }
-    end
-
-    -- Owner-only options
-    if role == 'owner' or role == 'admin' then
-        options[#options + 1] = {
-            title = _L("menu_upgrades"),
-            description = _L("menu_upgrades_desc") .. ' | Tier ' .. (data.tier or 1),
-            icon = 'fas fa-arrow-up',
-            onSelect = function()
-                local nextTier = (data.tier or 1) + 1
-                local tierData = Config.Tiers[nextTier]
-                if not tierData then
-                    ShowNotification(_L("upgrade_max_tier"))
-                    return
-                end
-                local confirm = lib.alertDialog({
-                    header = 'Upgrade to ' .. tierData.label,
-                    content = 'Upgrade cost: ' .. GetCurrencyString(tierData.upgradeCost) .. '\nNew stock capacity: ' .. tierData.stockCap .. '\nNew employee cap: ' .. tierData.employeeCap,
-                    centered = true,
-                    cancel = true,
-                })
-                if confirm == 'confirm' then
-                    local result = lib.callback.await('pickle_dealerships:upgradeTier', false, { dealershipId = data.id })
-                    if result and result.success then
-                        ShowNotification(string.format(_L("upgrade_success"), tierData.label, tierData.stockCap, tierData.employeeCap))
-                    else
-                        ShowNotification(result and result.error or _L("something_went_wrong"))
-                    end
-                end
-            end,
-        }
-
-        if HasTierFeature(data.tier, "coupons") then
-            options[#options + 1] = {
-                title = _L("menu_coupons"),
-                description = _L("menu_coupons_desc"),
-                icon = 'fas fa-ticket-alt',
-                onSelect = function()
-                    OpenNui('coupons', {
-                        dealershipId = data.id,
-                        dealershipName = data.name,
-                        role = role,
-                        tier = data.tier,
-                    })
-                end,
-            }
-        end
-
-        options[#options + 1] = {
-            title = _L("menu_settings"),
-            description = _L("menu_settings_desc"),
-            icon = 'fas fa-cog',
-            onSelect = function()
-                local input = lib.inputDialog('Rename Dealership', {
-                    { type = 'input', label = 'New Name', required = true, min = 1, max = 50, default = data.name },
-                })
-                if input and input[1] then
-                    local result = lib.callback.await('pickle_dealerships:renameDealership', false, locationKey, input[1])
-                    if result and result.success then
-                        ShowNotification(string.format(_L("dealership_renamed"), input[1]))
-                    else
-                        ShowNotification(result and result.error or _L("something_went_wrong"))
-                    end
-                end
-            end,
-        }
-
-        options[#options + 1] = {
-            title = _L("menu_sell_dealership"),
-            description = string.format(_L("menu_sell_dealership_desc"), GetCurrencyString(math.floor((cfg.purchasePrice or 0) * Config.SellbackRate))),
-            icon = 'fas fa-hand-holding-usd',
-            onSelect = function()
-                local confirm = lib.alertDialog({
-                    header = 'Sell Dealership',
-                    content = 'Are you sure you want to sell this dealership? All employees will be fired and stock will be lost. You will receive ' .. GetCurrencyString(math.floor((cfg.purchasePrice or 0) * Config.SellbackRate)) .. '.',
-                    centered = true,
-                    cancel = true,
-                })
-                if confirm == 'confirm' then
-                    local result = lib.callback.await('pickle_dealerships:sellDealership', false, locationKey)
-                    if result and result.success then
-                        ShowNotification(string.format(_L("dealership_sold"), cfg.label, GetCurrencyString(result.refund or 0)))
-                    else
-                        ShowNotification(result and result.error or _L("something_went_wrong"))
-                    end
-                end
-            end,
-        }
-    end
-
-    lib.registerContext({
-        id = 'dealership_management',
-        title = (data.name or cfg.label) .. ' - ' .. _L("menu_management_title"),
-        options = options,
+    OpenNui('management', {
+        dealershipId = data.id,
+        dealershipName = data.name or "Dealership",
+        role = role,
+        tier = data.tier or 1,
+        location = locationKey,
+        type = data.type,
+        isOwned = data.owner_citizenid ~= nil,
+        purchasePrice = data.purchasePrice or 0,
+        mode = data.mode,
     })
-    lib.showContext('dealership_management')
 end
 
 --- Opens the sales tablet UI
@@ -378,7 +207,7 @@ end
 
 --- Opens the self-service kiosk
 function OpenKiosk(locationKey)
-    local cfg = Config.Dealerships[locationKey]
+    local cfg = DealershipConfigs[locationKey]
     if cfg and not cfg.selfService then
         ShowNotification("Self-service is not available at this dealership.")
         return
@@ -407,6 +236,7 @@ function OpenNui(page, data)
         type = 'open',
         page = page,
         data = data,
+        accentColor = Config.UI and Config.UI.accentColor or "#e11d48",
     })
 end
 

@@ -4,13 +4,6 @@ local activeDeliveries = {}
 ---@param source number
 ---@param locationKey string
 lib.callback.register('pickle_dealerships:startDelivery', function(source, locationKey)
-    local cfg = Config.Dealerships[locationKey]
-    if not cfg then return false, 'Invalid dealership.' end
-
-    if cfg.deliveryMode ~= 'trucking' then
-        return false, 'This dealership does not use trucking deliveries.'
-    end
-
     local citizenid = GetIdentifier(source)
     if not citizenid then return false, 'Unable to identify player.' end
 
@@ -18,6 +11,16 @@ lib.callback.register('pickle_dealerships:startDelivery', function(source, locat
         'SELECT * FROM dealerships WHERE location = ?',
         { locationKey }
     )
+    if not dealership then return false, 'Dealership not found.' end
+
+    local meta = dealership.metadata
+    if type(meta) == "string" then meta = json.decode(meta) or {} end
+    if type(meta) ~= "table" then meta = {} end
+    local deliveryMode = (meta and meta.deliveryMode) or (Config.DealershipDefaults and Config.DealershipDefaults.deliveryMode) or 'timed'
+
+    if deliveryMode ~= 'trucking' then
+        return false, 'This dealership does not use trucking deliveries.'
+    end
     if not dealership then return false, 'Dealership not found.' end
 
     -- Check player has a role at this dealership
@@ -39,7 +42,7 @@ lib.callback.register('pickle_dealerships:startDelivery', function(source, locat
 
     -- Get pending stock items (delivered_at IS NULL means awaiting delivery)
     local pendingStock = MySQL.query.await(
-        'SELECT * FROM dealership_stock WHERE dealership_id = ? AND sold = 0 AND delivered_at IS NULL',
+        'SELECT * FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NULL AND delivered_at IS NULL',
         { dealership.id }
     )
 
@@ -92,7 +95,7 @@ lib.callback.register('pickle_dealerships:startDelivery', function(source, locat
         locationKey = locationKey,
         route = route,
         vehicles = pendingStock,
-        dealershipCoords = cfg.coords,
+        dealershipCoords = meta.coords and vector3(meta.coords.x, meta.coords.y, meta.coords.z) or nil,
     })
 
     ShowNotification(source, 'Delivery mission started! Pick up ' .. #pendingStock .. ' vehicle(s).', 'success')
@@ -202,7 +205,7 @@ lib.callback.register('pickle_dealerships:getPendingDeliveries', function(source
     if not dealership then return {} end
 
     local pending = MySQL.query.await(
-        'SELECT ds.* FROM dealership_stock ds WHERE ds.dealership_id = ? AND ds.sold = 0 AND ds.delivered_at IS NULL',
+        'SELECT ds.* FROM dealership_stock ds WHERE ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.delivered_at IS NULL',
         { dealership.id }
     )
 

@@ -96,8 +96,8 @@ end)
 RegisterNUICallback("adminCreateDealership", function(data, cb)
     local result = lib.callback.await("pickle_dealerships:adminCreateDealership", false, {
         label    = data.label,
-        location = data.location,
         mode     = data.mode,
+        type     = data.type,
     })
     if result and result.success then
         ShowNotification(result.message)
@@ -108,4 +108,98 @@ RegisterNUICallback("adminCreateDealership", function(data, cb)
     end
 end)
 
---- Close admin panel (handled by main module's "close" callback)
+--- Start gizmo placement for a dealership position
+--- The NUI closes, player places with gizmo, result is saved to server, NUI re-opens
+RegisterNUICallback("adminStartGizmo", function(data, cb)
+    -- Close the NUI so the player can use the gizmo
+    CloseNui()
+
+    local model = `prop_tennis_ball`
+    local result = StartGizmoEditor({
+        model = model,
+        enableCancel = true,
+        deleteEntity = true,
+    })
+
+    if result and result.position then
+        local position = result.position
+        local rotation = result.rotation
+
+        -- Save position to the server
+        local saveResult = lib.callback.await("pickle_dealerships:adminSavePosition", false, {
+            dealershipId = data.dealershipId,
+            field = data.field,
+            pointType = data.pointType,
+            value = {
+                x = position.x,
+                y = position.y,
+                z = position.z,
+                w = rotation and rotation.z or 0.0,
+            },
+        })
+
+        -- Re-open admin panel in setup mode
+        OpenNui('admin', {
+            dealershipId = 0,
+            dealershipName = 'Admin Panel',
+            role = 'admin',
+            tier = 4,
+            setupDealershipId = data.dealershipId,
+            metadata = saveResult and saveResult.metadata or nil,
+        })
+
+        cb(saveResult or { success = false })
+    else
+        -- Player cancelled — re-open UI
+        OpenNui('admin', {
+            dealershipId = 0,
+            dealershipName = 'Admin Panel',
+            role = 'admin',
+            tier = 4,
+            setupDealershipId = data.dealershipId,
+        })
+
+        cb({ success = false, message = "Placement cancelled." })
+    end
+end)
+
+-- ─── Catalog Management NUI Callbacks ───────────────────────────────────────
+
+RegisterNUICallback("adminGetCatalog", function(_, cb)
+    local result = lib.callback.await("pickle_dealerships:adminGetCatalog", false)
+    if result then
+        cb({ success = true, catalog = result })
+    else
+        cb({ success = false, message = "Failed to fetch catalog." })
+    end
+end)
+
+RegisterNUICallback("adminAddCatalogVehicle", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:adminAddCatalogVehicle", false, data)
+    if result and result.success then
+        ShowNotification(result.message)
+    else
+        ShowNotification(result and result.message or "Failed to add vehicle.")
+    end
+    cb(result or { success = false })
+end)
+
+RegisterNUICallback("adminUpdateCatalogVehicle", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:adminUpdateCatalogVehicle", false, data)
+    if result and result.success then
+        ShowNotification(result.message)
+    else
+        ShowNotification(result and result.message or "Failed to update vehicle.")
+    end
+    cb(result or { success = false })
+end)
+
+RegisterNUICallback("adminRemoveCatalogVehicle", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:adminRemoveCatalogVehicle", false, data)
+    if result and result.success then
+        ShowNotification(result.message)
+    else
+        ShowNotification(result and result.message or "Failed to remove vehicle.")
+    end
+    cb(result or { success = false })
+end)

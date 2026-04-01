@@ -1,10 +1,5 @@
 import { useEffect, useRef } from 'react'
 
-interface NuiMessageData<T = unknown> {
-  type: string
-  [key: string]: T | string
-}
-
 export function useNuiEvent<T = unknown>(action: string, handler: (data: T) => void) {
   const savedHandler = useRef(handler)
 
@@ -13,10 +8,10 @@ export function useNuiEvent<T = unknown>(action: string, handler: (data: T) => v
   }, [handler])
 
   useEffect(() => {
-    const eventListener = (event: MessageEvent<NuiMessageData<T>>) => {
-      const { type, ...data } = event.data
+    const eventListener = (event: MessageEvent) => {
+      const { type, ...rest } = event.data
       if (type === action) {
-        savedHandler.current(data as unknown as T)
+        savedHandler.current(rest as T)
       }
     }
 

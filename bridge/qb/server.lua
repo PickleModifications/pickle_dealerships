@@ -87,39 +87,48 @@ end
 
 function AddMoney(source, count, currency)
     local xPlayer = QBCore.Functions.GetPlayer(tonumber(source))
+    if not xPlayer then return false end
     local currency = currency or "money"
     if (currency == "money") then
         xPlayer.Functions.AddMoney('cash', count)
+    elseif (currency == "bank") then
+        xPlayer.Functions.AddMoney('bank', count)
     elseif (currency == "dirty") then
         local setting = Config.FrameworkSettings.dirtyMoney
         Inventory.AddItem(source, setting == "DEFAULT" and 'dirty_money' or setting, count)
     end
-    TriggerClientEvent("pickle_dealerships:updateMoney", source, money)
+    return true
 end
 
 function RemoveMoney(source, count, currency)
     local xPlayer = QBCore.Functions.GetPlayer(tonumber(source))
+    if not xPlayer then return false end
     local currency = currency or "money"
     if (currency == "money") then
-        xPlayer.Functions.RemoveMoney('cash', count)
+        return xPlayer.Functions.RemoveMoney('cash', count)
+    elseif (currency == "bank") then
+        return xPlayer.Functions.RemoveMoney('bank', count)
     elseif (currency == "dirty") then
         local setting = Config.FrameworkSettings.dirtyMoney
         Inventory.RemoveItem(source, setting == "DEFAULT" and 'dirty_money' or setting, count)
+        return true
     end
-    TriggerClientEvent("pickle_dealerships:updateMoney", source, money)
+    return false
 end
 
 function GetMoney(source, currency)
     local xPlayer = QBCore.Functions.GetPlayer(tonumber(source))
+    if not xPlayer then return 0 end
     local currency = currency or "money"
     local money = 0
     if (currency == "money") then
         money = xPlayer.PlayerData.money.cash
+    elseif (currency == "bank") then
+        money = xPlayer.PlayerData.money.bank
     elseif (currency == "dirty") then
         local setting = Config.FrameworkSettings.dirtyMoney
         money = Inventory.GetItemCount(source, setting == "DEFAULT" and 'dirty_money' or setting)
     end
-    TriggerClientEvent("pickle_dealerships:updateMoney", source, money)
     return money
 end
 

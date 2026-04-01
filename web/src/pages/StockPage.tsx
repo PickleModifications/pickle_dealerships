@@ -1,328 +1,241 @@
-import { useState, useEffect, useMemo, useRef } from 'react'
-import { Package, Loader2, Search } from 'lucide-react'
-import { fetchNui, formatCurrency, cn, isEnvBrowser } from '@/lib/utils'
-import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import { Input } from '@/components/ui/input'
-import { Select } from '@/components/ui/select'
-import type { StockItem } from '@/types'
+import { useEffect, useState } from 'react'
+import { Card, CardContent } from '../components/ui/card'
+import { Badge } from '../components/ui/badge'
+import { Button } from '../components/ui/button'
+import { Input } from '../components/ui/input'
+import { ScrollArea } from '../components/ui/scroll-area'
+import { Separator } from '../components/ui/separator'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
+import { fetchNui, formatCurrency } from '../lib/utils'
+import { X, Search, Package, Eye, EyeOff, Truck, Clock, ParkingSquare } from 'lucide-react'
+import type { DealershipData, StockItem } from '../types'
 
-type StockFilter = 'all' | 'available' | 'transit' | 'sold'
+interface Props {
+  data: DealershipData
+  onClose: () => void
+}
 
-function getStatus(item: StockItem): 'transit' | 'available' | 'sold' {
-  if (item.sold_at) return 'sold'
-  if (!item.delivered_at) return 'transit'
+function getDeliveryStatus(item: StockItem): 'available' | 'in_transit' | 'pending' {
+  if (!item.delivered_at) return 'pending'
+  if (new Date(item.delivered_at) > new Date()) return 'in_transit'
   return 'available'
 }
 
-const STATUS_CONFIG: Record<string, { label: string; variant: 'warning' | 'success' | 'secondary'; classes: string }> = {
-  transit:   { label: 'In Transit', variant: 'warning', classes: '' },
-  available: { label: 'Available', variant: 'success', classes: '' },
-  sold:      { label: 'Sold', variant: 'secondary', classes: 'opacity-60' },
+function getTimeRemaining(deliveredAt: string): string {
+  const diff = new Date(deliveredAt).getTime() - Date.now()
+  if (diff <= 0) return 'Arriving...'
+  const mins = Math.ceil(diff / 60000)
+  if (mins >= 60) return `${Math.floor(mins / 60)}h ${mins % 60}m`
+  return `${mins}m`
 }
 
-const FILTER_CONFIG: Record<StockFilter, { label: string; activeClass: string }> = {
-  all:       { label: 'All', activeClass: 'bg-violet-500/15 text-violet-300 border-violet-500/25' },
-  available: { label: 'Available', activeClass: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/25' },
-  transit:   { label: 'In Transit', activeClass: 'bg-amber-500/15 text-amber-300 border-amber-500/25' },
-  sold:      { label: 'Sold', activeClass: 'bg-slate-500/15 text-slate-300 border-slate-500/25' },
-}
-
-/* ---------- Editable Price Cell ---------- */
-function EditablePrice({
-  value,
-  stockId,
-  dealershipId,
-}: {
-  value: number
-  stockId: number
-  dealershipId: number
-}) {
-  const [editing, setEditing] = useState(false)
-  const [price, setPrice] = useState(String(value))
-  const [saving, setSaving] = useState(false)
-  const [currentValue, setCurrentValue] = useState(value)
-  const inputRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    if (editing) {
-      inputRef.current?.focus()
-      inputRef.current?.select()
-    }
-  }, [editing])
-
-  const handleSave = async () => {
-    const numPrice = parseInt(price, 10)
-    if (isNaN(numPrice) || numPrice < 0) {
-      setPrice(String(currentValue))
-      setEditing(false)
-      return
-    }
-    setSaving(true)
-    try {
-      await fetchNui('setRetailPrice', { stockId, dealershipId, price: numPrice })
-      setCurrentValue(numPrice)
-    } catch {
-      setPrice(String(currentValue))
-    } finally {
-      setSaving(false)
-      setEditing(false)
-    }
-  }
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    e.stopPropagation()
-    if (e.key === 'Enter') handleSave()
-    if (e.key === 'Escape') {
-      setPrice(String(currentValue))
-      setEditing(false)
-    }
-  }
-
-  if (editing) {
-    return (
-      <div className="flex items-center gap-1.5">
-        <span className="text-slate-500 text-xs">$</span>
-        <input
-          ref={inputRef}
-          type="number"
-          value={price}
-          onChange={(e) => setPrice(e.target.value)}
-          onKeyDown={handleKeyDown}
-          onBlur={handleSave}
-          disabled={saving}
-          className="w-24 h-7 bg-white/[0.06] border border-violet-500/30 rounded-md px-2 text-sm text-white outline-none focus:ring-1 focus:ring-violet-500/40 transition-all"
-        />
-        {saving && <Loader2 className="h-3 w-3 animate-spin text-violet-400" />}
-      </div>
-    )
-  }
-
-  return (
-    <button
-      className="text-sm font-medium text-emerald-400 hover:text-emerald-300 transition-colors cursor-pointer group/price"
-      onClick={() => setEditing(true)}
-      title="Click to edit"
-    >
-      <span className="border-b border-dashed border-emerald-500/30 group-hover/price:border-emerald-400/50 transition-colors">
-        {formatCurrency(currentValue)}
-      </span>
-    </button>
-  )
-}
-
-/* ---------- Stock Page ---------- */
-export function StockPage({ data }: { data: any }) {
-  const dealershipId = data?.dealershipId as number
-  const tier = (data?.tier as number) ?? 1
-
+export default function StockPage({ data, onClose }: Props) {
   const [stock, setStock] = useState<StockItem[]>([])
-  const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
-  const [filter, setFilter] = useState<StockFilter>('all')
+  const [loading, setLoading] = useState(true)
+  const [, setTick] = useState(0)
+  const [displaySpotCount, setDisplaySpotCount] = useState(6)
 
-  const maxDisplaySpots = tier <= 1 ? 4 : tier === 2 ? 8 : 12
-
-  const displaySpotOptions = [
-    { value: '0', label: 'None' },
-    ...Array.from({ length: maxDisplaySpots }, (_, i) => ({
-      value: String(i + 1),
-      label: `Spot ${i + 1}`,
-    })),
-  ]
+  const loadStock = () => {
+    setLoading(true)
+    fetchNui<StockItem[] | { stock: StockItem[] }>('getStock', {
+      dealershipId: data.dealershipId,
+      location: data.location,
+    }).then((res) => {
+      if (Array.isArray(res)) setStock(res)
+      else if (res && typeof res === 'object' && 'stock' in res) setStock(res.stock)
+      setLoading(false)
+    }).catch(() => setLoading(false))
+  }
 
   useEffect(() => {
-    setLoading(true)
-    if (isEnvBrowser()) {
-      setTimeout(() => { setStock([]); setLoading(false) }, 400)
-      return
-    }
-    fetchNui<StockItem[]>('getStock', { dealershipId })
-      .then((res) => { if (Array.isArray(res)) setStock(res) })
-      .catch(() => {})
-      .finally(() => setLoading(false))
-  }, [dealershipId])
+    loadStock()
+    // Try to get display spot count from dealership data
+    fetchNui<{ success: boolean; data: { displaySpots: unknown[] } }>('getDealershipFinances', {
+      dealershipId: data.dealershipId,
+    }).catch(() => {})
+  }, [data.dealershipId])
 
-  const counts = useMemo(() => {
-    const c = { all: stock.length, available: 0, transit: 0, sold: 0 }
-    stock.forEach((item) => { c[getStatus(item)]++ })
-    return c
+  useEffect(() => {
+    const hasInTransit = stock.some((s) => getDeliveryStatus(s) !== 'available')
+    if (!hasInTransit) return
+    const interval = setInterval(() => setTick((t) => t + 1), 30000)
+    return () => clearInterval(interval)
   }, [stock])
 
-  const filtered = useMemo(() => {
-    return stock.filter((item) => {
-      const status = getStatus(item)
-      if (filter !== 'all' && status !== filter) return false
-      if (search) {
-        const q = search.toLowerCase()
-        if (!item.vehicle_label.toLowerCase().includes(q) && !item.vehicle_model.toLowerCase().includes(q)) return false
-      }
-      return true
-    })
-  }, [stock, search, filter])
-
-  const handleDisplaySpotChange = async (stockId: number, value: string) => {
-    const spot = parseInt(value, 10)
-    try {
-      await fetchNui('setDisplaySpot', { stockId, dealershipId, displaySpot: spot === 0 ? null : spot })
-      setStock((prev) =>
-        prev.map((item) => (item.id === stockId ? { ...item, display_spot: spot === 0 ? null : spot } : item))
-      )
-    } catch {
-      // handled by game
-    }
+  const handleSetSpot = (stockId: number, spot: number | null) => {
+    fetchNui('setDisplaySpot', {
+      dealershipId: data.dealershipId,
+      location: data.location,
+      stockId,
+      spot,
+    }).then(() => loadStock())
   }
 
+  const filtered = stock.filter((item) =>
+    (item.vehicle_label || item.vehicle_model).toLowerCase().includes(search.toLowerCase())
+  )
+
+  const available = filtered.filter((s) => getDeliveryStatus(s) === 'available')
+  const inTransit = filtered.filter((s) => getDeliveryStatus(s) !== 'available')
+
+  // Figure out which spots are taken
+  const takenSpots = new Set(stock.filter((s) => s.display_spot).map((s) => Number(s.display_spot)))
+
+  // Determine max spots from tier config or metadata
+  const tierSpots: Record<number, number> = { 1: 2, 2: 4, 3: 8, 4: 12 }
+  const maxSpots = tierSpots[data.tier] || 6
+
+  const canManage = data.role === 'owner' || data.role === 'manager' || data.role === 'admin'
+
   return (
-    <div className="flex flex-col h-full p-5 gap-4">
-      {/* Filter Bar */}
-      <div className="flex items-center gap-3 animate-slideUp shrink-0">
-        {/* Search */}
-        <div className="relative flex-1 max-w-xs">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
-          <Input
-            placeholder="Search stock..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="pl-9 bg-white/[0.03] border-white/[0.06] text-white placeholder:text-slate-600 h-9"
-          />
-        </div>
+    <>
+      {!data.embedded && (
+        <>
+          <div className="flex items-center justify-between p-5 pb-0">
+            <div>
+              <h1 className="text-xl font-bold">Stock Inventory</h1>
+              <p className="text-sm text-muted-foreground">{data.dealershipName} &mdash; {stock.length} vehicles</p>
+            </div>
+            <Button variant="ghost" size="icon" onClick={onClose}>
+              <X className="h-5 w-5" />
+            </Button>
+          </div>
 
-        {/* Filter tabs */}
-        <div className="flex items-center gap-1.5 ml-auto">
-          {(Object.entries(FILTER_CONFIG) as [StockFilter, typeof FILTER_CONFIG['all']][]).map(([key, cfg]) => (
-            <button
-              key={key}
-              onClick={() => setFilter(key)}
-              className={cn(
-                'px-3 py-1.5 rounded-lg text-xs font-medium transition-all border',
-                filter === key
-                  ? cfg.activeClass
-                  : 'bg-white/[0.02] text-slate-500 border-white/[0.06] hover:bg-white/[0.04] hover:text-slate-400'
-              )}
-            >
-              {cfg.label}
-              <span className="ml-1.5 opacity-60">({counts[key]})</span>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Stock Table */}
-      <div className="flex-1 overflow-y-auto pr-1">
-        {loading ? (
-          <div className="flex items-center justify-center h-48">
-            <div className="flex flex-col items-center gap-3">
-              <Loader2 className="h-6 w-6 animate-spin text-violet-400" />
-              <p className="text-xs text-slate-500">Loading inventory...</p>
+          <div className="px-5 pt-3">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input placeholder="Search vehicles..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" />
             </div>
           </div>
+
+          <Separator className="mt-3" />
+        </>
+      )}
+
+      <ScrollArea className="flex-1 p-5">
+        {loading ? (
+          <div className="flex items-center justify-center h-48 text-muted-foreground">Loading stock...</div>
         ) : filtered.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-48">
-            <div className="w-16 h-16 rounded-2xl bg-white/[0.03] border border-white/[0.06] flex items-center justify-center mb-3">
-              <Package className="h-8 w-8 text-slate-600" />
-            </div>
-            <p className="text-sm font-medium text-slate-400">
-              {stock.length === 0 ? 'No vehicles in stock' : 'No vehicles match your filters'}
-            </p>
-            <p className="text-xs text-slate-600 mt-1">
-              {stock.length === 0 ? 'Order from the catalog to get started.' : 'Try adjusting your search or filter.'}
-            </p>
+          <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
+            <Package className="h-10 w-10 mb-2 opacity-50" />
+            <p>{search ? 'No matching vehicles found' : 'No vehicles in stock'}</p>
           </div>
         ) : (
-          <div className="glass-subtle rounded-xl overflow-hidden animate-slideUp">
-            {/* Table Header */}
-            <div className="grid grid-cols-[1.5fr_100px_110px_110px_90px_90px] gap-3 px-4 py-2.5 border-b border-white/[0.06]">
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Vehicle</span>
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Wholesale</span>
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Retail Price</span>
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Display</span>
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Condition</span>
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Status</span>
-            </div>
-
-            {/* Table Rows */}
-            {filtered.map((item, index) => {
-              const status = getStatus(item)
-              const statusCfg = STATUS_CONFIG[status]
-              return (
-                <div
-                  key={item.id}
-                  className={cn(
-                    'grid grid-cols-[1.5fr_100px_110px_110px_90px_90px] gap-3 px-4 py-3 items-center border-b border-white/[0.04] transition-all duration-200',
-                    'hover:bg-white/[0.03]',
-                    status === 'sold' && 'opacity-50'
-                  )}
-                  style={{ animationDelay: `${Math.min(index * 20, 200)}ms` }}
-                >
-                  {/* Vehicle */}
-                  <div>
-                    <p className="text-sm font-medium text-white leading-tight">{item.vehicle_label}</p>
-                    <p className="text-[11px] text-slate-500 font-mono">{item.vehicle_model}</p>
-                  </div>
-
-                  {/* Wholesale */}
-                  <span className="text-sm text-slate-400">{formatCurrency(item.wholesale_cost)}</span>
-
-                  {/* Retail Price - Editable */}
-                  <div>
-                    {status === 'sold' ? (
-                      <span className="text-sm text-slate-500 line-through">{formatCurrency(item.retail_price)}</span>
-                    ) : (
-                      <EditablePrice
-                        value={item.retail_price}
-                        stockId={item.id}
-                        dealershipId={dealershipId}
-                      />
-                    )}
-                  </div>
-
-                  {/* Display Spot */}
-                  <div>
-                    {status === 'available' ? (
-                      <Select
-                        options={displaySpotOptions}
-                        value={String(item.display_spot ?? 0)}
-                        onChange={(val) => handleDisplaySpotChange(item.id, val)}
-                        className="w-24"
-                      />
-                    ) : (
-                      <span className="text-xs text-slate-500">
-                        {item.display_spot ? `Spot ${item.display_spot}` : '--'}
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Condition */}
-                  <div>
-                    <Badge
-                      variant={item.condition === 'new' ? 'default' : 'secondary'}
-                      className={cn(
-                        'text-[10px] capitalize',
-                        item.condition === 'new'
-                          ? 'bg-blue-500/15 text-blue-300 border border-blue-500/20 shadow-none'
-                          : 'bg-white/[0.04] text-slate-400 border border-white/[0.06]'
-                      )}
-                    >
-                      {item.condition}
-                    </Badge>
-                  </div>
-
-                  {/* Status */}
-                  <div>
-                    <Badge
-                      variant={statusCfg.variant}
-                      className="text-[10px]"
-                    >
-                      {statusCfg.label}
-                    </Badge>
-                  </div>
+          <div className="space-y-4">
+            {inTransit.length > 0 && (
+              <div>
+                <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1.5">
+                  <Truck className="h-3.5 w-3.5" /> In Transit ({inTransit.length})
+                </p>
+                <div className="space-y-2">
+                  {inTransit.map((item) => (
+                    <Card key={item.id} className="overflow-hidden border-dashed opacity-80">
+                      <CardContent className="p-3 flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="h-9 w-9 rounded-md bg-amber-500/10 flex items-center justify-center">
+                            <Truck className="h-4 w-4 text-amber-400" />
+                          </div>
+                          <div>
+                            <p className="font-semibold text-sm">{item.vehicle_label || item.vehicle_model}</p>
+                            <p className="text-xs text-muted-foreground font-mono">{item.vehicle_model}</p>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          {item.delivered_at ? (
+                            <Badge variant="outline" className="gap-1 text-amber-400 border-amber-400/30">
+                              <Clock className="h-3 w-3" /> {getTimeRemaining(item.delivered_at)}
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="text-muted-foreground">Awaiting Pickup</Badge>
+                          )}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
                 </div>
-              )
-            })}
+              </div>
+            )}
+
+            {available.length > 0 && (
+              <div>
+                {inTransit.length > 0 && (
+                  <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1.5">
+                    <Package className="h-3.5 w-3.5" /> Available ({available.length})
+                  </p>
+                )}
+                <div className="space-y-2">
+                  {available.map((item) => (
+                    <Card key={item.id} className="overflow-hidden hover:border-accent/50 transition-colors">
+                      <CardContent className="p-4">
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1 min-w-0">
+                            <h3 className="font-semibold truncate">{item.vehicle_label || item.vehicle_model}</h3>
+                            <p className="text-xs text-muted-foreground font-mono">{item.vehicle_model}</p>
+                          </div>
+                          <div className="flex items-center gap-2 ml-3">
+                            {item.display_spot ? (
+                              <Badge className="gap-1"><Eye className="h-3 w-3" /> Spot #{item.display_spot}</Badge>
+                            ) : (
+                              <Badge variant="outline" className="gap-1 text-muted-foreground"><EyeOff className="h-3 w-3" /> Storage</Badge>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-between mt-3 pt-3 border-t border-border">
+                          <div className="flex gap-4">
+                            <div>
+                              <p className="text-xs text-muted-foreground">Wholesale</p>
+                              <p className="text-sm font-medium">{formatCurrency(item.wholesale_cost)}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-muted-foreground">Retail</p>
+                              <p className="text-sm font-bold text-accent">{formatCurrency(item.retail_price)}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-muted-foreground">Profit</p>
+                              <p className="text-sm font-medium text-emerald-400">
+                                {formatCurrency(item.retail_price - item.wholesale_cost)}
+                              </p>
+                            </div>
+                          </div>
+                          {canManage && (
+                            <div className="flex items-center gap-2">
+                              {item.display_spot ? (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="gap-1 text-xs"
+                                  onClick={() => handleSetSpot(item.id, null)}
+                                >
+                                  <EyeOff className="h-3 w-3" /> Remove
+                                </Button>
+                              ) : (
+                                <Select onValueChange={(val) => handleSetSpot(item.id, parseInt(val))}>
+                                  <SelectTrigger className="w-[130px] h-8 text-xs">
+                                    <ParkingSquare className="h-3 w-3 mr-1" />
+                                    <SelectValue placeholder="Display on..." />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {Array.from({ length: maxSpots }, (_, i) => i + 1).map((spot) => (
+                                      <SelectItem key={spot} value={String(spot)} disabled={takenSpots.has(spot)}>
+                                        Spot #{spot} {takenSpots.has(spot) ? '(taken)' : ''}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
-      </div>
-    </div>
+      </ScrollArea>
+    </>
   )
 }

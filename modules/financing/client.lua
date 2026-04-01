@@ -23,7 +23,7 @@ RegisterNUICallback("createFinancing", function(data, cb)
 
         -- Spawn the financed vehicle at the dealership spawn point
         local spawnPoint = nil
-        for locationId, cfg in pairs(Config.Dealerships) do
+        for locationId, cfg in pairs(DealershipConfigs) do
             if cfg.spawnPoint then
                 spawnPoint = cfg.spawnPoint
                 break

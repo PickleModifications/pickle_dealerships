@@ -58,7 +58,7 @@ local function GetDealershipSpawnPoint(dealershipId)
         return vector4(dealership.spawnPoint.x, dealership.spawnPoint.y, dealership.spawnPoint.z, dealership.spawnPoint.w)
     end
     -- Fallback: try local config
-    for locationId, cfg in pairs(Config.Dealerships) do
+    for locationId, cfg in pairs(DealershipConfigs) do
         if cfg.spawnPoint then
             return cfg.spawnPoint
         end
@@ -80,7 +80,7 @@ RegisterNUICallback("purchaseVehicle", function(data, cb)
     if result and result.success then
         -- Spawn the purchased vehicle
         local spawnPoint = nil
-        for locationId, cfg in pairs(Config.Dealerships) do
+        for locationId, cfg in pairs(DealershipConfigs) do
             if cfg.spawnPoint then
                 -- Try to find matching dealership
                 spawnPoint = cfg.spawnPoint
@@ -168,7 +168,7 @@ RegisterNUICallback("startTestDrive", function(data, cb)
     -- Find dealership config for spawn point and origin coords
     local spawnPoint = nil
     local originCoords = nil
-    for locationId, cfg in pairs(Config.Dealerships) do
+    for locationId, cfg in pairs(DealershipConfigs) do
         if cfg.spawnPoint then
             spawnPoint = cfg.spawnPoint
             originCoords = cfg.coords
@@ -319,7 +319,7 @@ RegisterNetEvent("pickle_dealerships:confirmPurchase", function(data)
         if result and result.success then
             -- Find spawn point for vehicle
             local spawnPoint = nil
-            for locationId, cfg in pairs(Config.Dealerships) do
+            for locationId, cfg in pairs(DealershipConfigs) do
                 if cfg.spawnPoint then
                     spawnPoint = cfg.spawnPoint
                     break

@@ -1,36 +1,22 @@
-import * as React from "react";
-import { cn } from "@/lib/utils";
+import * as React from 'react'
+import * as ProgressPrimitive from '@radix-ui/react-progress'
+import { cn } from '../../lib/utils'
 
-export interface ProgressProps extends React.HTMLAttributes<HTMLDivElement> {
-  value?: number;
-  max?: number;
-}
+const Progress = React.forwardRef<
+  React.ElementRef<typeof ProgressPrimitive.Root>,
+  React.ComponentPropsWithoutRef<typeof ProgressPrimitive.Root>
+>(({ className, value, ...props }, ref) => (
+  <ProgressPrimitive.Root
+    ref={ref}
+    className={cn('relative h-2 w-full overflow-hidden rounded-full bg-muted', className)}
+    {...props}
+  >
+    <ProgressPrimitive.Indicator
+      className="h-full w-full flex-1 bg-accent transition-all"
+      style={{ transform: `translateX(-${100 - (value || 0)}%)` }}
+    />
+  </ProgressPrimitive.Root>
+))
+Progress.displayName = ProgressPrimitive.Root.displayName
 
-const Progress = React.forwardRef<HTMLDivElement, ProgressProps>(
-  ({ className, value = 0, max = 100, ...props }, ref) => {
-    const percentage = Math.min(Math.max((value / max) * 100, 0), 100);
-
-    return (
-      <div
-        ref={ref}
-        role="progressbar"
-        aria-valuemin={0}
-        aria-valuemax={max}
-        aria-valuenow={value}
-        className={cn(
-          "h-2 w-full rounded-full bg-white/[0.06] overflow-hidden",
-          className
-        )}
-        {...props}
-      >
-        <div
-          className="h-full rounded-full bg-gradient-to-r from-violet-500 to-indigo-500 transition-all duration-500 ease-out shadow-[0_0_8px_rgba(139,92,246,0.3)]"
-          style={{ width: `${percentage}%` }}
-        />
-      </div>
-    );
-  }
-);
-Progress.displayName = "Progress";
-
-export { Progress };
+export { Progress }

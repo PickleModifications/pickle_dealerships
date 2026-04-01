@@ -1,136 +1,124 @@
 import { useState, useEffect, useCallback } from 'react'
-import { X } from 'lucide-react'
-import { useNuiEvent } from '@/hooks/useNuiEvent'
-import { fetchNui, isEnvBrowser } from '@/lib/utils'
-import { Button } from '@/components/ui/button'
-import { CatalogPage } from '@/pages/CatalogPage'
-import { StockPage } from '@/pages/StockPage'
-import SalesPage from '@/pages/SalesPage'
-import EmployeesPage from '@/pages/EmployeesPage'
-import FinancesPage from '@/pages/FinancesPage'
-import DashboardPage from '@/pages/DashboardPage'
-import CouponsPage from '@/pages/CouponsPage'
-import NegotiationPage from '@/pages/NegotiationPage'
-import AdminPage from '@/pages/AdminPage'
-import FinancingPage from '@/pages/FinancingPage'
-import type { PageType } from '@/types'
+import { useNuiEvent } from './hooks/useNuiEvent'
+import { closeNui, hexToHSL } from './lib/utils'
+import type { PageType, DealershipData, NPCProfile } from './types'
 
-interface OpenData {
-  page: PageType
-  data?: Record<string, unknown>
-  [key: string]: unknown
-}
-
-const PAGE_TITLES: Record<string, string> = {
-  catalog: 'Vehicle Catalog',
-  stock: 'Stock Management',
-  sales: 'Sales Tablet',
-  employees: 'Employees',
-  finances: 'Finances',
-  dashboard: 'Dashboard',
-  coupons: 'Promotions',
-  negotiation: 'Customer Negotiation',
-  admin: 'Admin Panel',
-  financing: 'My Financing',
-}
+import DashboardPage from './pages/DashboardPage'
+import StockPage from './pages/StockPage'
+import CatalogPage from './pages/CatalogPage'
+import SalesPage from './pages/SalesPage'
+import EmployeesPage from './pages/EmployeesPage'
+import FinancesPage from './pages/FinancesPage'
+import FinancingPage from './pages/FinancingPage'
+import CouponsPage from './pages/CouponsPage'
+import NegotiationPage from './pages/NegotiationPage'
+import AdminPage from './pages/AdminPage'
+import ManagementPage from './pages/ManagementPage'
+import InteractText from './components/InteractText'
 
 function App() {
   const [visible, setVisible] = useState(false)
-  const [currentPage, setCurrentPage] = useState<PageType>(null)
-  const [pageData, setPageData] = useState<Record<string, unknown>>({})
+  const [page, setPage] = useState<PageType | null>(null)
+  const [data, setData] = useState<DealershipData | null>(null)
+  const [npcProfile, setNpcProfile] = useState<NPCProfile | null>(null)
+  const [npcGreeting, setNpcGreeting] = useState('')
 
-  useNuiEvent<OpenData>('open', (incoming) => {
+  useNuiEvent('open', (payload: { page: PageType; data: DealershipData; accentColor?: string }) => {
+    setPage(payload.page)
+    setData(payload.data)
     setVisible(true)
-    setCurrentPage(incoming.page)
-    setPageData(incoming.data ?? incoming)
+
+    if (payload.accentColor) {
+      const hsl = hexToHSL(payload.accentColor)
+      document.documentElement.style.setProperty('--accent', `${hsl.h} ${hsl.s}% ${hsl.l}%`)
+      document.documentElement.style.setProperty('--ring', `${hsl.h} ${hsl.s}% ${hsl.l}%`)
+    }
   })
 
   useNuiEvent('close', () => {
     setVisible(false)
-    setCurrentPage(null)
+    setPage(null)
+    setData(null)
+    setNpcProfile(null)
+  })
+
+  useNuiEvent('openNPCNegotiation', (payload: { profile: NPCProfile; greeting: string }) => {
+    setNpcProfile(payload.profile)
+    setNpcGreeting(payload.greeting)
+    setPage('negotiation')
+    setVisible(true)
+  })
+
+  useNuiEvent('closeNPCNegotiation', () => {
+    setVisible(false)
+    setPage(null)
+    setNpcProfile(null)
   })
 
   const handleClose = useCallback(() => {
     setVisible(false)
-    setCurrentPage(null)
-    fetchNui('close')
+    setPage(null)
+    setData(null)
+    setNpcProfile(null)
+    closeNui()
   }, [])
 
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
+    const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && visible) {
         handleClose()
       }
     }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
   }, [visible, handleClose])
 
-  useEffect(() => {
-    if (isEnvBrowser()) {
-      setVisible(true)
-      setCurrentPage('admin')
-      setPageData({
-        dealershipId: 1,
-        dealershipName: 'Dev Dealership',
-        tier: 3,
-        role: 'owner',
-      })
-    }
-  }, [])
-
-  if (!visible) return null
-
   const renderPage = () => {
-    const d = pageData as any
-    switch (currentPage) {
-      case 'catalog':    return <CatalogPage data={d} />
-      case 'stock':      return <StockPage data={d} />
-      case 'sales':      return <SalesPage data={d} />
-      case 'employees':  return <EmployeesPage data={d} />
-      case 'finances':   return <FinancesPage data={d} />
-      case 'dashboard':  return <DashboardPage data={d} />
-      case 'coupons':    return <CouponsPage data={d} />
-      case 'negotiation': return <NegotiationPage data={d} />
-      case 'admin':      return <AdminPage data={d} />
-      case 'financing':  return <FinancingPage data={d} />
-      default:           return null
+    if (!visible || !page) return null
+    if (!data && page !== 'negotiation') return null
+
+    const props = { data: data!, onClose: handleClose }
+
+    switch (page) {
+      case 'dashboard':
+        return <DashboardPage {...props} />
+      case 'stock':
+        return <StockPage {...props} />
+      case 'catalog':
+        return <CatalogPage {...props} />
+      case 'sales':
+      case 'vehicleDetails':
+        return <SalesPage {...props} />
+      case 'employees':
+        return <EmployeesPage {...props} />
+      case 'finances':
+        return <FinancesPage {...props} />
+      case 'financing':
+        return <FinancingPage {...props} />
+      case 'coupons':
+        return <CouponsPage {...props} />
+      case 'negotiation':
+        return <NegotiationPage profile={npcProfile} greeting={npcGreeting} onClose={handleClose} />
+      case 'management':
+        return <ManagementPage {...props} />
+      case 'admin':
+        return <AdminPage {...props} />
+      default:
+        return null
     }
   }
 
-  const title = currentPage ? PAGE_TITLES[currentPage] ?? '' : ''
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      {/* Backdrop */}
-      <div
-        className="fixed inset-0 bg-black/50 backdrop-blur-sm"
-        onClick={handleClose}
-      />
-
-      {/* Main Container */}
-      <div className="glass rounded-2xl max-w-5xl w-full max-h-[80vh] mx-4 flex flex-col overflow-hidden animate-fadeIn relative z-10">
-        {/* Header Bar */}
-        <div className="flex items-center justify-between px-5 py-3 border-b border-white/[0.06] shrink-0">
-          <h1 className="text-lg font-semibold gradient-text tracking-tight">
-            {title}
-          </h1>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-8 w-8 text-slate-400 hover:text-white hover:bg-white/[0.08] rounded-lg transition-all"
-            onClick={handleClose}
-          >
-            <X className="h-4 w-4" />
-          </Button>
+    <>
+      <InteractText />
+      {visible && page && (
+        <div className="fixed inset-0 flex items-center justify-center p-8 z-50">
+          <div className="relative w-full max-w-5xl h-[50vh] bg-background border border-border rounded-xl shadow-2xl shadow-black/50 flex flex-col overflow-hidden">
+            {renderPage()}
+          </div>
         </div>
-
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto">
-          {renderPage()}
-        </div>
-      </div>
-    </div>
+      )}
+    </>
   )
 }
 

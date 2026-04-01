@@ -1,269 +1,206 @@
-import { useState } from "react";
-import {
-  DollarSign,
-  TrendingUp,
-  ArrowDownCircle,
-  BarChart3,
-  ArrowUpRight,
-  ArrowDownLeft,
-  ArrowUpCircle,
-  ShoppingCart,
-  Package,
-  Receipt,
-  Coins,
-  Wallet,
-  Download,
-  Upload,
-} from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Separator } from "@/components/ui/separator";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { cn, formatCurrency, fetchNui } from "@/lib/utils";
+import { useEffect, useState } from 'react'
+import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
+import { Badge } from '../components/ui/badge'
+import { Button } from '../components/ui/button'
+import { Input } from '../components/ui/input'
+import { ScrollArea } from '../components/ui/scroll-area'
+import { Separator } from '../components/ui/separator'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog'
+import { fetchNui, formatCurrency } from '../lib/utils'
+import { X, ArrowUpRight, ArrowDownLeft, DollarSign, Receipt } from 'lucide-react'
+import type { DealershipData, LedgerEntry } from '../types'
 
-const mockFinances = {
-  balance: 2450000,
-  revenue: 890000,
-  expenses: 320000,
-  profit: 570000,
-  transactions: [
-    { id: 1, type: "sale", description: "Sold Pegassi Zentorno", amount: 725000, date: "2026-03-31" },
-    { id: 2, type: "commission", description: "Commission - Alex Rivera", amount: -36250, date: "2026-03-31" },
-    { id: 3, type: "tax", description: "Sales tax", amount: -72500, date: "2026-03-31" },
-    { id: 4, type: "order", description: "Ordered 2x Benefactor Schafter", amount: -290000, date: "2026-03-30" },
-    { id: 5, type: "sale", description: "Sold Enus Paragon R", amount: 905000, date: "2026-03-30" },
-    { id: 6, type: "withdrawal", description: "Owner withdrawal", amount: -200000, date: "2026-03-29" },
-    { id: 7, type: "deposit", description: "Owner deposit", amount: 500000, date: "2026-03-28" },
-    { id: 8, type: "upgrade", description: "Showroom upgrade", amount: -150000, date: "2026-03-27" },
-  ],
-};
+interface Props {
+  data: DealershipData
+  onClose: () => void
+}
 
-const isBrowser = !(window as any).invokeNative;
+interface FinancesData {
+  balance: number
+  ledger: LedgerEntry[]
+}
 
-const typeConfig: Record<string, { icon: any; color: string; bg: string }> = {
-  sale: { icon: ShoppingCart, color: "text-green-400", bg: "bg-green-500/20" },
-  order: { icon: Package, color: "text-blue-400", bg: "bg-blue-500/20" },
-  withdrawal: { icon: ArrowUpRight, color: "text-red-400", bg: "bg-red-500/20" },
-  deposit: { icon: ArrowDownLeft, color: "text-green-400", bg: "bg-green-500/20" },
-  upgrade: { icon: ArrowUpCircle, color: "text-violet-400", bg: "bg-violet-500/20" },
-  tax: { icon: Receipt, color: "text-amber-400", bg: "bg-amber-500/20" },
-  commission: { icon: Coins, color: "text-yellow-400", bg: "bg-yellow-500/20" },
-};
+export default function FinancesPage({ data, onClose }: Props) {
+  const [finances, setFinances] = useState<FinancesData | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [withdrawOpen, setWithdrawOpen] = useState(false)
+  const [depositOpen, setDepositOpen] = useState(false)
+  const [amount, setAmount] = useState('')
 
-export default function FinancesPage({ data }: { data: any }) {
-  const finances = data?.finances ?? (isBrowser ? mockFinances : { balance: 0, revenue: 0, expenses: 0, profit: 0, transactions: [] });
+  const loadFinances = () => {
+    setLoading(true)
+    fetchNui<{ success: boolean; data: FinancesData }>('getDealershipFinances', {
+      dealershipId: data.dealershipId,
+    }).then((res) => {
+      if (res.success && res.data) setFinances(res.data)
+      setLoading(false)
+    }).catch(() => setLoading(false))
+  }
 
-  const [withdrawOpen, setWithdrawOpen] = useState(false);
-  const [depositOpen, setDepositOpen] = useState(false);
-  const [amount, setAmount] = useState("");
+  useEffect(() => { loadFinances() }, [data.dealershipId])
 
   const handleWithdraw = () => {
-    fetchNui("finances:withdraw", { amount: Number(amount) });
-    setWithdrawOpen(false);
-    setAmount("");
-  };
+    const val = parseInt(amount)
+    if (!val || val <= 0) return
+    fetchNui<{ success: boolean; newBalance: number }>('withdrawFunds', {
+      dealershipId: data.dealershipId,
+      amount: val,
+    }).then((res) => {
+      if (res.success) {
+        setFinances((prev) => prev ? { ...prev, balance: res.newBalance } : prev)
+      }
+      setWithdrawOpen(false)
+      setAmount('')
+      loadFinances()
+    })
+  }
 
   const handleDeposit = () => {
-    fetchNui("finances:deposit", { amount: Number(amount) });
-    setDepositOpen(false);
-    setAmount("");
-  };
+    const val = parseInt(amount)
+    if (!val || val <= 0) return
+    fetchNui<{ success: boolean; newBalance: number }>('depositFunds', {
+      dealershipId: data.dealershipId,
+      amount: val,
+    }).then((res) => {
+      if (res.success) {
+        setFinances((prev) => prev ? { ...prev, balance: res.newBalance } : prev)
+      }
+      setDepositOpen(false)
+      setAmount('')
+      loadFinances()
+    })
+  }
 
-  const stats = [
-    {
-      label: "Balance",
-      value: finances.balance,
-      icon: DollarSign,
-      color: "text-violet-400",
-      bg: "bg-violet-500/20",
-      gradient: true,
-    },
-    {
-      label: "Revenue",
-      value: finances.revenue,
-      icon: TrendingUp,
-      color: "text-green-400",
-      bg: "bg-green-500/20",
-      gradient: false,
-    },
-    {
-      label: "Expenses",
-      value: finances.expenses,
-      icon: ArrowDownCircle,
-      color: "text-red-400",
-      bg: "bg-red-500/20",
-      gradient: false,
-    },
-    {
-      label: "Profit",
-      value: finances.profit,
-      icon: BarChart3,
-      color: finances.profit >= 0 ? "text-green-400" : "text-red-400",
-      bg: finances.profit >= 0 ? "bg-green-500/20" : "bg-red-500/20",
-      gradient: false,
-    },
-  ];
+  const ledgerTypeColors: Record<string, string> = {
+    sale: 'text-emerald-400',
+    purchase: 'text-red-400',
+    withdrawal: 'text-orange-400',
+    deposit: 'text-blue-400',
+    commission: 'text-yellow-400',
+    tax: 'text-red-400',
+    upgrade: 'text-purple-400',
+  }
+
+  const canWithdraw = data.role === 'owner' || data.role === 'admin'
 
   return (
-    <div className="animate-fadeIn space-y-4">
-      {/* Stat Cards */}
-      <div className="grid grid-cols-2 gap-3">
-        {stats.map((stat) => {
-          const Icon = stat.icon;
-          return (
-            <Card key={stat.label} className="glass-subtle p-4 animate-slideUp">
-              <div className={cn("w-8 h-8 rounded-lg flex items-center justify-center mb-3", stat.bg)}>
-                <Icon className={cn("w-4 h-4", stat.color)} />
-              </div>
-              <p className="text-xs text-slate-500 uppercase tracking-wider">{stat.label}</p>
-              <p className={cn("text-xl font-bold mt-0.5", stat.gradient ? "gradient-text" : "text-white")}>
-                {formatCurrency(stat.value)}
-              </p>
-            </Card>
-          );
-        })}
-      </div>
+    <>
+      {!data.embedded && (
+        <>
+          <div className="flex items-center justify-between p-5 pb-0">
+            <div>
+              <h1 className="text-xl font-bold">Finances</h1>
+              <p className="text-sm text-muted-foreground">{data.dealershipName}</p>
+            </div>
+            <Button variant="ghost" size="icon" onClick={onClose}>
+              <X className="h-5 w-5" />
+            </Button>
+          </div>
 
-      {/* Action Row */}
-      <div className="flex gap-3">
-        <Button
-          variant="outline"
-          className="flex-1"
-          onClick={() => { setAmount(""); setWithdrawOpen(true); }}
-        >
-          <Upload className="w-4 h-4 mr-2" />
-          Withdraw
-        </Button>
-        <Button
-          className="flex-1"
-          onClick={() => { setAmount(""); setDepositOpen(true); }}
-        >
-          <Download className="w-4 h-4 mr-2" />
-          Deposit
-        </Button>
-      </div>
+          <Separator className="mt-4" />
+        </>
+      )}
 
-      {/* Transactions */}
-      <Card className="glass-subtle p-4">
-        <h3 className="text-white font-medium mb-3 flex items-center gap-2">
-          <Wallet className="w-4 h-4 text-violet-400" />
-          Recent Transactions
-        </h3>
-
-        <ScrollArea className="max-h-[300px]">
-          <div className="space-y-0">
-            {finances.transactions.map((tx: any, i: number) => {
-              const config = typeConfig[tx.type] || typeConfig.sale;
-              const TxIcon = config.icon;
-              const isPositive = tx.amount > 0;
-
-              return (
-                <div key={tx.id}>
-                  <div className="flex items-center gap-3 py-2.5 px-1 rounded-lg hover:bg-white/[0.02] transition-colors">
-                    <div className={cn("w-6 h-6 rounded-full flex items-center justify-center shrink-0", config.bg)}>
-                      <TxIcon className={cn("w-3 h-3", config.color)} />
-                    </div>
-                    <p className="text-slate-300 text-sm flex-1 min-w-0 truncate">
-                      {tx.description}
+      <div className="relative flex-1 flex flex-col overflow-hidden">
+      <ScrollArea className="flex-1 p-5">
+        {loading ? (
+          <div className="flex items-center justify-center h-48 text-muted-foreground">Loading finances...</div>
+        ) : !finances ? (
+          <div className="flex items-center justify-center h-48 text-muted-foreground">Failed to load finances</div>
+        ) : (
+          <div className="space-y-5">
+            <Card className="border-accent/30">
+              <CardContent className="p-5">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-muted-foreground flex items-center gap-1">
+                      <DollarSign className="h-4 w-4" /> Dealership Balance
                     </p>
-                    <div className="text-right shrink-0">
-                      <p className={cn("text-sm font-medium", isPositive ? "text-green-400" : "text-red-400")}>
-                        {isPositive ? "+" : ""}{formatCurrency(tx.amount)}
-                      </p>
-                      <p className="text-xs text-slate-500">{tx.date}</p>
-                    </div>
+                    <p className="text-3xl font-bold mt-1">{formatCurrency(finances.balance)}</p>
                   </div>
-                  {i < finances.transactions.length - 1 && <Separator />}
+                  <div className="flex gap-2">
+                    {canWithdraw && (
+                      <Button variant="outline" size="sm" className="gap-1" onClick={() => { setWithdrawOpen(true); setAmount('') }}>
+                        <ArrowUpRight className="h-4 w-4" /> Withdraw
+                      </Button>
+                    )}
+                    <Button variant="outline" size="sm" className="gap-1" onClick={() => { setDepositOpen(true); setAmount('') }}>
+                      <ArrowDownLeft className="h-4 w-4" /> Deposit
+                    </Button>
+                  </div>
                 </div>
-              );
-            })}
+              </CardContent>
+            </Card>
 
-            {finances.transactions.length === 0 && (
-              <div className="py-8 text-center">
-                <Wallet className="w-8 h-8 text-slate-500 mx-auto mb-2" />
-                <p className="text-slate-400 text-sm">No transactions yet</p>
-              </div>
-            )}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-sm font-medium flex items-center gap-2">
+                  <Receipt className="h-4 w-4" /> Transaction History
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {finances.ledger.length === 0 ? (
+                  <p className="text-sm text-muted-foreground text-center py-4">No transactions yet</p>
+                ) : (
+                  <div className="space-y-2">
+                    {finances.ledger.slice(0, 50).map((entry) => (
+                      <div key={entry.id} className="flex items-center justify-between py-2 border-b border-border last:border-0">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm truncate">{entry.description}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {new Date(entry.created_at).toLocaleDateString()} &mdash;
+                            <Badge variant="outline" className="ml-1 text-[10px] capitalize">{entry.type}</Badge>
+                          </p>
+                        </div>
+                        <p className={`font-medium text-sm ml-3 ${entry.amount >= 0 ? 'text-emerald-400' : (ledgerTypeColors[entry.type] || 'text-red-400')}`}>
+                          {entry.amount >= 0 ? '+' : ''}{formatCurrency(entry.amount)}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           </div>
-        </ScrollArea>
-      </Card>
+        )}
+      </ScrollArea>
 
-      {/* Withdraw Dialog */}
       <Dialog open={withdrawOpen} onOpenChange={setWithdrawOpen}>
-        <DialogContent className="glass border-white/10">
+        <DialogContent onClose={() => setWithdrawOpen(false)}>
           <DialogHeader>
-            <DialogTitle className="text-white flex items-center gap-2">
-              <div className="w-8 h-8 rounded-lg bg-red-500/20 flex items-center justify-center">
-                <Upload className="w-4 h-4 text-red-400" />
-              </div>
-              Withdraw Funds
-            </DialogTitle>
-            <DialogDescription className="text-slate-400">
-              Transfer funds from the dealership to your account
-            </DialogDescription>
+            <DialogTitle>Withdraw Funds</DialogTitle>
+            <DialogDescription>Transfer money from the dealership to your bank account.</DialogDescription>
           </DialogHeader>
-          <div className="py-2">
-            <label className="text-xs text-slate-400 font-medium uppercase tracking-wider">Amount</label>
-            <div className="relative mt-2">
-              <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-              <Input
-                type="number"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                className="pl-10"
-                placeholder="Enter amount..."
-              />
+          <div className="space-y-4 pt-2">
+            <div>
+              <p className="text-sm text-muted-foreground mb-1">Available Balance</p>
+              <p className="text-lg font-bold">{formatCurrency(finances?.balance || 0)}</p>
             </div>
-            <p className="text-xs text-slate-500 mt-2">
-              Available: <span className="text-violet-400">{formatCurrency(finances.balance)}</span>
-            </p>
+            <div>
+              <label className="text-sm font-medium">Amount</label>
+              <Input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="Enter amount..." className="mt-1" />
+            </div>
+            <Button className="w-full" onClick={handleWithdraw}>Withdraw</Button>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setWithdrawOpen(false)}>Cancel</Button>
-            <Button variant="destructive" onClick={handleWithdraw} disabled={!amount || Number(amount) <= 0}>
-              Withdraw
-            </Button>
-          </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Deposit Dialog */}
       <Dialog open={depositOpen} onOpenChange={setDepositOpen}>
-        <DialogContent className="glass border-white/10">
+        <DialogContent onClose={() => setDepositOpen(false)}>
           <DialogHeader>
-            <DialogTitle className="text-white flex items-center gap-2">
-              <div className="w-8 h-8 rounded-lg bg-green-500/20 flex items-center justify-center">
-                <Download className="w-4 h-4 text-green-400" />
-              </div>
-              Deposit Funds
-            </DialogTitle>
-            <DialogDescription className="text-slate-400">
-              Add funds to the dealership account
-            </DialogDescription>
+            <DialogTitle>Deposit Funds</DialogTitle>
+            <DialogDescription>Add money to the dealership balance from your bank.</DialogDescription>
           </DialogHeader>
-          <div className="py-2">
-            <label className="text-xs text-slate-400 font-medium uppercase tracking-wider">Amount</label>
-            <div className="relative mt-2">
-              <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-              <Input
-                type="number"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                className="pl-10"
-                placeholder="Enter amount..."
-              />
+          <div className="space-y-4 pt-2">
+            <div>
+              <label className="text-sm font-medium">Amount</label>
+              <Input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="Enter amount..." className="mt-1" />
             </div>
+            <Button className="w-full" onClick={handleDeposit}>Deposit</Button>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDepositOpen(false)}>Cancel</Button>
-            <Button onClick={handleDeposit} disabled={!amount || Number(amount) <= 0}>
-              Deposit
-            </Button>
-          </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
-  );
+      </div>
+    </>
+  )
 }
