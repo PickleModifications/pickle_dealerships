@@ -1,38 +1,98 @@
 local displayVehicles = {}
+local ghostVehicles = {}
 local currentDealership = nil
 local isInZone = false
+
+local GHOST_MODEL = `xm_prop_lab_barrier02` -- prop for empty display spots
+
+--- Parse a display spot into x, y, z, w regardless of format (vector4, table)
+local function ParseSpot(spot)
+    if type(spot) == "vector4" then
+        return spot.x, spot.y, spot.z, spot.w
+    elseif type(spot) == "table" then
+        return spot.x or spot[1], spot.y or spot[2], spot.z or spot[3], spot.w or spot[4] or 0.0
+    end
+    return nil, nil, nil, nil
+end
+
+--- Cleanup ghost vehicles
+local function DeleteGhostVehicles()
+    for _, data in ipairs(ghostVehicles) do
+        if data.entity and DoesEntityExist(data.entity) then
+            DeleteEntity(data.entity)
+        end
+    end
+    ghostVehicles = {}
+end
+
+--- Spawn transparent placeholder vehicles on empty display spots (staff only)
+local function SpawnGhostVehicles(locationKey, occupiedSpots)
+    DeleteGhostVehicles()
+
+    local cfg = DealershipConfigs[locationKey]
+    if not cfg or not cfg.displaySpots then return end
+
+    -- Check if player has a role at this dealership
+    local role = lib.callback.await('pickle_dealerships:getPlayerRole', false, locationKey)
+    if not role then return end -- not staff, no ghosts
+
+    for _, spot in ipairs(cfg.displaySpots) do
+        local spotId = spot.id and tonumber(spot.id)
+        if spotId and not occupiedSpots[spotId] then
+            local x, y, z, w = ParseSpot(spot)
+            if x and y and z then
+                local obj = CreateProp(GHOST_MODEL, x, y, z - 1.26, false, false, false)
+                if obj and DoesEntityExist(obj) then
+                    SetEntityRotation(obj, 90.0, 0.0, w or 0.0, 2, true)
+                    FreezeEntityPosition(obj, true)
+                    SetEntityCollision(obj, false, false)
+                    SetEntityAlpha(obj, 200, false)
+                    SetEntityInvincible(obj, true)
+
+                    ghostVehicles[#ghostVehicles + 1] = {
+                        entity = obj,
+                        spotId = spotId,
+                    }
+                end
+            end
+        end
+    end
+
+    SetModelAsNoLongerNeeded(GHOST_MODEL)
+end
 
 --- Spawns display vehicles for the current dealership
 ---@param locationKey string
 local function SpawnDisplayVehicles(locationKey)
-    -- Clean up any existing display vehicles first
+    -- Clean up existing
     DeleteDisplayVehicles()
+    DeleteGhostVehicles()
 
     local cfg = DealershipConfigs[locationKey]
     if not cfg or not cfg.displaySpots then return end
 
     local stock = lib.callback.await('pickle_dealerships:getStock', false, locationKey)
-    if not stock then return end
+    if not stock then stock = {} end
+
+    local occupiedSpots = {}
 
     for _, item in ipairs(stock) do
-        -- Only spawn delivered vehicles that are assigned to a display spot
         local isDelivered = item.delivered_at and item.delivered_at ~= "" and not item.sold_at
         if item.display_spot and isDelivered then
-            local spotIndex = tonumber(item.display_spot)
-            local spot = cfg.displaySpots[spotIndex]
+            local spotId = tonumber(item.display_spot)
+            -- Find the spot in displaySpots by its unique id
+            local spot = nil
+            local spotArrayIndex = nil
+            for i, s in ipairs(cfg.displaySpots) do
+                if s.id and tonumber(s.id) == spotId then
+                    spot = s
+                    spotArrayIndex = i
+                    break
+                end
+            end
 
             if spot then
-                -- Handle both vector4 and table formats
-                local x, y, z, w
-                if type(spot) == "vector4" then
-                    x, y, z, w = spot.x, spot.y, spot.z, spot.w
-                elseif type(spot) == "table" then
-                    x = spot.x or spot[1]
-                    y = spot.y or spot[2]
-                    z = spot.z or spot[3]
-                    w = spot.w or spot[4] or 0.0
-                end
-
+                local x, y, z, w = ParseSpot(spot)
                 if x and y and z then
                     local model = item.vehicle_model or item.model
                     local modelHash = type(model) == "string" and joaat(model) or model
@@ -49,13 +109,18 @@ local function SpawnDisplayVehicles(locationKey)
                             model = model,
                             retailPrice = item.retail_price,
                             wholesalePrice = item.wholesale_cost,
-                            displaySpot = spotIndex,
+                            displaySpot = spotId,
                         }
+
+                        occupiedSpots[spotId] = true
                     end
                 end
             end
         end
     end
+
+    -- Spawn ghosts on empty spots for staff
+    SpawnGhostVehicles(locationKey, occupiedSpots)
 end
 
 --- Deletes all display vehicles
@@ -99,6 +164,7 @@ RegisterNetEvent('pickle_dealerships:exitedDealership', function(locationKey)
         isInZone = false
         currentDealership = nil
         DeleteDisplayVehicles()
+        DeleteGhostVehicles()
     end
 end)
 
@@ -109,9 +175,44 @@ RegisterNetEvent('pickle_dealerships:refreshDisplay', function(locationKey)
     end
 end)
 
+--- Surgically refresh display spots: remove vehicles on deleted spots, rebuild ghosts
+RegisterNetEvent('pickle_dealerships:refreshDisplaySpots', function(locationKey)
+    if currentDealership ~= locationKey or not isInZone then return end
+
+    local cfg = DealershipConfigs[locationKey]
+
+    -- Build a set of valid spot IDs from current config
+    local validSpotIds = {}
+    if cfg and cfg.displaySpots then
+        for _, spot in ipairs(cfg.displaySpots) do
+            if spot.id then validSpotIds[tonumber(spot.id)] = true end
+        end
+    end
+
+    -- Remove display vehicles whose spot ID no longer exists
+    local kept = {}
+    local occupiedSpots = {}
+    for _, dv in ipairs(displayVehicles) do
+        if dv.displaySpot and not validSpotIds[dv.displaySpot] then
+            if dv.entity and DoesEntityExist(dv.entity) then
+                DeleteEntity(dv.entity)
+            end
+        else
+            kept[#kept + 1] = dv
+            if dv.displaySpot then
+                occupiedSpots[dv.displaySpot] = true
+            end
+        end
+    end
+    displayVehicles = kept
+
+    -- Rebuild just the ghosts
+    DeleteGhostVehicles()
+    SpawnGhostVehicles(locationKey, occupiedSpots)
+end)
+
 -- ─── NUI Callbacks ──────────────────────────────────────────────────────────
 
---- Resolve a dealership location key from NUI data
 local function ResolveLocation(data)
     if data.location then return data.location end
     local current = exports.pickle_dealerships:GetCurrentDealership()
@@ -171,8 +272,28 @@ RegisterNUICallback("setDisplaySpot", function(data, cb)
     end
 end)
 
+RegisterNUICallback("getDisplaySpots", function(data, cb)
+    local location = ResolveLocation(data)
+    if not location then
+        cb({ spots = {} })
+        return
+    end
+    local cfg = DealershipConfigs[location]
+    local spots = {}
+    if cfg and cfg.displaySpots then
+        for i, spot in ipairs(cfg.displaySpots) do
+            spots[#spots + 1] = {
+                id = spot.id and tonumber(spot.id) or i,
+                index = i,
+            }
+        end
+    end
+    cb({ spots = spots })
+end)
+
 --- Cleanup on resource stop
 AddEventHandler('onResourceStop', function(resourceName)
     if resourceName ~= GetCurrentResourceName() then return end
     DeleteDisplayVehicles()
+    DeleteGhostVehicles()
 end)

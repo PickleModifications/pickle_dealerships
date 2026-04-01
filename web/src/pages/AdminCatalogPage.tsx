@@ -7,6 +7,7 @@ import { ScrollArea } from '../components/ui/scroll-area'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog'
 import { fetchNui, formatCurrency } from '../lib/utils'
+import { SkeletonList } from '../components/ui/skeleton'
 import { Plus, Trash2, Pencil, Search, Car } from 'lucide-react'
 
 interface CatalogVehicle {
@@ -131,7 +132,7 @@ export default function AdminCatalogPage() {
 
       <ScrollArea className="flex-1 px-4 pb-4">
         {loading ? (
-          <div className="flex items-center justify-center h-48 text-muted-foreground">Loading catalog...</div>
+          <SkeletonList count={5} />
         ) : filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
             <Car className="h-10 w-10 mb-2 opacity-50" />

@@ -7,6 +7,8 @@ export interface DealershipData {
   type?: string
   selfService?: boolean
   setupDealershipId?: number
+  positionsDealershipId?: number
+  scrollToSpots?: boolean
   metadata?: DealershipMetadata
   embedded?: boolean
   initialTab?: string
@@ -20,10 +22,12 @@ export interface DealershipMetadata {
   spawnPoint?: PositionData
   displaySpots?: PositionData[]
   interactionPoints?: Record<string, PositionData>
+  npcSpawnPoints?: PositionData[]
   zones?: PositionData[]
 }
 
 export interface PositionData {
+  id?: number
   x: number
   y: number
   z: number
@@ -45,6 +49,7 @@ export interface StockItem {
   sold_at: string | null
   sold_to: string | null
   sold_by: string | null
+  quantity: number
 }
 
 export interface VehicleColor {
@@ -65,13 +70,17 @@ export interface CatalogItem {
 
 export interface Employee {
   id: number
+  serverId?: number
   dealership_id: number
   citizenid: string
   name?: string
-  role: 'manager' | 'salesperson'
+  role: 'manager' | 'salesperson' | 'owner'
+  gradeLabel?: string
+  grade?: number
   commission_rate: number
   hired_at: string
   clocked_in?: boolean
+  online?: boolean
   metadata?: Record<string, unknown>
 }
 
@@ -132,8 +141,9 @@ export interface DashboardStats {
 
 export interface NPCProfile {
   budgetTier: string
-  budgetMin: number
-  budgetMax: number
+  budget: number
+  budgetMin?: number
+  budgetMax?: number
   typePreference: string
   colorPreference: string | null
   priorityStat: string
@@ -141,6 +151,8 @@ export interface NPCProfile {
   personality: string
   patienceTime: number
   pedModel: string
+  maxPresentations?: number
+  maxRounds?: number
 }
 
 export interface AdminDealership {
@@ -153,6 +165,7 @@ export interface AdminDealership {
   owner_name?: string
   tier: number
   balance: number
+  job?: string | null
   metadata?: DealershipMetadata | string | null
 }
 

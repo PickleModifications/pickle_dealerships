@@ -8,6 +8,8 @@ import { Separator } from '../components/ui/separator'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog'
 import { fetchNui, formatCurrency } from '../lib/utils'
+import { getCached, setCache, buildKey } from '../lib/cache'
+import { SkeletonCardGrid } from '../components/ui/skeleton'
 import { X, Search, ShoppingCart, Truck, Lock } from 'lucide-react'
 import type { DealershipData, CatalogItem } from '../types'
 
@@ -25,11 +27,13 @@ const tierColors: Record<string, string> = {
 }
 
 export default function CatalogPage({ data, onClose }: Props) {
-  const [catalog, setCatalog] = useState<CatalogItem[]>([])
+  const cacheKey = buildKey(data.dealershipId, 'catalog')
+  const cached = getCached<CatalogItem[]>(cacheKey)
+  const [catalog, setCatalog] = useState<CatalogItem[]>(cached ?? [])
   const [search, setSearch] = useState('')
   const [classFilter, setClassFilter] = useState('all')
   const [tierFilter, setTierFilter] = useState('all')
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(!cached)
   const [ordering, setOrdering] = useState<CatalogItem | null>(null)
   const [retailPrice, setRetailPrice] = useState('')
   const [quantity, setQuantity] = useState('1')
@@ -40,8 +44,9 @@ export default function CatalogPage({ data, onClose }: Props) {
       location: data.location,
       type: data.type,
     }).then((res) => {
-      if (res && Array.isArray(res.catalog)) setCatalog(res.catalog)
-      else if (Array.isArray(res)) setCatalog(res)
+      const items = res && Array.isArray(res.catalog) ? res.catalog : (Array.isArray(res) ? res as unknown as CatalogItem[] : [])
+      setCatalog(items)
+      setCache(cacheKey, items)
       setLoading(false)
     }).catch(() => setLoading(false))
   }, [data.dealershipId])
@@ -122,7 +127,7 @@ export default function CatalogPage({ data, onClose }: Props) {
       <div className="relative flex-1 flex flex-col overflow-hidden">
       <ScrollArea className="flex-1 p-5">
         {loading ? (
-          <div className="flex items-center justify-center h-48 text-muted-foreground">Loading catalog...</div>
+          <SkeletonCardGrid count={6} columns={3} />
         ) : filtered.length === 0 ? (
           <div className="flex items-center justify-center h-48 text-muted-foreground">No vehicles found</div>
         ) : (

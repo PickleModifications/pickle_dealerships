@@ -8,4 +8,10 @@ export default defineConfig({
     outDir: '../nui',
     emptyOutDir: true,
   },
+  server: {
+    watch: {
+      usePolling: true,
+      interval: 1000,
+    },
+  },
 })

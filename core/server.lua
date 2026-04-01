@@ -23,12 +23,14 @@ CreateThread(function()
                 `tier`             INT UNSIGNED    NOT NULL DEFAULT 1,
                 `balance`          BIGINT          NOT NULL DEFAULT 0,
                 `reputation`       INT             NOT NULL DEFAULT 0,
+                `job`              VARCHAR(50)     DEFAULT NULL,
                 `metadata`         JSON            DEFAULT NULL,
                 `created_at`       TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 `updated_at`       TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                 PRIMARY KEY (`id`),
                 KEY `idx_location` (`location`),
-                KEY `idx_owner`    (`owner_citizenid`)
+                KEY `idx_owner`    (`owner_citizenid`),
+                KEY `idx_job`      (`job`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ]])
 
@@ -65,11 +67,42 @@ CreateThread(function()
                 `sold_at`         TIMESTAMP      NULL DEFAULT NULL,
                 `sold_to`         VARCHAR(50)    DEFAULT NULL,
                 `sold_by`         VARCHAR(50)    DEFAULT NULL,
+                `quantity`        INT UNSIGNED   NOT NULL DEFAULT 1,
                 `metadata`        JSON           DEFAULT NULL,
                 PRIMARY KEY (`id`),
                 KEY `idx_dealership` (`dealership_id`),
                 KEY `idx_model`      (`vehicle_model`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ]])
+
+        -- Migration: add quantity column for existing databases
+        MySQL.Async.execute([[
+            ALTER TABLE `dealership_stock` ADD COLUMN IF NOT EXISTS `quantity` INT UNSIGNED NOT NULL DEFAULT 1 AFTER `sold_by`;
+        ]])
+
+        -- Migration: consolidate duplicate unsold, already-delivered, new-condition stock rows into stacked entries
+        MySQL.Async.execute([[
+            UPDATE dealership_stock dst
+            INNER JOIN (
+                SELECT MIN(id) AS keep_id, dealership_id, vehicle_model, SUM(quantity) AS total_qty, COUNT(*) AS cnt
+                FROM dealership_stock
+                WHERE sold_at IS NULL AND display_spot IS NULL AND delivered_at IS NOT NULL AND delivered_at <= NOW() AND (`condition` = 100.00 OR `condition` IS NULL)
+                GROUP BY dealership_id, vehicle_model
+                HAVING cnt > 1
+            ) dup ON dst.id = dup.keep_id
+            SET dst.quantity = dup.total_qty;
+        ]])
+        MySQL.Async.execute([[
+            DELETE dst FROM dealership_stock dst
+            INNER JOIN (
+                SELECT MIN(id) AS keep_id, dealership_id, vehicle_model
+                FROM dealership_stock
+                WHERE sold_at IS NULL AND display_spot IS NULL AND delivered_at IS NOT NULL AND delivered_at <= NOW() AND (`condition` = 100.00 OR `condition` IS NULL)
+                GROUP BY dealership_id, vehicle_model
+                HAVING COUNT(*) > 1
+            ) dup ON dst.dealership_id = dup.dealership_id AND dst.vehicle_model = dup.vehicle_model
+                AND dst.sold_at IS NULL AND dst.display_spot IS NULL AND dst.delivered_at IS NOT NULL AND dst.delivered_at <= NOW() AND (dst.`condition` = 100.00 OR dst.`condition` IS NULL)
+                AND dst.id != dup.keep_id;
         ]])
 
         -- dealership_ledger
@@ -167,6 +200,11 @@ CreateThread(function()
                 KEY `idx_type`    (`vehicle_type`),
                 KEY `idx_tier`    (`tier`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ]])
+
+        -- Migration: add job column if missing
+        MySQL.Async.execute([[
+            ALTER TABLE `dealerships` ADD COLUMN IF NOT EXISTS `job` VARCHAR(50) DEFAULT NULL AFTER `metadata`;
         ]])
 
         -- Load dealerships into cache after tables are ready

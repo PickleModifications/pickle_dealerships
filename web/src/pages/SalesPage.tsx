@@ -8,6 +8,8 @@ import { Separator } from '../components/ui/separator'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { fetchNui, formatCurrency } from '../lib/utils'
+import { getCached, setCache, buildKey } from '../lib/cache'
+import { SkeletonCardGrid } from '../components/ui/skeleton'
 import { X, Search, CreditCard, Car, Tag, Banknote } from 'lucide-react'
 import type { DealershipData, StockItem } from '../types'
 
@@ -17,9 +19,11 @@ interface Props {
 }
 
 export default function SalesPage({ data, onClose }: Props) {
-  const [stock, setStock] = useState<StockItem[]>([])
+  const cacheKey = buildKey(data.dealershipId, 'sales')
+  const cached = getCached<StockItem[]>(cacheKey)
+  const [stock, setStock] = useState<StockItem[]>(cached ?? [])
   const [search, setSearch] = useState('')
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(!cached)
   const [selected, setSelected] = useState<StockItem | null>(null)
   const [couponCode, setCouponCode] = useState('')
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'bank'>('bank')
@@ -29,8 +33,9 @@ export default function SalesPage({ data, onClose }: Props) {
       dealershipId: data.dealershipId,
       location: data.location,
     }).then((res) => {
-      if (Array.isArray(res)) setStock(res)
-      else if (res && 'stock' in res) setStock(res.stock)
+      const items = Array.isArray(res) ? res : (res && 'stock' in res ? res.stock : [])
+      setStock(items)
+      setCache(cacheKey, items)
       setLoading(false)
     }).catch(() => setLoading(false))
   }, [data.dealershipId])
@@ -94,7 +99,7 @@ export default function SalesPage({ data, onClose }: Props) {
       <div className="relative flex-1 flex flex-col overflow-hidden">
       <ScrollArea className="flex-1 p-5">
         {loading ? (
-          <div className="flex items-center justify-center h-48 text-muted-foreground">Loading vehicles...</div>
+          <SkeletonCardGrid count={4} columns={2} />
         ) : filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
             <Car className="h-10 w-10 mb-2 opacity-50" />
@@ -115,6 +120,7 @@ export default function SalesPage({ data, onClose }: Props) {
                       <p className="text-xs text-muted-foreground font-mono">{item.vehicle_model}</p>
                     </div>
                     <div className="flex gap-1">
+                      {(item.quantity || 1) > 1 && <Badge variant="secondary">x{item.quantity}</Badge>}
                       {item.condition === 'used' && <Badge variant="secondary">Used</Badge>}
                       {item.display_spot && <Badge variant="outline">On Display</Badge>}
                     </div>

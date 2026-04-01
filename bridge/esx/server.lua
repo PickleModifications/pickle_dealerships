@@ -158,6 +158,12 @@ function GetPlayerJobName(source)
     return xPlayer.job.name
 end
 
+function GetPlayerJobGrade(source)
+    local xPlayer = ESX.GetPlayerFromId(tonumber(source))
+    if not xPlayer or not xPlayer.job then return 0 end
+    return xPlayer.job.grade or 0
+end
+
 function SetPlayerJob(source, job, grade)
     local xPlayer = ESX.GetPlayerFromId(tonumber(source))
     if not xPlayer then return end

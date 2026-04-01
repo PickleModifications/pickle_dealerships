@@ -1,5 +1,20 @@
+-- =============================================
+--  pickle_dealerships | modules/npc_customers/server.lua
+--  NPC customer generation, evaluation, negotiation & sale
+-- =============================================
+
+--- Check if current time is within business hours
+---@return boolean
+local function IsWithinBusinessHours()
+    local hours = Config.NPCCustomers.businessHours
+    if not hours then return true end -- nil = always open
+    local currentHour = tonumber(os.date("%H"))
+    return currentHour >= (hours.start or 0) and currentHour < (hours.stop or 24)
+end
+
+--- Generate an NPC customer profile based on dealership tier & reputation
 ---@param dealershipId number
----@return table npcProfile
+---@return table|nil npcProfile
 local function GenerateNPCProfile(dealershipId)
     local dealership = GetDealership(dealershipId)
     if not dealership then return nil end
@@ -34,25 +49,42 @@ local function GenerateNPCProfile(dealershipId)
     local pedPool = pedModels[budgetTier] or pedModels["economy"] or pedModels[next(pedModels)]
     local pedModel = pedPool[math.random(#pedPool)]
 
-    -- Determine budget range based on tier
-    local budgetRanges = {
-        economy  = { min = 5000,   max = 25000  },
-        midrange = { min = 20000,  max = 60000  },
-        premium  = { min = 50000,  max = 150000 },
-        luxury   = { min = 120000, max = 500000 },
-    }
-    local range = budgetRanges[budgetTier] or budgetRanges["economy"]
+    -- Budget range from config
+    local budgetRanges = {}
+    if Config.NPCCustomers.budgetTiers then
+        for _, bt in ipairs(Config.NPCCustomers.budgetTiers) do
+            local key = bt.label:lower():gsub("%-", "")
+            budgetRanges[key] = { min = bt.min, max = bt.max }
+        end
+    end
+    if not budgetRanges[budgetTier] then
+        budgetRanges[budgetTier] = { min = 5000, max = 25000 }
+    end
+    local range = budgetRanges[budgetTier]
     local budget = math.random(range.min, range.max)
+
+    -- Apply tier budget multiplier
+    local tierMultiplier = Config.NPCCustomers.tierBudgetMultiplier and Config.NPCCustomers.tierBudgetMultiplier[tier] or 1.0
+    budget = math.floor(budget * tierMultiplier)
 
     -- Patience time based on personality
     local patienceTimes = {
-        impatient  = math.random(30, 60),
-        easygoing  = math.random(90, 180),
-        aggressive = math.random(45, 90),
-        shy        = math.random(60, 120),
-        savvy      = math.random(60, 100),
+        haggler       = math.random(60, 120),
+        impulse_buyer = math.random(30, 60),
+        researcher    = math.random(90, 150),
+        skeptic       = math.random(60, 100),
+        walkaway      = math.random(30, 60),
     }
     local patienceTime = patienceTimes[personality] or math.random(60, 120)
+
+    -- Max negotiation rounds based on personality
+    local maxRoundsByPersonality = {
+        haggler       = 6,
+        impulse_buyer = 3,
+        researcher    = 5,
+        skeptic       = 5,
+        walkaway      = 3,
+    }
 
     local profile = {
         budgetTier      = budgetTier,
@@ -65,48 +97,48 @@ local function GenerateNPCProfile(dealershipId)
         pedModel        = pedModel,
         patienceTime    = patienceTime,
         dealershipId    = dealershipId,
+        maxPresentations = Config.NPCCustomers.maxPresentations or 3,
+        maxRounds       = maxRoundsByPersonality[personality] or (Config.NPCCustomers.maxNegotiationRounds or 5),
     }
 
     return profile
 end
 
----Generate NPC customer profile
+-- ─── Callbacks ──────────────────────────────────────────────────────────────
+
+--- Generate NPC customer profile
 lib.callback.register("pickle_dealerships:generateNPCCustomer", function(source, dealershipId)
-    local profile = GenerateNPCProfile(dealershipId)
-    if not profile then
-        return nil
-    end
-    return profile
+    -- Enforce business hours
+    if not IsWithinBusinessHours() then return nil end
+
+    return GenerateNPCProfile(dealershipId)
 end)
 
----Evaluate how well a vehicle matches an NPC's preferences
+--- Evaluate how well a vehicle matches an NPC's preferences
 lib.callback.register("pickle_dealerships:evaluateVehicleMatch", function(source, data)
     local profile = data.npcProfile
     local stockItem = data.stockItem
     if not profile or not stockItem then
-        return { quality = "terrible", score = 0 }
+        return { quality = "terrible", score = 0, dialogue = "..." }
     end
 
     local score = 0
-    local maxScore = 0
+    local maxScore = 100
 
-    -- Type match (worth 30 points)
-    maxScore = maxScore + 30
-    if stockItem.vehicleType and profile.typePreference then
-        if stockItem.vehicleType == profile.typePreference then
-            score = score + 30
-        elseif stockItem.vehicleType ~= profile.typePreference then
-            score = score + 5
-        end
+    -- Type match (30 pts)
+    local itemClass = stockItem.class or stockItem.vehicle_class or ""
+    if itemClass == profile.typePreference then
+        score = score + 30
+    elseif itemClass ~= "" then
+        score = score + 5
     end
 
-    -- Budget fit (worth 40 points)
-    maxScore = maxScore + 40
-    local price = stockItem.price or 0
+    -- Budget fit (40 pts)
+    local price = tonumber(stockItem.retail_price) or tonumber(stockItem.price) or 0
     local budget = profile.budget or 0
     if price <= budget then
         local ratio = price / math.max(budget, 1)
-        if ratio >= 0.7 and ratio <= 1.0 then
+        if ratio >= 0.7 then
             score = score + 40
         elseif ratio >= 0.5 then
             score = score + 25
@@ -117,63 +149,55 @@ lib.callback.register("pickle_dealerships:evaluateVehicleMatch", function(source
         local overBudget = (price - budget) / math.max(budget, 1)
         if overBudget <= profile.flexibility then
             score = score + 15
-        else
-            score = score + 0
         end
     end
 
-    -- Color match (worth 15 points)
-    maxScore = maxScore + 15
+    -- Color match (15 pts)
     if profile.colorPreference then
-        if stockItem.color and toupper(stockItem.color) == toupper(profile.colorPreference) then
-            score = score + 15
-        else
-            score = score + 5
-        end
+        score = score + 5 -- partial credit, color check is loose
     else
-        score = score + 10
+        score = score + 10 -- no preference = easy match
     end
 
-    -- Priority stat bonus (worth 15 points)
-    maxScore = maxScore + 15
+    -- Priority stat (15 pts)
     if profile.priorityStat == "price" and price <= budget * 0.8 then
         score = score + 15
-    elseif profile.priorityStat == "speed" and stockItem.topSpeed and stockItem.topSpeed > 150 then
-        score = score + 15
-    elseif profile.priorityStat == "style" and (profile.budgetTier == "premium" or profile.budgetTier == "luxury") then
+    elseif profile.priorityStat == "style" then
         score = score + 10
-    elseif profile.priorityStat == "practicality" and (stockItem.vehicleType == "suv" or stockItem.vehicleType == "sedan") then
+    elseif profile.priorityStat == "practicality" and (itemClass == "suv" or itemClass == "sedan") then
+        score = score + 15
+    elseif profile.priorityStat == "speed" and (itemClass == "sports" or itemClass == "super") then
         score = score + 15
     else
         score = score + 5
     end
 
-    local pct = score / math.max(maxScore, 1)
+    local pct = score / maxScore
     local quality
-    if pct >= 0.75 then
-        quality = "great"
-    elseif pct >= 0.50 then
-        quality = "good"
-    elseif pct >= 0.30 then
-        quality = "poor"
-    else
-        quality = "terrible"
+    if pct >= 0.75 then quality = "great"
+    elseif pct >= 0.50 then quality = "good"
+    elseif pct >= 0.30 then quality = "poor"
+    else quality = "terrible" end
+
+    -- Reaction dialogue from config
+    local pool = Config.NPCCustomers.reactions and Config.NPCCustomers.reactions[quality]
+    local dialogue = pool and pool[math.random(#pool)] or "Hmm..."
+
+    -- Calculate opening offer based on score
+    local openingOfferPct = 0.5 + (pct * 0.45) -- 50% to 95% of asking price
+    if profile.personality == "impulse_buyer" then openingOfferPct = openingOfferPct + 0.1 end
+    if profile.personality == "haggler" then openingOfferPct = openingOfferPct - 0.15 end
+
+    local openingOffer = math.floor(price * math.min(openingOfferPct, 1.0))
+    -- Clamp to budget
+    if openingOffer > budget * (1 + profile.flexibility) then
+        openingOffer = math.floor(budget * (1 + profile.flexibility))
     end
 
-    -- Generate reaction dialogue
-    local dialogues = {
-        great    = { "Oh wow, this is exactly what I was looking for!", "Now we're talking! I love this one.", "This is perfect, let's talk numbers." },
-        good     = { "Hmm, not bad. I could see myself in this.", "It's decent, what kind of deal can you give me?", "I like it, but let's see if the price is right." },
-        poor     = { "Eh, it's not really what I had in mind...", "I don't know about this one.", "Not my first choice, but I'll hear you out." },
-        terrible = { "No way, this isn't for me at all.", "You're joking, right?", "I'd rather walk than drive this." },
-    }
-    local pool = dialogues[quality]
-    local dialogue = pool[math.random(#pool)]
-
-    return { quality = quality, score = score, dialogue = dialogue }
+    return { quality = quality, score = score, dialogue = dialogue, openingOffer = openingOffer }
 end)
 
----Process a negotiation round
+--- Process a negotiation round
 lib.callback.register("pickle_dealerships:processNegotiation", function(source, data)
     local dealershipId = data.dealershipId
     local npcProfile   = data.npcProfile
@@ -189,52 +213,24 @@ lib.callback.register("pickle_dealerships:processNegotiation", function(source, 
     local personality = npcProfile.personality
     local flexibility = npcProfile.flexibility or 0.1
     local budget      = npcProfile.budget or 0
+    local maxRounds   = npcProfile.maxRounds or 5
 
-    -- Tactic effectiveness vs personality
-    local tacticEffectiveness = {
-        friendly = {
-            easygoing  = 0.8,
-            shy        = 0.7,
-            aggressive = 0.3,
-            impatient  = 0.5,
-            savvy      = 0.5,
-        },
-        pressure = {
-            easygoing  = 0.4,
-            shy        = 0.6,
-            aggressive = 0.2,
-            impatient  = 0.7,
-            savvy      = 0.3,
-        },
-        logical = {
-            easygoing  = 0.5,
-            shy        = 0.5,
-            aggressive = 0.4,
-            impatient  = 0.4,
-            savvy      = 0.8,
-        },
-        emotional = {
-            easygoing  = 0.6,
-            shy        = 0.8,
-            aggressive = 0.3,
-            impatient  = 0.3,
-            savvy      = 0.4,
-        },
-        discount = {
-            easygoing  = 0.5,
-            shy        = 0.5,
-            aggressive = 0.6,
-            impatient  = 0.6,
-            savvy      = 0.7,
-        },
+    -- Tactic → personality effectiveness mapping
+    local tacticMap = {
+        stand_firm         = { haggler = 0.3, impulse_buyer = 0.7, researcher = 0.5, skeptic = 0.4, walkaway = 0.2 },
+        concession         = { haggler = 0.7, impulse_buyer = 0.6, researcher = 0.6, skeptic = 0.5, walkaway = 0.6 },
+        highlight_features = { haggler = 0.4, impulse_buyer = 0.5, researcher = 0.8, skeptic = 0.3, walkaway = 0.4 },
+        urgency            = { haggler = 0.3, impulse_buyer = 0.8, researcher = 0.3, skeptic = 0.2, walkaway = 0.5 },
+        sweeten            = { haggler = 0.6, impulse_buyer = 0.7, researcher = 0.5, skeptic = 0.6, walkaway = 0.7 },
+        match_need         = { haggler = 0.5, impulse_buyer = 0.5, researcher = 0.7, skeptic = 0.7, walkaway = 0.5 },
+        final_offer        = { haggler = 0.4, impulse_buyer = 0.6, researcher = 0.4, skeptic = 0.3, walkaway = 0.3 },
     }
 
     local effectiveness = 0.5
-    if tacticEffectiveness[tactic] and tacticEffectiveness[tactic][personality] then
-        effectiveness = tacticEffectiveness[tactic][personality]
+    if tacticMap[tactic] and tacticMap[tactic][personality] then
+        effectiveness = tacticMap[tactic][personality]
     end
 
-    -- Roll for success
     local roll = math.random()
     local success = roll <= effectiveness
 
@@ -243,77 +239,93 @@ lib.callback.register("pickle_dealerships:processNegotiation", function(source, 
     local roundOver = false
     local saleComplete = false
 
-    -- Max budget the NPC will ever pay (budget + flexibility margin)
     local maxWillPay = budget * (1 + flexibility)
 
     if success then
-        -- NPC moves offer up toward asking price
         local bump = currentOffer * (0.02 + math.random() * 0.06)
         newOffer = math.floor(currentOffer + bump)
         reaction = "positive"
-        emotionState = "happy"
+        emotionState = "interested"
 
-        local positiveDialogues = {
-            "Alright, you've got a point. I can go a bit higher.",
-            "Fair enough, let me reconsider.",
-            "You make a good case. How about this?",
-            "Okay okay, I'll bump my offer.",
-        }
-        dialogue = positiveDialogues[math.random(#positiveDialogues)]
+        local pool = Config.NPCCustomers.negotiation and Config.NPCCustomers.negotiation[tactic]
+        if pool and pool.success then
+            dialogue = pool.success[math.random(#pool.success)]
+        else
+            dialogue = "Alright, you've got a point."
+        end
     else
-        -- NPC holds firm or lowers offer slightly
         local drop = currentOffer * (0.01 + math.random() * 0.03)
         newOffer = math.floor(currentOffer - drop)
         reaction = "negative"
         emotionState = "annoyed"
 
-        local negativeDialogues = {
-            "That's not gonna work for me.",
-            "I'm not feeling it. My offer stands.",
-            "You'll have to do better than that.",
-            "Nah, I'm going lower after that pitch.",
-        }
-        dialogue = negativeDialogues[math.random(#negativeDialogues)]
+        local pool = Config.NPCCustomers.negotiation and Config.NPCCustomers.negotiation[tactic]
+        if pool and pool.fail then
+            dialogue = pool.fail[math.random(#pool.fail)]
+        else
+            dialogue = "That's not gonna work for me."
+        end
+    end
+
+    -- Sweeten deal cost: deduct a small fee from dealership
+    if tactic == "sweeten" and success then
+        local sweetenCost = math.floor((npcProfile.budget or 10000) * 0.02) -- 2% of NPC budget
+        local dealership = GetDealership(dealershipId)
+        if dealership and dealership.balance >= sweetenCost then
+            local newBalance = dealership.balance - sweetenCost
+            MySQL.update("UPDATE dealerships SET balance = ? WHERE id = ?", { newBalance, dealershipId })
+            UpdateDealershipCache(dealershipId, { balance = newBalance })
+        end
+    end
+
+    -- Final offer tactic: ends negotiation immediately
+    if tactic == "final_offer" then
+        roundOver = true
+        if success then
+            saleComplete = true
+            local pool = Config.NPCCustomers.negotiation and Config.NPCCustomers.negotiation.final_offer
+            dialogue = pool and pool.accept and pool.accept[math.random(#pool.accept)] or "Fine, deal."
+            emotionState = "satisfied"
+            reaction = "deal"
+        else
+            local pool = Config.NPCCustomers.negotiation and Config.NPCCustomers.negotiation.final_offer
+            dialogue = pool and pool.reject and pool.reject[math.random(#pool.reject)] or "No deal. I'm out."
+            emotionState = "angry"
+            reaction = "walkaway"
+        end
     end
 
     -- Clamp offer
-    if newOffer > maxWillPay then
-        newOffer = math.floor(maxWillPay)
-    end
-    if newOffer < budget * 0.5 then
-        newOffer = math.floor(budget * 0.5)
-    end
+    if newOffer > maxWillPay then newOffer = math.floor(maxWillPay) end
+    if newOffer < budget * 0.4 then newOffer = math.floor(budget * 0.4) end
 
-    -- Check if NPC walks away (too many rounds or too frustrated)
-    local maxRounds = 5
-    if personality == "impatient" then maxRounds = 3 end
-    if personality == "easygoing" then maxRounds = 7 end
-
-    if round >= maxRounds then
+    -- Check max rounds (except final_offer which already handled above)
+    if not roundOver and round >= maxRounds then
         roundOver = true
         if newOffer >= currentOffer then
             saleComplete = true
-            dialogue = "Alright, you've got yourself a deal. Let's wrap this up."
-            emotionState = "happy"
+            dialogue = "Alright, let's just close the deal."
+            emotionState = "satisfied"
             reaction = "deal"
         else
-            dialogue = "I've had enough. I'm walking away."
+            dialogue = "I've had enough. I'm leaving."
             emotionState = "angry"
             reaction = "walkaway"
         end
     end
 
     return {
-        newOffer    = newOffer,
-        reaction    = reaction,
+        newOffer     = newOffer,
+        reaction     = reaction,
         emotionState = emotionState,
-        dialogue    = dialogue,
-        roundOver   = roundOver,
+        dialogue     = dialogue,
+        roundOver    = roundOver,
         saleComplete = saleComplete,
+        maxRounds    = maxRounds,
     }
 end)
 
----Complete an NPC sale
+--- Complete an NPC sale
 lib.callback.register("pickle_dealerships:completeNPCSale", function(source, data)
     local dealershipId = data.dealershipId
     local stockId      = data.stockId
@@ -334,11 +346,6 @@ lib.callback.register("pickle_dealerships:completeNPCSale", function(source, dat
         return { success = false, message = "Player identifier not found." }
     end
 
-    local role = GetPlayerDealershipRole(source, dealershipId)
-    if not role then
-        return { success = false, message = "You do not work at this dealership." }
-    end
-
     -- Apply NPC sale multiplier
     local multiplier = Config.NPCCustomers.npcSaleMultiplier or 1.0
     local adjustedAmount = math.floor(saleAmount * multiplier)
@@ -349,26 +356,48 @@ lib.callback.register("pickle_dealerships:completeNPCSale", function(source, dat
     UpdateDealershipCache(dealershipId, { balance = newBalance })
 
     -- Calculate and pay commission
-    local commissionRate = Config.NPCCustomers.commissionRate or 0.10
+    local commissionRate = Config.DefaultCommission or 0.08
     local commission = math.floor(adjustedAmount * commissionRate)
     if commission > 0 then
         AddMoney(source, commission, "bank")
         ShowNotification(source, "You earned " .. GetCurrencyString(commission) .. " commission!")
     end
 
+    -- Satisfaction bonuses
+    local tip = 0
+    local bonusRep = 0
+    if npcProfile then
+        local budgetRatio = adjustedAmount / math.max(npcProfile.budget or 1, 1)
+        -- If NPC paid close to or above their budget, they're very satisfied
+        if budgetRatio >= 0.9 then
+            -- Tip: 5-10% of commission
+            tip = math.floor(commission * (0.05 + math.random() * 0.05))
+            if tip > 0 then
+                AddMoney(source, tip, "bank")
+                ShowNotification(source, "The customer left a " .. GetCurrencyString(tip) .. " tip!")
+            end
+            bonusRep = 1
+        end
+    end
+
     -- Consume stock if configured
     if Config.NPCCustomers.consumeStock then
-        MySQL.update("DELETE FROM dealership_stock WHERE id = ?", { stockId })
+        local stock = MySQL.single.await("SELECT quantity FROM dealership_stock WHERE id = ?", { stockId })
+        if stock and stock.quantity > 1 then
+            MySQL.update("UPDATE dealership_stock SET quantity = quantity - 1 WHERE id = ?", { stockId })
+        else
+            MySQL.update("UPDATE dealership_stock SET sold_at = NOW(), sold_to = 'NPC', sold_by = ? WHERE id = ?", { identifier, stockId })
+        end
     end
 
     -- Add XP if pickle_xp is available
-    if GetResourceState("pickle_xp") == "started" then
-        local xpAmount = Config.NPCCustomers.xpReward or 50
+    if Config.XPEnabled and GetResourceState("pickle_xp") == "started" then
+        local xpAmount = Config.NPCCustomers.xpPerSale or 15
         exports["pickle_xp"]:AddPlayerXP(source, xpAmount)
     end
 
     -- Update dealership reputation
-    local repGain = Config.NPCCustomers.reputationGain or 1
+    local repGain = (Config.NPCCustomers.reputationPerSale or 1) + bonusRep
     local newRep = (dealership.reputation or 0) + repGain
     MySQL.update("UPDATE dealerships SET reputation = ? WHERE id = ?", { newRep, dealershipId })
     UpdateDealershipCache(dealershipId, { reputation = newRep })
@@ -377,15 +406,11 @@ lib.callback.register("pickle_dealerships:completeNPCSale", function(source, dat
     local playerName = GetPlayerCharacterName(source) or "Unknown"
     AddLedgerEntry(dealershipId, "npc_sale", adjustedAmount, "NPC sale by " .. playerName .. " (Commission: " .. GetCurrencyString(commission) .. ")", identifier)
 
-    -- Record sale in sales table
-    MySQL.insert("INSERT INTO dealership_sales (dealership_id, seller_id, stock_id, sale_price, sale_type, created_at) VALUES (?, ?, ?, ?, 'npc', NOW())", {
-        dealershipId, identifier, stockId, adjustedAmount
-    })
-
     return {
         success    = true,
         saleAmount = adjustedAmount,
         commission = commission,
+        tip        = tip,
         message    = "Sale complete! You earned " .. GetCurrencyString(commission) .. " in commission.",
     }
 end)

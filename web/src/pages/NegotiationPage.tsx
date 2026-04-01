@@ -56,11 +56,11 @@ export default function NegotiationPage({ profile, greeting, onClose }: Props) {
     currentOffer: 0,
     askingPrice: 0,
     round: 0,
-    maxRounds: 5,
+    maxRounds: profile?.maxRounds ?? 5,
     emotionState: 'neutral',
     selectedVehicle: null,
     matchQuality: '',
-    presentationsLeft: 3,
+    presentationsLeft: profile?.maxPresentations ?? 3,
   })
   const [stock, setStock] = useState<StockItem[]>([])
   const [processing, setProcessing] = useState(false)
@@ -76,7 +76,7 @@ export default function NegotiationPage({ profile, greeting, onClose }: Props) {
     if (processing || state.presentationsLeft <= 0) return
     setProcessing(true)
 
-    fetchNui<{ success: boolean; quality: string; score: number; dialogue: string }>('presentVehicle', {
+    fetchNui<{ success: boolean; quality: string; score: number; dialogue: string; openingOffer?: number }>('presentVehicle', {
       stockItem: item,
     }).then((res) => {
       if (res.success) {
@@ -86,7 +86,7 @@ export default function NegotiationPage({ profile, greeting, onClose }: Props) {
           selectedVehicle: item,
           matchQuality: res.quality,
           askingPrice: item.retail_price,
-          currentOffer: Math.round(item.retail_price * (res.score / 100)),
+          currentOffer: res.openingOffer ?? Math.round(item.retail_price * (res.score / 100)),
           presentationsLeft: prev.presentationsLeft - 1,
           dialogue: [...prev.dialogue, `You present the ${item.vehicle_label || item.vehicle_model}`, res.dialogue],
         }))
@@ -107,6 +107,7 @@ export default function NegotiationPage({ profile, greeting, onClose }: Props) {
       dialogue: string
       roundOver: boolean
       saleComplete: boolean
+      maxRounds?: number
     }>('negotiate', {
       stockId: state.selectedVehicle.id,
       tactic: tacticId,
@@ -140,6 +141,7 @@ export default function NegotiationPage({ profile, greeting, onClose }: Props) {
             ...prev,
             currentOffer: res.newOffer,
             round: prev.round + 1,
+            maxRounds: res.maxRounds ?? prev.maxRounds,
             dialogue: newDialogue,
             emotionState: res.emotionState,
           }))
@@ -272,7 +274,12 @@ export default function NegotiationPage({ profile, greeting, onClose }: Props) {
                     onClick={() => handlePresent(item)}
                   >
                     <CardContent className="p-3">
-                      <p className="text-sm font-semibold">{item.vehicle_label || item.vehicle_model}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-semibold">{item.vehicle_label || item.vehicle_model}</p>
+                        {(item.quantity || 1) > 1 && (
+                          <span className="text-xs text-muted-foreground">x{item.quantity}</span>
+                        )}
+                      </div>
                       <p className="text-xs text-muted-foreground font-mono">{item.vehicle_model}</p>
                       <p className="text-sm font-bold text-accent mt-1">{formatCurrency(item.retail_price)}</p>
                     </CardContent>

@@ -2,13 +2,14 @@ import { useEffect, useState } from 'react'
 import { Card, CardContent } from '../components/ui/card'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
-import { Input } from '../components/ui/input'
 import { ScrollArea } from '../components/ui/scroll-area'
 import { Separator } from '../components/ui/separator'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog'
 import { fetchNui } from '../lib/utils'
-import { X, UserPlus, UserX, Clock, Shield, Briefcase } from 'lucide-react'
+import { getCached, setCache, buildKey } from '../lib/cache'
+import { SkeletonList } from '../components/ui/skeleton'
+import { X, UserPlus, UserX, Clock, Shield, Briefcase, Users, MapPin } from 'lucide-react'
 import type { DealershipData, Employee } from '../types'
 
 interface Props {
@@ -16,61 +17,74 @@ interface Props {
   onClose: () => void
 }
 
+interface NearbyPlayer {
+  serverId: number
+  name: string
+  distance: number
+}
+
 export default function EmployeesPage({ data, onClose }: Props) {
-  const [employees, setEmployees] = useState<Employee[]>([])
-  const [loading, setLoading] = useState(true)
+  const cacheKey = buildKey(data.dealershipId, 'employees')
+  const cached = getCached<Employee[]>(cacheKey)
+  const [employees, setEmployees] = useState<Employee[]>(cached ?? [])
+  const [loading, setLoading] = useState(!cached)
   const [hireDialogOpen, setHireDialogOpen] = useState(false)
-  const [hireId, setHireId] = useState('')
   const [hireRole, setHireRole] = useState<string>('salesperson')
+  const [nearbyPlayers, setNearbyPlayers] = useState<NearbyPlayer[]>([])
+  const [loadingPlayers, setLoadingPlayers] = useState(false)
+  const [selectedPlayer, setSelectedPlayer] = useState<string>('')
+  const [isClockedIn, setIsClockedIn] = useState(false)
 
   const loadEmployees = () => {
-    setLoading(true)
+    if (!getCached(cacheKey)) setLoading(true)
     fetchNui<{ employees: Employee[] } | Employee[]>('getEmployees', {
       dealershipId: data.dealershipId,
     }).then((res) => {
-      if (Array.isArray(res)) setEmployees(res)
-      else if (res && 'employees' in res) setEmployees(res.employees)
+      const items = Array.isArray(res) ? res : (res && 'employees' in res ? res.employees : [])
+      setEmployees(items)
+      setCache(cacheKey, items)
       setLoading(false)
     }).catch(() => setLoading(false))
   }
 
   useEffect(() => { loadEmployees() }, [data.dealershipId])
 
+  const openHireDialog = () => {
+    setHireDialogOpen(true)
+    setSelectedPlayer('')
+    setHireRole('salesperson')
+    setLoadingPlayers(true)
+    fetchNui<{ players: NearbyPlayer[] }>('getNearbyPlayers', {}).then((res) => {
+      setNearbyPlayers(res.players || [])
+      setLoadingPlayers(false)
+    }).catch(() => setLoadingPlayers(false))
+  }
+
   const handleHire = () => {
-    if (!hireId.trim()) return
+    if (!selectedPlayer) return
     fetchNui('hireEmployee', {
       dealershipId: data.dealershipId,
-      citizenid: hireId.trim(),
+      targetId: parseInt(selectedPlayer),
       role: hireRole,
     }).then(() => {
       setHireDialogOpen(false)
-      setHireId('')
+      setSelectedPlayer('')
       loadEmployees()
     })
   }
 
-  const handleFire = (employeeId: number) => {
+  const handleFire = (serverId: number) => {
     fetchNui('fireEmployee', {
       dealershipId: data.dealershipId,
-      employeeId,
+      targetServerId: serverId,
     }).then(() => loadEmployees())
   }
 
-  const handleSetRole = (employeeId: number, role: string) => {
+  const handleSetRole = (serverId: number, role: string) => {
     fetchNui('setEmployeeRole', {
       dealershipId: data.dealershipId,
-      employeeId,
+      targetServerId: serverId,
       role,
-    }).then(() => loadEmployees())
-  }
-
-  const handleSetCommission = (employeeId: number, rate: string) => {
-    const parsed = parseFloat(rate)
-    if (isNaN(parsed) || parsed < 0 || parsed > 100) return
-    fetchNui('setCommissionRate', {
-      dealershipId: data.dealershipId,
-      employeeId,
-      commissionRate: parsed / 100,
     }).then(() => loadEmployees())
   }
 
@@ -87,7 +101,7 @@ export default function EmployeesPage({ data, onClose }: Props) {
             </div>
             <div className="flex gap-2">
               {canManage && (
-                <Button size="sm" onClick={() => setHireDialogOpen(true)} className="gap-1">
+                <Button size="sm" onClick={openHireDialog} className="gap-1">
                   <UserPlus className="h-4 w-4" /> Hire
                 </Button>
               )}
@@ -102,9 +116,32 @@ export default function EmployeesPage({ data, onClose }: Props) {
       )}
 
       <div className="relative flex-1 flex flex-col overflow-hidden">
+      {/* Action bar for embedded mode */}
+      {data.embedded && (
+        <div className="p-4 pb-0 flex justify-between">
+          <Button
+            size="sm"
+            variant={isClockedIn ? 'outline' : 'default'}
+            onClick={() => {
+              fetchNui(isClockedIn ? 'clockOut' : 'clockIn', { dealershipId: data.dealershipId }).then((res: any) => {
+                if (res?.success) setIsClockedIn(!isClockedIn)
+              })
+            }}
+            className="gap-1"
+          >
+            <Clock className="h-4 w-4" /> {isClockedIn ? 'Clock Out' : 'Clock In'}
+          </Button>
+          {canManage && (
+            <Button size="sm" onClick={openHireDialog} className="gap-1">
+              <UserPlus className="h-4 w-4" /> Hire
+            </Button>
+          )}
+        </div>
+      )}
+
       <ScrollArea className="flex-1 p-5">
         {loading ? (
-          <div className="flex items-center justify-center h-48 text-muted-foreground">Loading employees...</div>
+          <SkeletonList count={3} />
         ) : employees.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
             <Briefcase className="h-10 w-10 mb-2 opacity-50" />
@@ -149,7 +186,7 @@ export default function EmployeesPage({ data, onClose }: Props) {
                         <div className="flex gap-1">
                           <Select
                             value={emp.role}
-                            onValueChange={(val) => handleSetRole(emp.id, val)}
+                            onValueChange={(val) => handleSetRole(emp.serverId ?? emp.id, val)}
                           >
                             <SelectTrigger className="w-[120px] h-8 text-xs">
                               <SelectValue />
@@ -163,7 +200,7 @@ export default function EmployeesPage({ data, onClose }: Props) {
                             variant="ghost"
                             size="icon"
                             className="h-8 w-8 text-destructive hover:text-destructive"
-                            onClick={() => handleFire(emp.id)}
+                            onClick={() => handleFire(emp.serverId ?? emp.id)}
                           >
                             <UserX className="h-4 w-4" />
                           </Button>
@@ -182,17 +219,40 @@ export default function EmployeesPage({ data, onClose }: Props) {
         <DialogContent onClose={() => setHireDialogOpen(false)}>
           <DialogHeader>
             <DialogTitle>Hire Employee</DialogTitle>
-            <DialogDescription>Enter the player's citizen ID to hire them.</DialogDescription>
+            <DialogDescription>Select a nearby player to hire.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4 pt-2">
             <div>
-              <label className="text-sm font-medium">Citizen ID</label>
-              <Input
-                value={hireId}
-                onChange={(e) => setHireId(e.target.value)}
-                placeholder="Enter citizen ID..."
-                className="mt-1"
-              />
+              <label className="text-sm font-medium">Player</label>
+              {loadingPlayers ? (
+                <div className="mt-1 h-9 rounded-md border border-input bg-transparent flex items-center px-3 text-sm text-muted-foreground animate-pulse">
+                  Scanning for nearby players...
+                </div>
+              ) : nearbyPlayers.length === 0 ? (
+                <div className="mt-1 p-3 rounded-md border border-border bg-muted/50 text-center">
+                  <Users className="h-5 w-5 mx-auto mb-1 text-muted-foreground" />
+                  <p className="text-sm text-muted-foreground">No players nearby</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">Players must be within 50m of you</p>
+                </div>
+              ) : (
+                <Select value={selectedPlayer} onValueChange={setSelectedPlayer}>
+                  <SelectTrigger className="mt-1">
+                    <SelectValue placeholder="Select a player..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {nearbyPlayers.map((p) => (
+                      <SelectItem key={p.serverId} value={String(p.serverId)}>
+                        <span className="flex items-center gap-2">
+                          {p.name}
+                          <span className="text-muted-foreground text-xs flex items-center gap-0.5">
+                            <MapPin className="h-3 w-3" />{p.distance}m
+                          </span>
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
             </div>
             <div>
               <label className="text-sm font-medium">Role</label>
@@ -206,7 +266,7 @@ export default function EmployeesPage({ data, onClose }: Props) {
                 </SelectContent>
               </Select>
             </div>
-            <Button className="w-full" onClick={handleHire}>
+            <Button className="w-full" onClick={handleHire} disabled={!selectedPlayer || loadingPlayers}>
               <UserPlus className="h-4 w-4" /> Hire Employee
             </Button>
           </div>

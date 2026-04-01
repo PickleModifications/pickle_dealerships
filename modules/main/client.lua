@@ -2,123 +2,229 @@ local currentDealership = nil
 local dealershipData = nil
 local dealershipBlips = {}
 local dealershipZones = {}
-local interactionIds = {}
+local dealershipInteractions = {} -- keyed by locationKey -> array of interaction ids
 local isNuiOpen = false
 DealershipConfigs = {} -- resolved configs from server, shared across modules
 
--- Create blips and zones on resource start
-CreateThread(function()
-    Wait(1000)
+--- Interaction point definitions
+local interactionDefs = {
+    management = function(locationKey)
+        return {
+            label = _L("interact_management"),
+            icon = Config.TargetIcons.management,
+        }, function(selection)
+            if currentDealership == locationKey then
+                OpenManagementMenu(locationKey)
+            end
+        end
+    end,
+    sales = function(locationKey)
+        return {
+            label = _L("interact_sales"),
+            icon = Config.TargetIcons.sales,
+        }, function(selection)
+            if currentDealership == locationKey then
+                OpenSalesTablet(locationKey)
+            end
+        end
+    end,
+    kiosk = function(locationKey)
+        return {
+            label = _L("interact_kiosk"),
+            icon = Config.TargetIcons.kiosk,
+        }, function(selection)
+            if currentDealership == locationKey then
+                OpenKiosk(locationKey)
+            end
+        end
+    end,
+}
+
+--- Creates a single interaction point and returns its ID
+local function CreateSingleInteraction(locationKey, pointType, coords)
+    local defFn = interactionDefs[pointType]
+    if not defFn then return nil end
+
+    local opt, callback = defFn(locationKey)
+    return CreateInteraction({
+        label = opt.label,
+        icon = opt.icon,
+        coords = vector3(coords.x, coords.y, coords.z),
+        rotation = vector3(0.0, 0.0, coords.w or 0.0),
+        distance = Config.InteractDistance,
+        options = { { label = opt.label, icon = opt.icon } },
+    }, callback)
+end
+
+--- Creates all interaction points for a dealership, returns keyed table { management = id, sales = id, ... }
+local function CreateDealershipInteractions(locationKey, cfg)
+    local ids = {}
+    if not cfg.interactionPoints then return ids end
+
+    for pointType, coords in pairs(cfg.interactionPoints) do
+        local id = CreateSingleInteraction(locationKey, pointType, coords)
+        if id then ids[pointType] = id end
+    end
+
+    return ids
+end
+
+--- Tears down all dealerships
+local function CleanupAllDealerships()
+    for _, blip in pairs(dealershipBlips) do
+        RemoveBlip(blip)
+    end
+    dealershipBlips = {}
+
+    for _, zone in pairs(dealershipZones) do
+        if zone and zone.remove then zone:remove() end
+    end
+    dealershipZones = {}
+
+    for _, ids in pairs(dealershipInteractions) do
+        for _, id in pairs(ids) do
+            DeleteInteraction(id)
+        end
+    end
+    dealershipInteractions = {}
+
+    DealershipConfigs = {}
+end
+
+--- Sets up a single dealership from server data
+local function SetupDealership(locationKey, data)
+    local cfg = data.resolvedConfig
+    if not cfg then return end
+
+    DealershipConfigs[locationKey] = cfg
+
+    if cfg.blip and cfg.coords then
+        local blip = CreateBlip({
+            coords = cfg.coords,
+            sprite = cfg.blip.sprite,
+            color = cfg.blip.color,
+            scale = cfg.blip.scale or 0.85,
+            label = data.name or cfg.label,
+        })
+        dealershipBlips[locationKey] = blip
+    end
+
+    if cfg.zones then
+        for i, zoneData in ipairs(cfg.zones) do
+            local zone = lib.zones.sphere({
+                coords = zoneData.coords,
+                radius = zoneData.radius or 30.0,
+                debug = Config.Debug or false,
+                onEnter = function()
+                    OnEnterDealership(locationKey)
+                end,
+                onExit = function()
+                    OnExitDealership(locationKey)
+                end,
+            })
+            dealershipZones[locationKey .. "_" .. i] = zone
+        end
+    end
+
+    dealershipInteractions[locationKey] = CreateDealershipInteractions(locationKey, cfg)
+end
+
+--- Full initial load
+function LoadDealershipWorld()
+    CleanupAllDealerships()
+
     local dealerships = lib.callback.await('pickle_dealerships:getDealerships', false)
     if not dealerships then return end
 
     for locationKey, data in pairs(dealerships) do
-        local cfg = data.resolvedConfig
-        if not cfg then goto continue end
+        SetupDealership(locationKey, data)
+    end
+end
 
-        -- Store resolved config for later use
-        DealershipConfigs[locationKey] = cfg
+-- Initial load on resource start
+CreateThread(function()
+    Wait(1000)
+    LoadDealershipWorld()
+end)
 
-        -- Create map blip
-        if cfg.blip and cfg.coords then
+--- Surgically update only the specific position that changed
+RegisterNetEvent('pickle_dealerships:positionUpdated', function(locationKey, field, pointType)
+    -- Fetch fresh data for just this dealership
+    local dealerships = lib.callback.await('pickle_dealerships:getDealerships', false)
+    if not dealerships or not dealerships[locationKey] then return end
+
+    local newCfg = dealerships[locationKey].resolvedConfig
+    if not newCfg then return end
+
+    DealershipConfigs[locationKey] = newCfg
+
+    -- Blip: only update if coords changed
+    if field == "coords" then
+        if dealershipBlips[locationKey] then
+            RemoveBlip(dealershipBlips[locationKey])
+            dealershipBlips[locationKey] = nil
+        end
+        -- Remove old zones
+        for key, zone in pairs(dealershipZones) do
+            if key:find(locationKey, 1, true) == 1 then
+                if zone and zone.remove then zone:remove() end
+                dealershipZones[key] = nil
+            end
+        end
+        -- Recreate blip + zones
+        if newCfg.blip and newCfg.coords then
             local blip = CreateBlip({
-                coords = cfg.coords,
-                sprite = cfg.blip.sprite,
-                color = cfg.blip.color,
-                scale = cfg.blip.scale or 0.85,
-                label = data.name or cfg.label,
+                coords = newCfg.coords,
+                sprite = newCfg.blip.sprite,
+                color = newCfg.blip.color,
+                scale = newCfg.blip.scale or 0.85,
+                label = dealerships[locationKey].name or newCfg.label,
             })
             dealershipBlips[locationKey] = blip
         end
-
-        -- Create zone(s)
-        if cfg.zones then
-            for i, zoneData in ipairs(cfg.zones) do
+        if newCfg.zones then
+            for i, zoneData in ipairs(newCfg.zones) do
                 local zone = lib.zones.sphere({
                     coords = zoneData.coords,
                     radius = zoneData.radius or 30.0,
                     debug = Config.Debug or false,
-                    onEnter = function()
-                        OnEnterDealership(locationKey)
-                    end,
-                    onExit = function()
-                        OnExitDealership(locationKey)
-                    end,
+                    onEnter = function() OnEnterDealership(locationKey) end,
+                    onExit = function() OnExitDealership(locationKey) end,
                 })
                 dealershipZones[locationKey .. "_" .. i] = zone
             end
         end
+    end
 
-        -- Create interaction points
-        if cfg.interactionPoints then
-            if cfg.interactionPoints.management then
-                local coords = cfg.interactionPoints.management
-                local id = CreateInteraction({
-                    label = _L("interact_management"),
-                    icon = Config.TargetIcons.management,
-                    coords = vector3(coords.x, coords.y, coords.z),
-                    rotation = vector3(0.0, 0.0, coords.w or 0.0),
-                    distance = Config.InteractDistance,
-                    options = {
-                        {
-                            label = _L("interact_management"),
-                            icon = Config.TargetIcons.management,
-                        },
-                    },
-                }, function(selection)
-                    if currentDealership == locationKey then
-                        OpenManagementMenu(locationKey)
-                    end
-                end)
-                interactionIds[#interactionIds + 1] = id
-            end
-
-            if cfg.interactionPoints.sales then
-                local coords = cfg.interactionPoints.sales
-                local id = CreateInteraction({
-                    label = _L("interact_sales"),
-                    icon = Config.TargetIcons.sales,
-                    coords = vector3(coords.x, coords.y, coords.z),
-                    rotation = vector3(0.0, 0.0, coords.w or 0.0),
-                    distance = Config.InteractDistance,
-                    options = {
-                        {
-                            label = _L("interact_sales"),
-                            icon = Config.TargetIcons.sales,
-                        },
-                    },
-                }, function(selection)
-                    if currentDealership == locationKey then
-                        OpenSalesTablet(locationKey)
-                    end
-                end)
-                interactionIds[#interactionIds + 1] = id
-            end
-
-            if cfg.interactionPoints.kiosk then
-                local coords = cfg.interactionPoints.kiosk
-                local id = CreateInteraction({
-                    label = _L("interact_kiosk"),
-                    icon = Config.TargetIcons.kiosk,
-                    coords = vector3(coords.x, coords.y, coords.z),
-                    rotation = vector3(0.0, 0.0, coords.w or 0.0),
-                    distance = Config.InteractDistance,
-                    options = {
-                        {
-                            label = _L("interact_kiosk"),
-                            icon = Config.TargetIcons.dealership,
-                        },
-                    },
-                }, function(selection)
-                    if currentDealership == locationKey then
-                        OpenKiosk(locationKey)
-                    end
-                end)
-                interactionIds[#interactionIds + 1] = id
-            end
+    -- Interaction point: only replace the specific one that changed
+    if field == "interactionPoint" and pointType then
+        if not dealershipInteractions[locationKey] then
+            dealershipInteractions[locationKey] = {}
         end
 
-        ::continue::
+        -- Remove old interaction for this point type
+        if dealershipInteractions[locationKey][pointType] then
+            DeleteInteraction(dealershipInteractions[locationKey][pointType])
+            dealershipInteractions[locationKey][pointType] = nil
+        end
+
+        -- Create new one if coords exist
+        if newCfg.interactionPoints and newCfg.interactionPoints[pointType] then
+            local id = CreateSingleInteraction(locationKey, pointType, newCfg.interactionPoints[pointType])
+            if id then
+                dealershipInteractions[locationKey][pointType] = id
+            end
+        end
+    end
+
+    -- Spawn point: just update config, no in-world entity to change
+    -- (spawnPoint is only used when purchasing/spawning vehicles)
+
+    -- Display spots: refresh ghosts and clean up any orphaned display vehicles
+    if field == "displaySpot" then
+        if currentDealership == locationKey then
+            TriggerEvent('pickle_dealerships:refreshDisplaySpots', locationKey)
+        end
     end
 end)
 
@@ -264,12 +370,7 @@ end)
 -- Cleanup on resource stop
 AddEventHandler('onResourceStop', function(resourceName)
     if GetCurrentResourceName() ~= resourceName then return end
-    for _, blip in pairs(dealershipBlips) do
-        RemoveBlip(blip)
-    end
-    for _, zone in pairs(dealershipZones) do
-        if zone and zone.remove then zone:remove() end
-    end
+    CleanupAllDealerships()
 end)
 
 -- Exports for other modules

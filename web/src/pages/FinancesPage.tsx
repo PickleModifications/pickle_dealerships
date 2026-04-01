@@ -7,6 +7,8 @@ import { ScrollArea } from '../components/ui/scroll-area'
 import { Separator } from '../components/ui/separator'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog'
 import { fetchNui, formatCurrency } from '../lib/utils'
+import { getCached, setCache, buildKey } from '../lib/cache'
+import { Skeleton, SkeletonList } from '../components/ui/skeleton'
 import { X, ArrowUpRight, ArrowDownLeft, DollarSign, Receipt } from 'lucide-react'
 import type { DealershipData, LedgerEntry } from '../types'
 
@@ -21,18 +23,20 @@ interface FinancesData {
 }
 
 export default function FinancesPage({ data, onClose }: Props) {
-  const [finances, setFinances] = useState<FinancesData | null>(null)
-  const [loading, setLoading] = useState(true)
+  const cacheKey = buildKey(data.dealershipId, 'finances')
+  const cached = getCached<FinancesData>(cacheKey)
+  const [finances, setFinances] = useState<FinancesData | null>(cached)
+  const [loading, setLoading] = useState(!cached)
   const [withdrawOpen, setWithdrawOpen] = useState(false)
   const [depositOpen, setDepositOpen] = useState(false)
   const [amount, setAmount] = useState('')
 
   const loadFinances = () => {
-    setLoading(true)
+    if (!getCached(cacheKey)) setLoading(true)
     fetchNui<{ success: boolean; data: FinancesData }>('getDealershipFinances', {
       dealershipId: data.dealershipId,
     }).then((res) => {
-      if (res.success && res.data) setFinances(res.data)
+      if (res.success && res.data) { setFinances(res.data); setCache(cacheKey, res.data) }
       setLoading(false)
     }).catch(() => setLoading(false))
   }
@@ -104,7 +108,7 @@ export default function FinancesPage({ data, onClose }: Props) {
       <div className="relative flex-1 flex flex-col overflow-hidden">
       <ScrollArea className="flex-1 p-5">
         {loading ? (
-          <div className="flex items-center justify-center h-48 text-muted-foreground">Loading finances...</div>
+          <div className="space-y-5"><div className="rounded-lg border border-border bg-card p-5"><Skeleton className="h-4 w-32 mb-2" /><Skeleton className="h-8 w-48" /></div><SkeletonList count={5} /></div>
         ) : !finances ? (
           <div className="flex items-center justify-center h-48 text-muted-foreground">Failed to load finances</div>
         ) : (

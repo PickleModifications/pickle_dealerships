@@ -1,39 +1,28 @@
-local dealershipCache = {}
-
--- Initialize cache from database on resource start
-CreateThread(function()
-    local results = MySQL.query.await('SELECT * FROM dealerships')
-    if results then
-        for _, row in ipairs(results) do
-            local meta = row.metadata
-            if type(meta) == "string" then
-                meta = json.decode(meta) or {}
-            end
-            dealershipCache[row.location] = {
-                id = row.id,
-                location = row.location,
-                name = row.name,
-                owner_citizenid = row.owner_citizenid,
-                balance = row.balance or 0,
-                tier = row.tier or 1,
-                type = row.type or "car",
-                mode = row.mode or "public",
-                metadata = meta or {},
-                created_at = row.created_at,
-            }
+-- Uses the global DealershipCache from core/server.lua (keyed by id)
+-- Helper to find a dealership by location key
+local function GetCachedByLocation(locationKey)
+    for _, d in pairs(DealershipCache) do
+        if d.location == locationKey then
+            return d
         end
     end
-end)
+    return nil
+end
 
 --- Builds a resolved config for a dealership from its DB metadata
 ---@param cached table
 ---@return table|nil
 local function ResolveDealershipConfig(cached)
     if not cached then return nil end
-    local meta = cached.metadata or {}
+
+    local meta = cached.metadata
+    if type(meta) == "string" then
+        meta = json.decode(meta) or {}
+    end
+    if type(meta) ~= "table" then meta = {} end
+
     local defaults = Config.DealershipDefaults or {}
 
-    -- Must have coords to be a valid placed dealership
     if not meta.coords then return nil end
 
     local resolved = {
@@ -48,19 +37,16 @@ local function ResolveDealershipConfig(cached)
         blip = meta.blip or defaults.blip or { sprite = 326, color = 3, scale = 0.8 },
     }
 
-    -- Coords
     resolved.coords = vector3(meta.coords.x, meta.coords.y, meta.coords.z)
     resolved.heading = meta.coords.w or 0.0
     resolved.zones = {
         { coords = vector3(meta.coords.x, meta.coords.y, meta.coords.z), radius = meta.zoneRadius or defaults.zoneRadius or 40.0 },
     }
 
-    -- Spawn point
     if meta.spawnPoint then
         resolved.spawnPoint = vector4(meta.spawnPoint.x, meta.spawnPoint.y, meta.spawnPoint.z, meta.spawnPoint.w or 0.0)
     end
 
-    -- Interaction points
     if meta.interactionPoints then
         resolved.interactionPoints = {}
         for pointType, point in pairs(meta.interactionPoints) do
@@ -68,15 +54,19 @@ local function ResolveDealershipConfig(cached)
         end
     end
 
-    -- Display spots
     if meta.displaySpots then
         resolved.displaySpots = {}
         for _, spot in ipairs(meta.displaySpots) do
-            resolved.displaySpots[#resolved.displaySpots + 1] = vector4(spot.x, spot.y, spot.z, spot.w or 0.0)
+            resolved.displaySpots[#resolved.displaySpots + 1] = {
+                x = spot.x,
+                y = spot.y,
+                z = spot.z,
+                w = spot.w or 0.0,
+                id = spot.id,
+            }
         end
     end
 
-    -- NPC spawn points
     if meta.npcSpawnPoints then
         resolved.npcSpawnPoints = {}
         for _, point in ipairs(meta.npcSpawnPoints) do
@@ -92,18 +82,18 @@ end
 lib.callback.register('pickle_dealerships:getDealerships', function(source)
     local dealerships = {}
 
-    for locationKey, cached in pairs(dealershipCache) do
+    for _, cached in pairs(DealershipCache) do
         local resolved = ResolveDealershipConfig(cached)
         if resolved then
             local stockCount = 0
             local result = MySQL.scalar.await(
-                'SELECT COUNT(*) FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NULL',
+                'SELECT COALESCE(SUM(quantity), 0) FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NULL',
                 { cached.id }
             )
-            stockCount = result or 0
+            stockCount = tonumber(result or 0)
 
-            dealerships[locationKey] = {
-                location = locationKey,
+            dealerships[cached.location] = {
+                location = cached.location,
                 name = cached.name,
                 mode = cached.mode or "player-owned",
                 type = cached.type or "car",
@@ -124,7 +114,7 @@ end)
 ---@param source number
 ---@param locationKey string
 lib.callback.register('pickle_dealerships:getDealershipData', function(source, locationKey)
-    local cached = dealershipCache[locationKey]
+    local cached = GetCachedByLocation(locationKey)
     local resolved = ResolveDealershipConfig(cached)
     if not resolved then return nil end
 
@@ -171,7 +161,7 @@ end)
 ---@param source number
 ---@param locationKey string
 lib.callback.register('pickle_dealerships:purchaseDealership', function(source, locationKey)
-    local cached = dealershipCache[locationKey]
+    local cached = GetCachedByLocation(locationKey)
     local resolved = ResolveDealershipConfig(cached)
     if not resolved then
         return { success = false, error = 'Invalid dealership location.' }
@@ -216,7 +206,7 @@ end)
 ---@param source number
 ---@param locationKey string
 lib.callback.register('pickle_dealerships:sellDealership', function(source, locationKey)
-    local cached = dealershipCache[locationKey]
+    local cached = GetCachedByLocation(locationKey)
     local resolved = ResolveDealershipConfig(cached)
     if not resolved then
         return { success = false, error = 'Invalid dealership location.' }
@@ -253,7 +243,7 @@ end)
 ---@param locationKey string
 ---@param newName string
 lib.callback.register('pickle_dealerships:renameDealership', function(source, locationKey, newName)
-    local cached = dealershipCache[locationKey]
+    local cached = GetCachedByLocation(locationKey)
     if not cached or not cached.owner_citizenid then
         return { success = false, error = 'This dealership is not owned.' }
     end
@@ -274,30 +264,47 @@ lib.callback.register('pickle_dealerships:renameDealership', function(source, lo
 end)
 
 --- Returns the player's role at a specific dealership
+--- Uses framework job if dealership has a job set, otherwise falls back to owner check
 ---@param source number
 ---@param locationKey string
 lib.callback.register('pickle_dealerships:getPlayerRole', function(source, locationKey)
     local citizenid = GetIdentifier(source)
     if not citizenid then return nil end
 
-    local cached = dealershipCache[locationKey]
+    local cached = GetCachedByLocation(locationKey)
     if not cached then return nil end
 
+    -- Admin override
+    if IsPlayerAdmin(source) then
+        return 'admin'
+    end
+
+    -- Owner check (by citizenid)
     if cached.owner_citizenid == citizenid then
         return 'owner'
     end
 
-    local employee = MySQL.single.await(
-        'SELECT role FROM dealership_employees WHERE dealership_id = ? AND citizenid = ?',
-        { cached.id, citizenid }
-    )
-
-    if employee then
-        return employee.role
-    end
-
-    if IsPlayerAdmin(source) then
-        return 'admin'
+    -- Framework job check
+    if cached.job and cached.job ~= "" then
+        local playerJob = GetPlayerJobName(source)
+        if playerJob == cached.job then
+            local grade = GetPlayerJobGrade(source)
+            local grades = GetJobGrades(cached.job)
+            local maxGrade = 0
+            for _, g in ipairs(grades) do
+                if g.level > maxGrade then maxGrade = g.level end
+            end
+            -- Highest grade = owner (if also citizenid match, already handled above)
+            -- Grade >= half of max = manager
+            -- Lower grades = salesperson
+            if grade >= maxGrade then
+                return 'owner'
+            elseif grade >= math.ceil(maxGrade / 2) then
+                return 'manager'
+            else
+                return 'salesperson'
+            end
+        end
     end
 
     return nil

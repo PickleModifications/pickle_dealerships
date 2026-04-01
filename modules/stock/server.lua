@@ -129,11 +129,11 @@ lib.callback.register('pickle_dealerships:orderVehicle', function(source, locati
     local tierCfg = Config.Tiers[dealership.tier or 1]
     local stockCapacity = (tierCfg and tierCfg.stockCap) or 20
     local currentCount = MySQL.scalar.await(
-        'SELECT COUNT(*) FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NULL',
+        'SELECT COALESCE(SUM(quantity), 0) FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NULL',
         { dealership.id }
     )
 
-    if (currentCount or 0) >= stockCapacity then
+    if tonumber(currentCount or 0) >= stockCapacity then
         return false, 'Stock capacity reached. Sell or remove vehicles first.'
     end
 
@@ -167,12 +167,33 @@ lib.callback.register('pickle_dealerships:orderVehicle', function(source, locati
     end
     -- For 'trucking' mode, delivered_at stays NULL until delivery mission completes
 
-    -- Create stock entry
+    -- Check if we can stack onto an existing already-delivered stock entry (same model, not on display, not sold, new condition)
     local retailPrice = math.floor(wholesalePrice * 1.3)
-    local stockId = MySQL.insert.await(
-        'INSERT INTO dealership_stock (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, ordered_at, delivered_at) VALUES (?, ?, ?, ?, ?, NOW(), ?)',
-        { dealership.id, model, catalogEntry.label or model, wholesalePrice, retailPrice, deliveredAt }
-    )
+    local existing = nil
+
+    -- Only stack if the new order is instant delivery, otherwise it needs its own in-transit row
+    if deliveredAt and deliveredAt <= os.date('%Y-%m-%d %H:%M:%S') then
+        existing = MySQL.single.await(
+            'SELECT id FROM dealership_stock WHERE dealership_id = ? AND vehicle_model = ? AND sold_at IS NULL AND display_spot IS NULL AND delivered_at IS NOT NULL AND delivered_at <= NOW() AND (`condition` = 100.00 OR `condition` IS NULL) LIMIT 1',
+            { dealership.id, model }
+        )
+    end
+
+    local stockId
+    if existing then
+        -- Increment quantity on existing delivered stack
+        MySQL.update.await(
+            'UPDATE dealership_stock SET quantity = quantity + 1 WHERE id = ?',
+            { existing.id }
+        )
+        stockId = existing.id
+    else
+        -- Create new stock entry (in-transit orders always get their own row until delivered)
+        stockId = MySQL.insert.await(
+            'INSERT INTO dealership_stock (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, ordered_at, delivered_at) VALUES (?, ?, ?, ?, ?, NOW(), ?)',
+            { dealership.id, model, catalogEntry.label or model, wholesalePrice, retailPrice, deliveredAt }
+        )
+    end
 
     -- Create ledger entry
     MySQL.insert.await(
@@ -270,6 +291,15 @@ lib.callback.register('pickle_dealerships:setDisplaySpot', function(source, loca
     if not stock then return false, 'Stock item not found.' end
 
     if spot then
+        -- Check if this model already has a unit on display
+        local alreadyDisplayed = MySQL.single.await(
+            'SELECT id FROM dealership_stock WHERE dealership_id = ? AND vehicle_model = ? AND display_spot IS NOT NULL AND sold_at IS NULL AND id != ?',
+            { dealership.id, stock.vehicle_model, stockId }
+        )
+        if alreadyDisplayed then
+            return false, 'This vehicle is already on display.'
+        end
+
         -- Check if spot is already occupied by another vehicle
         local existing = MySQL.single.await(
             'SELECT id FROM dealership_stock WHERE dealership_id = ? AND display_spot = ? AND sold_at IS NULL AND id != ?',
@@ -282,12 +312,29 @@ lib.callback.register('pickle_dealerships:setDisplaySpot', function(source, loca
                 { existing.id }
             )
         end
-    end
 
-    MySQL.update.await(
-        'UPDATE dealership_stock SET display_spot = ? WHERE id = ?',
-        { spot, stockId }
-    )
+        -- If stacked (quantity > 1), split off 1 unit for the display spot
+        if (stock.quantity or 1) > 1 then
+            MySQL.update.await(
+                'UPDATE dealership_stock SET quantity = quantity - 1 WHERE id = ?',
+                { stockId }
+            )
+            stockId = MySQL.insert.await(
+                'INSERT INTO dealership_stock (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, display_spot, ordered_at, delivered_at, quantity) SELECT dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, ?, ordered_at, delivered_at, 1 FROM dealership_stock WHERE id = ?',
+                { spot, stock.id }
+            )
+        else
+            MySQL.update.await(
+                'UPDATE dealership_stock SET display_spot = ? WHERE id = ?',
+                { spot, stockId }
+            )
+        end
+    else
+        MySQL.update.await(
+            'UPDATE dealership_stock SET display_spot = NULL WHERE id = ?',
+            { stockId }
+        )
+    end
 
     -- Notify clients to refresh display
     TriggerClientEvent('pickle_dealerships:refreshDisplay', -1, locationKey)
@@ -316,22 +363,38 @@ lib.callback.register('pickle_dealerships:checkDeliveries', function(source, loc
 end)
 
 --- Background thread: check timed deliveries every 60 seconds
+--- Only triggers refresh when a vehicle actually transitions from in-transit to delivered
 CreateThread(function()
     while true do
         Wait(60000)
 
-        local dealerships = MySQL.query.await('SELECT id, location FROM dealerships')
-        if dealerships then
-            for _, dealership in ipairs(dealerships) do
-                -- Check if any vehicles were recently delivered
-                local deliveredCount = MySQL.scalar.await(
-                    'SELECT COUNT(*) FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NULL AND delivered_at IS NOT NULL AND delivered_at <= NOW()',
-                    { dealership.id }
-                )
+        -- Find vehicles that were delivered in the last 65 seconds (with small overlap margin)
+        local newlyDelivered = MySQL.query.await(
+            'SELECT DISTINCT ds.dealership_id, d.location FROM dealership_stock ds JOIN dealerships d ON d.id = ds.dealership_id WHERE ds.sold_at IS NULL AND ds.delivered_at IS NOT NULL AND ds.delivered_at <= NOW() AND ds.delivered_at >= DATE_SUB(NOW(), INTERVAL 65 SECOND)',
+            {}
+        )
 
-                if deliveredCount and deliveredCount > 0 then
-                    TriggerClientEvent('pickle_dealerships:refreshDisplay', -1, dealership.location)
+        if newlyDelivered then
+            -- Consolidate newly delivered vehicles into existing stacks
+            local toConsolidate = MySQL.query.await(
+                'SELECT * FROM dealership_stock WHERE sold_at IS NULL AND display_spot IS NULL AND delivered_at IS NOT NULL AND delivered_at <= NOW() AND delivered_at >= DATE_SUB(NOW(), INTERVAL 65 SECOND) AND (`condition` = 100.00 OR `condition` IS NULL)',
+                {}
+            )
+            if toConsolidate then
+                for _, item in ipairs(toConsolidate) do
+                    local target = MySQL.single.await(
+                        'SELECT id FROM dealership_stock WHERE dealership_id = ? AND vehicle_model = ? AND sold_at IS NULL AND display_spot IS NULL AND delivered_at IS NOT NULL AND delivered_at <= NOW() AND (`condition` = 100.00 OR `condition` IS NULL) AND id != ? LIMIT 1',
+                        { item.dealership_id, item.vehicle_model, item.id }
+                    )
+                    if target then
+                        MySQL.update.await('UPDATE dealership_stock SET quantity = quantity + ? WHERE id = ?', { item.quantity or 1, target.id })
+                        MySQL.update.await('DELETE FROM dealership_stock WHERE id = ?', { item.id })
+                    end
                 end
+            end
+
+            for _, row in ipairs(newlyDelivered) do
+                TriggerClientEvent('pickle_dealerships:refreshDisplay', -1, row.location)
             end
         end
     end

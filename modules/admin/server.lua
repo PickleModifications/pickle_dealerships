@@ -233,12 +233,20 @@ lib.callback.register("pickle_dealerships:adminSavePosition", function(source, d
         if not metadata.displaySpots then
             metadata.displaySpots = {}
         end
+        -- Give each spot a unique ID for reliable deletion
+        value.id = (metadata._nextSpotId or #metadata.displaySpots) + 1
+        metadata._nextSpotId = value.id
         metadata.displaySpots[#metadata.displaySpots + 1] = value
     elseif field == "interactionPoint" then
         if not metadata.interactionPoints then
             metadata.interactionPoints = {}
         end
         metadata.interactionPoints[data.pointType] = value
+    elseif field == "npcSpawnPoint" then
+        if not metadata.npcSpawnPoints then
+            metadata.npcSpawnPoints = {}
+        end
+        metadata.npcSpawnPoints[#metadata.npcSpawnPoints + 1] = value
     elseif field == "zone" then
         if not metadata.zones then
             metadata.zones = {}
@@ -249,7 +257,87 @@ lib.callback.register("pickle_dealerships:adminSavePosition", function(source, d
     MySQL.update.await("UPDATE dealerships SET metadata = ? WHERE id = ?", { json.encode(metadata), dealershipId })
     UpdateDealershipCache(dealershipId, { metadata = metadata })
 
+    -- Tell clients exactly what changed so they can surgically update
+    local location = dealership.location
+    TriggerClientEvent('pickle_dealerships:positionUpdated', -1, location, data.field, data.pointType)
+
     return { success = true, metadata = metadata, message = "Position saved." }
+end)
+
+--- Remove a position from dealership metadata
+lib.callback.register("pickle_dealerships:adminRemovePosition", function(source, data)
+    if not IsPlayerAdmin(source) then
+        return { success = false, message = "You do not have admin permissions." }
+    end
+
+    local dealershipId = data.dealershipId
+    if not dealershipId then
+        return { success = false, message = "Missing dealership ID." }
+    end
+
+    local dealership = GetDealership(dealershipId)
+    if not dealership then
+        return { success = false, message = "Dealership not found." }
+    end
+
+    -- Always re-read metadata fresh from DB to avoid stale cache references
+    local row = MySQL.single.await("SELECT metadata FROM dealerships WHERE id = ?", { dealershipId })
+    local metadata = {}
+    if row and row.metadata then
+        if type(row.metadata) == "string" then
+            metadata = json.decode(row.metadata) or {}
+        elseif type(row.metadata) == "table" then
+            metadata = row.metadata
+        end
+    end
+
+    local field = data.field
+
+    if field == "coords" or field == "spawnPoint" then
+        metadata[field] = nil
+    elseif field == "displaySpot" and metadata.displaySpots then
+        local spotId = tonumber(data.spotId)
+        debugPrint("[RemovePosition] Removing spotId=" .. tostring(spotId) .. " from " .. tostring(#metadata.displaySpots) .. " spots")
+
+        -- Rebuild the array without the target spot
+        local newSpots = {}
+        local removedIndex = nil
+        for i, spot in ipairs(metadata.displaySpots) do
+            debugPrint("[RemovePosition]   Spot " .. i .. " id=" .. tostring(spot.id) .. " target=" .. tostring(spotId))
+            if tonumber(spot.id) == spotId then
+                removedIndex = i
+            else
+                newSpots[#newSpots + 1] = spot
+            end
+        end
+
+        if removedIndex then
+            -- Unassign any vehicle on this spot (by spot ID, not array index)
+            MySQL.update.await(
+                'UPDATE dealership_stock SET display_spot = NULL WHERE dealership_id = ? AND (display_spot = ? OR display_spot = ?)',
+                { dealershipId, spotId, tostring(spotId) }
+            )
+            metadata.displaySpots = newSpots
+        else
+            debugPrint("[RemovePosition] Spot not found!")
+            return { success = false, message = "Display spot not found." }
+        end
+    elseif field == "interactionPoint" and data.pointType and metadata.interactionPoints then
+        metadata.interactionPoints[data.pointType] = nil
+    elseif field == "npcSpawnPoint" and data.index and metadata.npcSpawnPoints then
+        local idx = math.floor(tonumber(data.index))
+        if idx >= 1 and idx <= #metadata.npcSpawnPoints then
+            table.remove(metadata.npcSpawnPoints, idx)
+        end
+    end
+
+    MySQL.update.await("UPDATE dealerships SET metadata = ? WHERE id = ?", { json.encode(metadata), dealershipId })
+    UpdateDealershipCache(dealershipId, { metadata = metadata })
+
+    local location = dealership.location
+    TriggerClientEvent('pickle_dealerships:positionUpdated', -1, location, data.field, data.pointType)
+
+    return { success = true, metadata = metadata, message = "Position removed." }
 end)
 
 -- ─── Catalog Management ─────────────────────────────────────────────────────
@@ -334,6 +422,31 @@ lib.callback.register("pickle_dealerships:adminRemoveCatalogVehicle", function(s
 
     MySQL.update.await("DELETE FROM wholesale_catalog WHERE id = ?", { data.id })
     return { success = true, message = "Vehicle removed from catalog." }
+end)
+
+--- Set dealership job
+lib.callback.register("pickle_dealerships:adminSetJob", function(source, data)
+    if not IsPlayerAdmin(source) then
+        return { success = false, message = "You do not have admin permissions." }
+    end
+
+    local dealershipId = data.dealershipId
+    if not dealershipId then
+        return { success = false, message = "Missing dealership ID." }
+    end
+
+    local dealership = GetDealership(dealershipId)
+    if not dealership then
+        return { success = false, message = "Dealership not found." }
+    end
+
+    local job = data.job
+    if job == "" then job = nil end
+
+    MySQL.update.await("UPDATE dealerships SET job = ? WHERE id = ?", { job, dealershipId })
+    UpdateDealershipCache(dealershipId, { job = job })
+
+    return { success = true, message = "Dealership job set to " .. (job or "none") .. "." }
 end)
 
 --- Admin command to open admin panel

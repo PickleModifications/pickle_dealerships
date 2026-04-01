@@ -7,6 +7,8 @@ import { ScrollArea } from '../components/ui/scroll-area'
 import { Separator } from '../components/ui/separator'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
 import { fetchNui, formatCurrency } from '../lib/utils'
+import { getCached, setCache, buildKey } from '../lib/cache'
+import { SkeletonCardGrid } from '../components/ui/skeleton'
 import { X, Search, Package, Eye, EyeOff, Truck, Clock, ParkingSquare } from 'lucide-react'
 import type { DealershipData, StockItem } from '../types'
 
@@ -30,29 +32,33 @@ function getTimeRemaining(deliveredAt: string): string {
 }
 
 export default function StockPage({ data, onClose }: Props) {
-  const [stock, setStock] = useState<StockItem[]>([])
+  const cacheKey = buildKey(data.dealershipId, 'stock')
+  const cached = getCached<StockItem[]>(cacheKey)
+  const [stock, setStock] = useState<StockItem[]>(cached ?? [])
   const [search, setSearch] = useState('')
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(!cached)
   const [, setTick] = useState(0)
-  const [displaySpotCount, setDisplaySpotCount] = useState(6)
+  const [spotList, setSpotList] = useState<{ id: number; index: number }[]>([])
 
   const loadStock = () => {
-    setLoading(true)
+    if (!cached) setLoading(true)
     fetchNui<StockItem[] | { stock: StockItem[] }>('getStock', {
       dealershipId: data.dealershipId,
       location: data.location,
     }).then((res) => {
-      if (Array.isArray(res)) setStock(res)
-      else if (res && typeof res === 'object' && 'stock' in res) setStock(res.stock)
+      const items = Array.isArray(res) ? res : (res && 'stock' in res ? res.stock : [])
+      setStock(items)
+      setCache(cacheKey, items)
       setLoading(false)
     }).catch(() => setLoading(false))
   }
 
   useEffect(() => {
     loadStock()
-    // Try to get display spot count from dealership data
-    fetchNui<{ success: boolean; data: { displaySpots: unknown[] } }>('getDealershipFinances', {
-      dealershipId: data.dealershipId,
+    fetchNui<{ spots: { id: number; index: number }[] }>('getDisplaySpots', {
+      location: data.location,
+    }).then((res) => {
+      if (res && res.spots) setSpotList(res.spots)
     }).catch(() => {})
   }, [data.dealershipId])
 
@@ -82,10 +88,6 @@ export default function StockPage({ data, onClose }: Props) {
   // Figure out which spots are taken
   const takenSpots = new Set(stock.filter((s) => s.display_spot).map((s) => Number(s.display_spot)))
 
-  // Determine max spots from tier config or metadata
-  const tierSpots: Record<number, number> = { 1: 2, 2: 4, 3: 8, 4: 12 }
-  const maxSpots = tierSpots[data.tier] || 6
-
   const canManage = data.role === 'owner' || data.role === 'manager' || data.role === 'admin'
 
   return (
@@ -95,7 +97,7 @@ export default function StockPage({ data, onClose }: Props) {
           <div className="flex items-center justify-between p-5 pb-0">
             <div>
               <h1 className="text-xl font-bold">Stock Inventory</h1>
-              <p className="text-sm text-muted-foreground">{data.dealershipName} &mdash; {stock.length} vehicles</p>
+              <p className="text-sm text-muted-foreground">{data.dealershipName} &mdash; {stock.reduce((sum, s) => sum + (s.quantity || 1), 0)} vehicles</p>
             </div>
             <Button variant="ghost" size="icon" onClick={onClose}>
               <X className="h-5 w-5" />
@@ -115,7 +117,7 @@ export default function StockPage({ data, onClose }: Props) {
 
       <ScrollArea className="flex-1 p-5">
         {loading ? (
-          <div className="flex items-center justify-center h-48 text-muted-foreground">Loading stock...</div>
+          <SkeletonCardGrid count={4} columns={2} />
         ) : filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
             <Package className="h-10 w-10 mb-2 opacity-50" />
@@ -137,7 +139,12 @@ export default function StockPage({ data, onClose }: Props) {
                             <Truck className="h-4 w-4 text-amber-400" />
                           </div>
                           <div>
-                            <p className="font-semibold text-sm">{item.vehicle_label || item.vehicle_model}</p>
+                            <div className="flex items-center gap-2">
+                              <p className="font-semibold text-sm">{item.vehicle_label || item.vehicle_model}</p>
+                              {(item.quantity || 1) > 1 && (
+                                <Badge variant="secondary" className="text-xs">x{item.quantity}</Badge>
+                              )}
+                            </div>
                             <p className="text-xs text-muted-foreground font-mono">{item.vehicle_model}</p>
                           </div>
                         </div>
@@ -170,7 +177,12 @@ export default function StockPage({ data, onClose }: Props) {
                       <CardContent className="p-4">
                         <div className="flex items-start justify-between">
                           <div className="flex-1 min-w-0">
-                            <h3 className="font-semibold truncate">{item.vehicle_label || item.vehicle_model}</h3>
+                            <div className="flex items-center gap-2">
+                              <h3 className="font-semibold truncate">{item.vehicle_label || item.vehicle_model}</h3>
+                              {(item.quantity || 1) > 1 && (
+                                <Badge variant="secondary" className="text-xs shrink-0">x{item.quantity}</Badge>
+                              )}
+                            </div>
                             <p className="text-xs text-muted-foreground font-mono">{item.vehicle_model}</p>
                           </div>
                           <div className="flex items-center gap-2 ml-3">
@@ -216,9 +228,9 @@ export default function StockPage({ data, onClose }: Props) {
                                     <SelectValue placeholder="Display on..." />
                                   </SelectTrigger>
                                   <SelectContent>
-                                    {Array.from({ length: maxSpots }, (_, i) => i + 1).map((spot) => (
-                                      <SelectItem key={spot} value={String(spot)} disabled={takenSpots.has(spot)}>
-                                        Spot #{spot} {takenSpots.has(spot) ? '(taken)' : ''}
+                                    {spotList.map((spot) => (
+                                      <SelectItem key={spot.id} value={String(spot.id)} disabled={takenSpots.has(spot.id)}>
+                                        Spot #{spot.index} {takenSpots.has(spot.id) ? '(taken)' : ''}
                                       </SelectItem>
                                     ))}
                                   </SelectContent>

@@ -9,7 +9,10 @@ RegisterNUICallback("hireEmployee", function(data, cb)
 end)
 
 RegisterNUICallback("fireEmployee", function(data, cb)
-    local result = lib.callback.await("pickle_dealerships:fireEmployee", false, data)
+    local result = lib.callback.await("pickle_dealerships:fireEmployee", false, {
+        dealershipId = data.dealershipId,
+        targetServerId = data.targetServerId or data.serverId,
+    })
     cb(result)
 end)
 
@@ -35,13 +38,42 @@ RegisterNUICallback("clockOut", function(data, cb)
 end)
 
 RegisterNUICallback("setEmployeeRole", function(data, cb)
-    local result = lib.callback.await("pickle_dealerships:setEmployeeRole", false, data)
+    local result = lib.callback.await("pickle_dealerships:setEmployeeRole", false, {
+        dealershipId = data.dealershipId,
+        targetServerId = data.targetServerId or data.serverId,
+        role = data.role,
+    })
     cb(result)
 end)
 
-RegisterNUICallback("setCommissionRate", function(data, cb)
-    local result = lib.callback.await("pickle_dealerships:setCommissionRate", false, data)
-    cb(result)
+RegisterNUICallback("getNearbyPlayers", function(data, cb)
+    local myPed = PlayerPedId()
+    local myCoords = GetEntityCoords(myPed)
+    local myServerId = GetPlayerServerId(PlayerId())
+    local maxDistance = 50.0
+    local players = {}
+
+    for _, playerId in ipairs(GetActivePlayers()) do
+        local serverId = GetPlayerServerId(playerId)
+        if serverId ~= myServerId then
+            local targetPed = GetPlayerPed(playerId)
+            if targetPed and DoesEntityExist(targetPed) then
+                local targetCoords = GetEntityCoords(targetPed)
+                local dist = #(myCoords - targetCoords)
+                if dist <= maxDistance then
+                    players[#players + 1] = {
+                        serverId = serverId,
+                        name = GetPlayerName(playerId),
+                        distance = math.floor(dist),
+                    }
+                end
+            end
+        end
+    end
+
+    -- Sort by distance
+    table.sort(players, function(a, b) return a.distance < b.distance end)
+    cb({ players = players })
 end)
 
 RegisterNetEvent("pickle_dealerships:customerArrived", function(data)

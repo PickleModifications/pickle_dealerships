@@ -6,6 +6,7 @@ import { ScrollArea } from '../components/ui/scroll-area'
 import { Separator } from '../components/ui/separator'
 import { Progress } from '../components/ui/progress'
 import { fetchNui, formatCurrency } from '../lib/utils'
+import { SkeletonList } from '../components/ui/skeleton'
 import { X, CreditCard, AlertTriangle } from 'lucide-react'
 import type { DealershipData, FinancingAgreement } from '../types'
 
@@ -55,7 +56,7 @@ export default function FinancingPage({ data, onClose }: Props) {
 
       <ScrollArea className="flex-1 p-5">
         {loading ? (
-          <div className="flex items-center justify-center h-48 text-muted-foreground">Loading...</div>
+          <SkeletonList count={3} />
         ) : agreements.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
             <CreditCard className="h-10 w-10 mb-2 opacity-50" />

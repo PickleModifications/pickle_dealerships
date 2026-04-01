@@ -174,7 +174,7 @@ Config.DealershipDefaults = {
 -- NPC Customer System
 Config.NPCCustomers = {
     enabled = true,
-    spawnInterval = { min = 300, max = 900 },
+    spawnInterval =  {min = 1, max = 3}, -- { min = 300, max = 900 },
     maxConcurrent = 3,
     patienceTime = { min = 60, max = 120 },
     maxPresentations = 3,

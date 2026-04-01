@@ -8,6 +8,8 @@ import { Separator } from '../components/ui/separator'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog'
 import { fetchNui, formatCurrency } from '../lib/utils'
+import { getCached, setCache, buildKey } from '../lib/cache'
+import { SkeletonCardGrid } from '../components/ui/skeleton'
 import { X, Plus, Trash2, Ticket, Percent, DollarSign } from 'lucide-react'
 import type { DealershipData, Coupon } from '../types'
 
@@ -17,8 +19,10 @@ interface Props {
 }
 
 export default function CouponsPage({ data, onClose }: Props) {
-  const [coupons, setCoupons] = useState<Coupon[]>([])
-  const [loading, setLoading] = useState(true)
+  const cacheKey = buildKey(data.dealershipId, 'coupons')
+  const cached = getCached<Coupon[]>(cacheKey)
+  const [coupons, setCoupons] = useState<Coupon[]>(cached ?? [])
+  const [loading, setLoading] = useState(!cached)
   const [createOpen, setCreateOpen] = useState(false)
   const [code, setCode] = useState('')
   const [discountType, setDiscountType] = useState<'percent' | 'flat'>('percent')
@@ -27,11 +31,11 @@ export default function CouponsPage({ data, onClose }: Props) {
   const [minPurchase, setMinPurchase] = useState('0')
 
   const loadCoupons = () => {
-    setLoading(true)
+    if (!getCached(cacheKey)) setLoading(true)
     fetchNui<{ success: boolean; coupons: Coupon[] }>('getCoupons', {
       dealershipId: data.dealershipId,
     }).then((res) => {
-      if (res.success && res.coupons) setCoupons(res.coupons)
+      if (res.success && res.coupons) { setCoupons(res.coupons); setCache(cacheKey, res.coupons) }
       setLoading(false)
     }).catch(() => setLoading(false))
   }
@@ -90,7 +94,7 @@ export default function CouponsPage({ data, onClose }: Props) {
       <div className="relative flex-1 flex flex-col overflow-hidden">
       <ScrollArea className="flex-1 p-5">
         {loading ? (
-          <div className="flex items-center justify-center h-48 text-muted-foreground">Loading...</div>
+          <SkeletonCardGrid count={4} columns={2} />
         ) : coupons.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
             <Ticket className="h-10 w-10 mb-2 opacity-50" />

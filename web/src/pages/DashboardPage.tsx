@@ -6,6 +6,8 @@ import { Button } from '../components/ui/button'
 import { ScrollArea } from '../components/ui/scroll-area'
 import { Separator } from '../components/ui/separator'
 import { fetchNui, formatCurrency } from '../lib/utils'
+import { getCached, setCache, buildKey } from '../lib/cache'
+import { SkeletonStatGrid, SkeletonCardGrid } from '../components/ui/skeleton'
 import { X, TrendingUp, DollarSign, ShoppingCart, Users, Package, Award } from 'lucide-react'
 import type { DealershipData, DashboardStats } from '../types'
 
@@ -22,14 +24,16 @@ const tierLabels: Record<number, string> = {
 }
 
 export default function DashboardPage({ data, onClose }: Props) {
-  const [stats, setStats] = useState<DashboardStats | null>(null)
-  const [loading, setLoading] = useState(true)
+  const cacheKey = buildKey(data.dealershipId, 'dashboard')
+  const cached = getCached<DashboardStats>(cacheKey)
+  const [stats, setStats] = useState<DashboardStats | null>(cached)
+  const [loading, setLoading] = useState(!cached)
 
   useEffect(() => {
     fetchNui<{ success: boolean; data: DashboardStats }>('getDashboardStats', {
       dealershipId: data.dealershipId,
     }).then((res) => {
-      if (res.success) setStats(res.data)
+      if (res.success) { setStats(res.data); setCache(cacheKey, res.data) }
       setLoading(false)
     }).catch(() => setLoading(false))
   }, [data.dealershipId])
@@ -56,7 +60,7 @@ export default function DashboardPage({ data, onClose }: Props) {
 
       <ScrollArea className="flex-1 p-5">
         {loading ? (
-          <div className="flex items-center justify-center h-48 text-muted-foreground">Loading dashboard...</div>
+          <div className="space-y-5"><SkeletonStatGrid count={4} /><SkeletonCardGrid count={2} columns={2} /><SkeletonCardGrid count={2} columns={2} /></div>
         ) : !stats ? (
           <div className="flex items-center justify-center h-48 text-muted-foreground">Failed to load statistics</div>
         ) : (

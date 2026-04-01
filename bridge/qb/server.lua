@@ -185,6 +185,12 @@ function GetPlayerJobName(source)
     return xPlayer.PlayerData.job.name
 end
 
+function GetPlayerJobGrade(source)
+    local xPlayer = QBCore.Functions.GetPlayer(tonumber(source))
+    if not xPlayer or not xPlayer.PlayerData or not xPlayer.PlayerData.job then return 0 end
+    return xPlayer.PlayerData.job.grade.level or 0
+end
+
 function SetPlayerJob(source, job, grade)
     local xPlayer = QBCore.Functions.GetPlayer(tonumber(source))
     xPlayer.Functions.SetJob(job, grade)

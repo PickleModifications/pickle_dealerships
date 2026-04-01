@@ -197,7 +197,8 @@ function SelectInteraction(index, selection, targetData)
     if not EnableInteraction then return end
     local pcoords = GetEntityCoords(PlayerPedId())
     local data = Interactions[index]
-    if not data.target and #(data.coords - pcoords) > (data.interactRadius and data.interactRadius or Config.InteractDistance) then 
+    if not data then return end
+    if not data.target and #(data.coords - pcoords) > (data.interactRadius and data.interactRadius or Config.InteractDistance) then
         return ShowNotification(_L("interact_far"))
     end
     Interactions[index].selected(selection, targetData)

@@ -114,11 +114,14 @@ RegisterNUICallback("adminStartGizmo", function(data, cb)
     -- Close the NUI so the player can use the gizmo
     CloseNui()
 
-    local model = `prop_tennis_ball`
+    local isDisplaySpot = data.field == "displaySpot"
+    local model = isDisplaySpot and `xm_prop_lab_barrier02` or `prop_tennis_ball`
     local result = StartGizmoEditor({
         model = model,
         enableCancel = true,
         deleteEntity = true,
+        coordsOffset = isDisplaySpot and vector3(0.0, 0.0, -0.03) or nil,
+        rotationOffset = isDisplaySpot and vector3(90.0, 0.0, 0.0) or nil,
     })
 
     if result and result.position then
@@ -138,14 +141,15 @@ RegisterNUICallback("adminStartGizmo", function(data, cb)
             },
         })
 
-        -- Re-open admin panel in setup mode
+        -- Re-open admin panel on the positions tab
         OpenNui('admin', {
             dealershipId = 0,
             dealershipName = 'Admin Panel',
             role = 'admin',
             tier = 4,
-            setupDealershipId = data.dealershipId,
+            positionsDealershipId = data.dealershipId,
             metadata = saveResult and saveResult.metadata or nil,
+            scrollToSpots = data.field == "displaySpot",
         })
 
         cb(saveResult or { success = false })
@@ -156,11 +160,31 @@ RegisterNUICallback("adminStartGizmo", function(data, cb)
             dealershipName = 'Admin Panel',
             role = 'admin',
             tier = 4,
-            setupDealershipId = data.dealershipId,
+            positionsDealershipId = data.dealershipId,
         })
 
         cb({ success = false, message = "Placement cancelled." })
     end
+end)
+
+RegisterNUICallback("adminRemovePosition", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:adminRemovePosition", false, data)
+    if result and result.success then
+        ShowNotification(result.message)
+    else
+        ShowNotification(result and result.message or "Failed to remove position.")
+    end
+    cb(result or { success = false })
+end)
+
+RegisterNUICallback("adminSetJob", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:adminSetJob", false, data)
+    if result and result.success then
+        ShowNotification(result.message)
+    else
+        ShowNotification(result and result.message or "Failed to set job.")
+    end
+    cb(result or { success = false })
 end)
 
 -- ─── Catalog Management NUI Callbacks ───────────────────────────────────────

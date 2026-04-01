@@ -39,10 +39,21 @@ local function ValidateCoupon(dealershipId, code, purchasePrice)
 end
 
 local function MarkStockSold(stockId, citizenid, soldBy)
-    MySQL.update(
-        "UPDATE `dealership_stock` SET `sold_at` = NOW(), `sold_to` = ?, `sold_by` = ? WHERE `id` = ?",
-        { citizenid, soldBy, tonumber(stockId) }
+    local stock = MySQL.single.await(
+        "SELECT `quantity` FROM `dealership_stock` WHERE `id` = ?",
+        { tonumber(stockId) }
     )
+    if stock and stock.quantity > 1 then
+        MySQL.update(
+            "UPDATE `dealership_stock` SET `quantity` = `quantity` - 1 WHERE `id` = ?",
+            { tonumber(stockId) }
+        )
+    else
+        MySQL.update(
+            "UPDATE `dealership_stock` SET `sold_at` = NOW(), `sold_to` = ?, `sold_by` = ? WHERE `id` = ?",
+            { citizenid, soldBy, tonumber(stockId) }
+        )
+    end
 end
 
 local function AddDealershipBalance(dealershipId, amount)

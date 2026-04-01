@@ -110,12 +110,14 @@ local function SpawnNPCCustomer(dealershipId, dealershipConfig)
     end
 
     -- Create interaction zone for the NPC
-    local interactionId = "npc_customer_" .. ped
-    CreateInteraction(interactionId, ped, {
+    local pedCoords = GetEntityCoords(ped)
+    local interactionId = CreateInteraction({
         label = "Assist Customer",
         icon = "fa-solid fa-comments",
+        coords = vector3(pedCoords.x, pedCoords.y, pedCoords.z),
         distance = 2.5,
-        onSelect = function()
+        target = GetEntityModel(ped),
+    }, function()
             if currentNPCInteraction then
                 ShowNotification("You are already assisting a customer.")
                 return
@@ -139,14 +141,9 @@ local function SpawnNPCCustomer(dealershipId, dealershipConfig)
             npcData.assisted = true
 
             -- Send NUI message to open negotiation UI
-            local greetings = {
-                easygoing  = "Hey there! I'm looking to buy a vehicle today. What do you have?",
-                impatient  = "I don't have all day. Show me something good.",
-                aggressive = "I want the best deal you've got. Don't try to rip me off.",
-                shy        = "Um, hi... I was wondering if you could help me find a car?",
-                savvy      = "I've done my research. Let's see what you've got on the lot.",
-            }
-            local greeting = greetings[npcData.profile.personality] or "Hi, I'm looking for a vehicle."
+            local typePref = npcData.profile.typePreference or "default"
+            local greetingPool = Config.NPCCustomers.greetings and (Config.NPCCustomers.greetings[typePref] or Config.NPCCustomers.greetings["default"])
+            local greeting = greetingPool and greetingPool[math.random(#greetingPool)] or "Hi, I'm looking for a vehicle."
 
             SendNUIMessage({
                 type = "openNPCNegotiation",
@@ -154,8 +151,7 @@ local function SpawnNPCCustomer(dealershipId, dealershipConfig)
                 greeting = greeting,
             })
             SetNuiFocus(true, true)
-        end,
-    })
+    end)
 
     local npcData = {
         entity       = ped,
