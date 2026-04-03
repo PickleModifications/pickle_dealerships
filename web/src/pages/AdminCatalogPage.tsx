@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog'
 import { fetchNui, formatCurrency } from '../lib/utils'
 import { SkeletonList } from '../components/ui/skeleton'
-import { Plus, Trash2, Pencil, Search, Car } from 'lucide-react'
+import { Plus, Trash2, Pencil, Search, Car, Camera } from 'lucide-react'
 
 interface CatalogVehicle {
   id: number
@@ -18,6 +18,7 @@ interface CatalogVehicle {
   tier: string
   class: string
   vehicle_type: string
+  image?: string | null
 }
 
 const tierColors: Record<string, string> = {
@@ -144,6 +145,13 @@ export default function AdminCatalogPage() {
               <Card key={v.id} className="overflow-hidden">
                 <CardContent className="p-3 flex items-center justify-between">
                   <div className="flex items-center gap-3 min-w-0 flex-1">
+                    {v.image ? (
+                      <img src={v.image} alt={v.label} className="h-12 w-12 object-contain rounded bg-muted shrink-0" />
+                    ) : (
+                      <div className="h-12 w-12 rounded bg-muted flex items-center justify-center shrink-0">
+                        <Car className="h-5 w-5 text-muted-foreground/50" />
+                      </div>
+                    )}
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         <p className="font-semibold text-sm truncate">{v.label}</p>
@@ -160,6 +168,9 @@ export default function AdminCatalogPage() {
                     <p className="font-bold text-sm whitespace-nowrap">{formatCurrency(v.wholesale)}</p>
                   </div>
                   <div className="flex gap-1 ml-3">
+                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => fetchNui('adminStartPhotoCapture', { catalogId: v.id, model: v.model, label: v.label, class: v.class })} title="Set Photo">
+                      <Camera className="h-3.5 w-3.5" />
+                    </Button>
                     <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(v)}>
                       <Pencil className="h-3.5 w-3.5" />
                     </Button>

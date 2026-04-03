@@ -291,15 +291,6 @@ lib.callback.register('pickle_dealerships:setDisplaySpot', function(source, loca
     if not stock then return false, 'Stock item not found.' end
 
     if spot then
-        -- Check if this model already has a unit on display
-        local alreadyDisplayed = MySQL.single.await(
-            'SELECT id FROM dealership_stock WHERE dealership_id = ? AND vehicle_model = ? AND display_spot IS NOT NULL AND sold_at IS NULL AND id != ?',
-            { dealership.id, stock.vehicle_model, stockId }
-        )
-        if alreadyDisplayed then
-            return false, 'This vehicle is already on display.'
-        end
-
         -- Check if spot is already occupied by another vehicle
         local existing = MySQL.single.await(
             'SELECT id FROM dealership_stock WHERE dealership_id = ? AND display_spot = ? AND sold_at IS NULL AND id != ?',
@@ -313,22 +304,11 @@ lib.callback.register('pickle_dealerships:setDisplaySpot', function(source, loca
             )
         end
 
-        -- If stacked (quantity > 1), split off 1 unit for the display spot
-        if (stock.quantity or 1) > 1 then
-            MySQL.update.await(
-                'UPDATE dealership_stock SET quantity = quantity - 1 WHERE id = ?',
-                { stockId }
-            )
-            stockId = MySQL.insert.await(
-                'INSERT INTO dealership_stock (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, display_spot, ordered_at, delivered_at, quantity) SELECT dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, ?, ordered_at, delivered_at, 1 FROM dealership_stock WHERE id = ?',
-                { spot, stock.id }
-            )
-        else
-            MySQL.update.await(
-                'UPDATE dealership_stock SET display_spot = ? WHERE id = ?',
-                { spot, stockId }
-            )
-        end
+        -- Assign the spot directly on the stock entry (no splitting)
+        MySQL.update.await(
+            'UPDATE dealership_stock SET display_spot = ? WHERE id = ?',
+            { spot, stockId }
+        )
     else
         MySQL.update.await(
             'UPDATE dealership_stock SET display_spot = NULL WHERE id = ?',

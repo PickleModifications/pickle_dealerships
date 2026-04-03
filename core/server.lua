@@ -207,6 +207,17 @@ CreateThread(function()
             ALTER TABLE `dealerships` ADD COLUMN IF NOT EXISTS `job` VARCHAR(50) DEFAULT NULL AFTER `metadata`;
         ]])
 
+        -- Migration: add image column to wholesale_catalog
+        MySQL.Async.execute([[
+            ALTER TABLE `wholesale_catalog` ADD COLUMN IF NOT EXISTS `image` MEDIUMTEXT DEFAULT NULL AFTER `vehicle_type`;
+        ]])
+
+        -- Seed default wholesale catalog (INSERT IGNORE skips existing entries)
+        local seedSQL = LoadResourceFile(GetCurrentResourceName(), "catalog_seed.sql")
+        if seedSQL then
+            MySQL.Async.execute(seedSQL)
+        end
+
         -- Load dealerships into cache after tables are ready
         LoadDealerships()
     end)

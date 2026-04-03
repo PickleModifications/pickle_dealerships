@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNuiEvent } from './hooks/useNuiEvent'
-import { closeNui, hexToHSL } from './lib/utils'
+import { closeNui, fetchNui, hexToHSL } from './lib/utils'
 import type { PageType, DealershipData, NPCProfile } from './types'
 
 import DashboardPage from './pages/DashboardPage'
@@ -14,6 +14,7 @@ import CouponsPage from './pages/CouponsPage'
 import NegotiationPage from './pages/NegotiationPage'
 import AdminPage from './pages/AdminPage'
 import ManagementPage from './pages/ManagementPage'
+import PhotoBoothPage from './pages/PhotoBoothPage'
 import InteractText from './components/InteractText'
 
 function App() {
@@ -66,12 +67,16 @@ function App() {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && visible) {
-        handleClose()
+        if (page === 'photoBooth') {
+          fetchNui('photoBoothCancel', {})
+        } else {
+          handleClose()
+        }
       }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [visible, handleClose])
+  }, [visible, page, handleClose])
 
   const renderPage = () => {
     if (!visible || !page) return null
@@ -103,6 +108,8 @@ function App() {
         return <ManagementPage {...props} />
       case 'admin':
         return <AdminPage {...props} />
+      case 'photoBooth':
+        return <PhotoBoothPage {...props} />
       default:
         return null
     }
@@ -112,11 +119,17 @@ function App() {
     <>
       <InteractText />
       {visible && page && (
-        <div className="fixed inset-0 flex items-center justify-center p-8 z-50">
-          <div className="relative w-full max-w-5xl h-[50vh] bg-background border border-border rounded-xl shadow-2xl shadow-black/50 flex flex-col overflow-hidden">
+        page === 'photoBooth' ? (
+          <div className="fixed inset-0 z-50">
             {renderPage()}
           </div>
-        </div>
+        ) : (
+          <div className="fixed inset-0 flex items-center justify-center p-8 z-50">
+            <div className="relative w-full max-w-5xl h-[50vh] bg-background border border-border rounded-xl shadow-2xl shadow-black/50 flex flex-col overflow-hidden">
+              {renderPage()}
+            </div>
+          </div>
+        )
       )}
     </>
   )

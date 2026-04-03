@@ -336,3 +336,34 @@ Config.Webhooks = {
     },
     largeWithdrawalThreshold = 100000,
 }
+
+-- Photo Booth (vehicle catalog photography)
+-- Multiple locations can be defined; each can restrict which vehicle classes use it.
+-- The first location whose `classes` list contains the vehicle's class is used.
+-- A location with no `classes` (or classes = {}) acts as the fallback for anything unmatched.
+Config.PhotoBooth = {
+    routingBucket = 999,
+    locations = {
+        {
+            label = "Interior Studio",
+            coords = vector4(-1508.0502, -2992.9255, -81.2074, 181.9531),
+            camRadius = 6.0,
+            camHeight = 2.0,
+            classes = { "compact", "sedan", "sports", "super", "muscle", "coupe", "suv", "offroad", "van" },
+        },
+        {
+            label = "Ocean View",
+            coords = vector4(0.0, 0.0, 1500.0, 0.0),
+            camRadius = 10.0,
+            camHeight = 3.0,
+            classes = { "boat" },
+        },
+        {
+            label = "Airport",
+            coords = vector4(-1052.4316, -3505.4155, 14.1398, 329.4947),
+            camRadius = 10.0,
+            camHeight = 3.0,
+            classes = { "plane", "helicopter" },
+        },
+    },
+}

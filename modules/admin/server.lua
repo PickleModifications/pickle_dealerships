@@ -449,6 +449,47 @@ lib.callback.register("pickle_dealerships:adminSetJob", function(source, data)
     return { success = true, message = "Dealership job set to " .. (job or "none") .. "." }
 end)
 
+-- ─── Photo Booth ────────────────────────────────────────────────────────────
+
+--- Save a catalog vehicle image
+lib.callback.register("pickle_dealerships:adminSaveCatalogImage", function(source, data)
+    if not IsPlayerAdmin(source) then
+        return { success = false, message = "You do not have admin permissions." }
+    end
+
+    if not data.catalogId or not data.imageData then
+        return { success = false, message = "Missing catalog ID or image data." }
+    end
+
+    MySQL.update.await("UPDATE wholesale_catalog SET image = ? WHERE id = ?", { data.imageData, data.catalogId })
+    return { success = true, message = "Vehicle image saved." }
+end)
+
+--- Remove a catalog vehicle image
+lib.callback.register("pickle_dealerships:adminRemoveCatalogImage", function(source, data)
+    if not IsPlayerAdmin(source) then
+        return { success = false, message = "You do not have admin permissions." }
+    end
+
+    if not data.catalogId then
+        return { success = false, message = "Missing catalog ID." }
+    end
+
+    MySQL.update.await("UPDATE wholesale_catalog SET image = NULL WHERE id = ?", { data.catalogId })
+    return { success = true, message = "Vehicle image removed." }
+end)
+
+--- Set player routing bucket for photo booth isolation
+lib.callback.register("pickle_dealerships:adminSetPhotoBucket", function(source, data)
+    if not IsPlayerAdmin(source) then
+        return { success = false, message = "You do not have admin permissions." }
+    end
+
+    local bucket = tonumber(data.bucket) or 0
+    SetPlayerRoutingBucket(source, bucket)
+    return { success = true }
+end)
+
 --- Admin command to open admin panel
 RegisterCommand("dealership", function(source, args, rawCommand)
     if source == 0 then

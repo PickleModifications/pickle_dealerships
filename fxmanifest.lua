@@ -9,6 +9,7 @@ ui_page "nui/index.html"
 files {
     "nui/index.html",
     "nui/assets/**/*.*",
+    "catalog_seed.sql",
 }
 
 shared_scripts {

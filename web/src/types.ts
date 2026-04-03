@@ -15,6 +15,9 @@ export interface DealershipData {
   isOwned?: boolean
   purchasePrice?: number
   mode?: string
+  catalogId?: number
+  model?: string
+  label?: string
 }
 
 export interface DealershipMetadata {
@@ -182,6 +185,7 @@ export type PageType =
   | 'admin'
   | 'management'
   | 'vehicleDetails'
+  | 'photoBooth'
 
 export interface NuiMessage {
   type: string
