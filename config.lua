@@ -11,7 +11,7 @@ Config.XPEnabled = false
 
 -- UI Settings
 Config.UI = {
-    accentColor = "#e11d48", -- Hex color for accent/primary UI elements (default: rose)
+    accentColor = "FF1CA717", -- Hex color for accent/primary UI elements (default: rose)
 }
 Config.IdentifierPrefix = "license2"
 

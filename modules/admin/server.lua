@@ -343,10 +343,52 @@ end)
 -- ─── Catalog Management ─────────────────────────────────────────────────────
 
 --- Get all catalog vehicles
-lib.callback.register("pickle_dealerships:adminGetCatalog", function(source)
+lib.callback.register("pickle_dealerships:adminGetCatalog", function(source, data)
     if not IsPlayerAdmin(source) then return nil end
-    local results = MySQL.query.await("SELECT * FROM wholesale_catalog ORDER BY vehicle_type ASC, tier ASC, wholesale ASC")
-    return results or {}
+
+    local page = tonumber(data and data.page) or 1
+    local pageSize = tonumber(data and data.pageSize) or 50
+    local search = data and data.search or ""
+    local typeFilter = data and data.typeFilter or "all"
+    local offset = (page - 1) * pageSize
+
+    local where = {}
+    local params = {}
+
+    if typeFilter ~= "all" then
+        where[#where + 1] = "vehicle_type = ?"
+        params[#params + 1] = typeFilter
+    end
+
+    if search ~= "" then
+        where[#where + 1] = "(label LIKE ? OR model LIKE ?)"
+        local pattern = "%" .. search .. "%"
+        params[#params + 1] = pattern
+        params[#params + 1] = pattern
+    end
+
+    local whereClause = #where > 0 and ("WHERE " .. table.concat(where, " AND ")) or ""
+
+    local countParams = { table.unpack(params) }
+    local countResult = MySQL.scalar.await(
+        ("SELECT COUNT(*) FROM wholesale_catalog %s"):format(whereClause),
+        countParams
+    )
+
+    params[#params + 1] = pageSize
+    params[#params + 1] = offset
+
+    local results = MySQL.query.await(
+        ("SELECT * FROM wholesale_catalog %s ORDER BY vehicle_type ASC, tier ASC, wholesale ASC LIMIT ? OFFSET ?"):format(whereClause),
+        params
+    )
+
+    return {
+        items = results or {},
+        total = countResult or 0,
+        page = page,
+        pageSize = pageSize,
+    }
 end)
 
 --- Add a vehicle to the catalog
@@ -451,17 +493,57 @@ end)
 
 -- ─── Photo Booth ────────────────────────────────────────────────────────────
 
---- Save a catalog vehicle image
+--- Get image upload config for the client
+lib.callback.register("pickle_dealerships:adminGetUploadConfig", function(source)
+    if not IsPlayerAdmin(source) then
+        return nil
+    end
+
+    local cfg = ServerConfig.ImageUpload
+    if not cfg or not cfg.provider then
+        print("[PhotoBooth:Server] ERROR: ServerConfig.ImageUpload is not configured")
+        return nil
+    end
+
+    if cfg.provider == "fivemanage" then
+        if not cfg.token or cfg.token == "" then
+            print("[PhotoBooth:Server] ERROR: FiveManage token is not set in config_sv.lua")
+            return nil
+        end
+        return {
+            url = "https://api.fivemanage.com/api/image",
+            field = "image",
+            headers = { ["Authorization"] = cfg.token },
+        }
+    elseif cfg.provider == "custom" then
+        local custom = cfg.custom
+        if not custom or not custom.url or custom.url == "" then
+            print("[PhotoBooth:Server] ERROR: Custom upload URL is not set in config_sv.lua")
+            return nil
+        end
+        return {
+            url = custom.url,
+            field = custom.field or "image",
+            headers = custom.headers or {},
+            returnPathKey = custom.returnPathKey or "url",
+        }
+    end
+
+    print(("[PhotoBooth:Server] ERROR: Unknown image upload provider '%s'"):format(cfg.provider))
+    return nil
+end)
+
+--- Save a catalog vehicle image URL
 lib.callback.register("pickle_dealerships:adminSaveCatalogImage", function(source, data)
     if not IsPlayerAdmin(source) then
         return { success = false, message = "You do not have admin permissions." }
     end
 
-    if not data.catalogId or not data.imageData then
-        return { success = false, message = "Missing catalog ID or image data." }
+    if not data.catalogId or not data.imageUrl then
+        return { success = false, message = "Missing catalog ID or image URL." }
     end
 
-    MySQL.update.await("UPDATE wholesale_catalog SET image = ? WHERE id = ?", { data.imageData, data.catalogId })
+    MySQL.update.await("UPDATE wholesale_catalog SET image = ? WHERE id = ?", { data.imageUrl, data.catalogId })
     return { success = true, message = "Vehicle image saved." }
 end)
 

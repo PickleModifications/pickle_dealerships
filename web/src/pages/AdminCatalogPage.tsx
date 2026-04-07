@@ -1,14 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { Card, CardContent } from '../components/ui/card'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
-import { ScrollArea } from '../components/ui/scroll-area'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog'
 import { fetchNui, formatCurrency } from '../lib/utils'
 import { SkeletonList } from '../components/ui/skeleton'
-import { Plus, Trash2, Pencil, Search, Car, Camera } from 'lucide-react'
+import { Plus, Trash2, Pencil, Search, Car, Camera, Loader2 } from 'lucide-react'
 
 interface CatalogVehicle {
   id: number
@@ -20,6 +20,18 @@ interface CatalogVehicle {
   vehicle_type: string
   image?: string | null
 }
+
+interface CatalogResponse {
+  success: boolean
+  items: CatalogVehicle[]
+  total: number
+  page: number
+  pageSize: number
+}
+
+const PAGE_SIZE = 50
+const ROW_HEIGHT = 58
+const GAP = 8
 
 const tierColors: Record<string, string> = {
   basic: 'bg-zinc-500/20 text-zinc-300',
@@ -33,10 +45,15 @@ const vehicleTypes = ['car', 'boat', 'air']
 const vehicleClasses = ['compact', 'sedan', 'sports', 'super', 'muscle', 'coupe', 'suv', 'offroad', 'van', 'boat', 'plane', 'helicopter']
 
 export default function AdminCatalogPage() {
-  const [catalog, setCatalog] = useState<CatalogVehicle[]>([])
+  const [items, setItems] = useState<CatalogVehicle[]>([])
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [search, setSearch] = useState('')
   const [typeFilter, setTypeFilter] = useState('all')
+  const searchTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const parentRef = useRef<HTMLDivElement>(null)
 
   // Add/Edit form
   const [formOpen, setFormOpen] = useState(false)
@@ -48,15 +65,63 @@ export default function AdminCatalogPage() {
   const [vClass, setVClass] = useState('sedan')
   const [vType, setVType] = useState('car')
 
-  const loadCatalog = () => {
-    setLoading(true)
-    fetchNui<{ success: boolean; catalog: CatalogVehicle[] }>('adminGetCatalog', {}).then((res) => {
-      if (res.success && res.catalog) setCatalog(res.catalog)
+  const hasMore = items.length < total
+
+  const fetchPage = useCallback((p: number, s: string, t: string, append: boolean) => {
+    if (append) {
+      setLoadingMore(true)
+    } else {
+      setLoading(true)
+    }
+    fetchNui<CatalogResponse>('adminGetCatalog', {
+      page: p,
+      pageSize: PAGE_SIZE,
+      search: s,
+      typeFilter: t,
+    }).then((res) => {
+      if (res.success && res.items) {
+        setItems(prev => append ? [...prev, ...res.items] : res.items)
+        setTotal(res.total)
+        setPage(res.page)
+      }
       setLoading(false)
-    }).catch(() => setLoading(false))
+      setLoadingMore(false)
+    }).catch(() => { setLoading(false); setLoadingMore(false) })
+  }, [])
+
+  useEffect(() => { fetchPage(1, search, typeFilter, false) }, [])
+
+  const handleSearchChange = (value: string) => {
+    setSearch(value)
+    clearTimeout(searchTimer.current)
+    searchTimer.current = setTimeout(() => {
+      fetchPage(1, value, typeFilter, false)
+    }, 300)
   }
 
-  useEffect(() => { loadCatalog() }, [])
+  const handleTypeChange = (value: string) => {
+    setTypeFilter(value)
+    fetchPage(1, search, value, false)
+  }
+
+  const resetAndReload = () => {
+    fetchPage(1, search, typeFilter, false)
+  }
+
+  const virtualizer = useVirtualizer({
+    count: items.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => ROW_HEIGHT + GAP,
+    overscan: 10,
+    onChange: (instance) => {
+      const vItems = instance.getVirtualItems()
+      const lastItem = vItems[vItems.length - 1]
+      if (!lastItem) return
+      if (lastItem.index >= items.length - 10 && hasMore && !loadingMore) {
+        fetchPage(page + 1, search, typeFilter, true)
+      }
+    },
+  })
 
   const openAdd = () => {
     setEditing(null)
@@ -83,43 +148,39 @@ export default function AdminCatalogPage() {
   const handleSave = () => {
     if (!model.trim() || !label.trim()) return
 
-    if (editing) {
-      fetchNui('adminUpdateCatalogVehicle', {
-        id: editing.id,
-        label: label.trim(),
-        wholesale: parseInt(wholesale) || 0,
-        tier,
-        class: vClass,
-        vehicleType: vType,
-      }).then(() => { setFormOpen(false); loadCatalog() })
-    } else {
-      fetchNui('adminAddCatalogVehicle', {
-        model: model.trim().toLowerCase(),
-        label: label.trim(),
-        wholesale: parseInt(wholesale) || 0,
-        tier,
-        class: vClass,
-        vehicleType: vType,
-      }).then(() => { setFormOpen(false); loadCatalog() })
-    }
+    const action = editing
+      ? fetchNui('adminUpdateCatalogVehicle', {
+          id: editing.id,
+          label: label.trim(),
+          wholesale: parseInt(wholesale) || 0,
+          tier,
+          class: vClass,
+          vehicleType: vType,
+        })
+      : fetchNui('adminAddCatalogVehicle', {
+          model: model.trim().toLowerCase(),
+          label: label.trim(),
+          wholesale: parseInt(wholesale) || 0,
+          tier,
+          class: vClass,
+          vehicleType: vType,
+        })
+
+    action.then(() => { setFormOpen(false); resetAndReload() })
   }
 
   const handleRemove = (id: number) => {
-    fetchNui('adminRemoveCatalogVehicle', { id }).then(() => loadCatalog())
+    fetchNui('adminRemoveCatalogVehicle', { id }).then(() => resetAndReload())
   }
-
-  const filtered = catalog
-    .filter((v) => typeFilter === 'all' || v.vehicle_type === typeFilter)
-    .filter((v) => (v.label + v.model).toLowerCase().includes(search.toLowerCase()))
 
   return (
     <>
       <div className="p-4 flex flex-wrap gap-2">
         <div className="relative flex-1 min-w-[180px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input placeholder="Search vehicles..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" />
+          <Input placeholder="Search vehicles..." value={search} onChange={(e) => handleSearchChange(e.target.value)} className="pl-9" />
         </div>
-        <Select value={typeFilter} onValueChange={setTypeFilter}>
+        <Select value={typeFilter} onValueChange={handleTypeChange}>
           <SelectTrigger className="w-[120px]"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All Types</SelectItem>
@@ -131,59 +192,76 @@ export default function AdminCatalogPage() {
         </Button>
       </div>
 
-      <ScrollArea className="flex-1 px-4 pb-4">
+      <div ref={parentRef} className="flex-1 overflow-auto px-4 pb-2">
         {loading ? (
           <SkeletonList count={5} />
-        ) : filtered.length === 0 ? (
+        ) : items.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
             <Car className="h-10 w-10 mb-2 opacity-50" />
-            <p>{catalog.length === 0 ? 'No vehicles in catalog. Add some!' : 'No matching vehicles'}</p>
+            <p>{total === 0 && !search ? 'No vehicles in catalog. Add some!' : 'No matching vehicles'}</p>
           </div>
         ) : (
-          <div className="space-y-2">
-            {filtered.map((v) => (
-              <Card key={v.id} className="overflow-hidden">
-                <CardContent className="p-3 flex items-center justify-between">
-                  <div className="flex items-center gap-3 min-w-0 flex-1">
-                    {v.image ? (
-                      <img src={v.image} alt={v.label} className="h-12 w-12 object-contain rounded bg-muted shrink-0" />
-                    ) : (
-                      <div className="h-12 w-12 rounded bg-muted flex items-center justify-center shrink-0">
-                        <Car className="h-5 w-5 text-muted-foreground/50" />
+          <div className="relative w-full" style={{ height: `${virtualizer.getTotalSize()}px` }}>
+            {virtualizer.getVirtualItems().map((virtualItem) => {
+              const v = items[virtualItem.index]
+              return (
+                <div
+                  key={v.id}
+                  className="absolute top-0 left-0 w-full"
+                  style={{
+                    height: `${ROW_HEIGHT}px`,
+                    transform: `translateY(${virtualItem.start}px)`,
+                  }}
+                >
+                  <Card className="overflow-hidden h-full">
+                    <CardContent className="p-3 flex items-center justify-between h-full">
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
+                        {v.image ? (
+                          <img src={v.image} alt={v.label} className="h-10 w-[72px] object-cover rounded bg-muted shrink-0" />
+                        ) : (
+                          <div className="h-10 w-[72px] rounded bg-muted flex items-center justify-center shrink-0">
+                            <Car className="h-5 w-5 text-muted-foreground/50" />
+                          </div>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <p className="font-semibold text-sm truncate">{v.label}</p>
+                            <Badge className={`${tierColors[v.tier] || ''} border-0 text-[10px] capitalize`}>{v.tier}</Badge>
+                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            <span className="font-mono">{v.model}</span>
+                            <span className="mx-1">&middot;</span>
+                            <span className="capitalize">{v.class}</span>
+                            <span className="mx-1">&middot;</span>
+                            <span className="capitalize">{v.vehicle_type}</span>
+                          </p>
+                        </div>
+                        <p className="font-bold text-sm whitespace-nowrap">{formatCurrency(v.wholesale)}</p>
                       </div>
-                    )}
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <p className="font-semibold text-sm truncate">{v.label}</p>
-                        <Badge className={`${tierColors[v.tier] || ''} border-0 text-[10px] capitalize`}>{v.tier}</Badge>
+                      <div className="flex gap-1 ml-3">
+                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => fetchNui('adminStartPhotoCapture', { catalogId: v.id, model: v.model, label: v.label, class: v.class })} title="Set Photo">
+                          <Camera className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(v)}>
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => handleRemove(v.id)}>
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
                       </div>
-                      <p className="text-xs text-muted-foreground">
-                        <span className="font-mono">{v.model}</span>
-                        <span className="mx-1">&middot;</span>
-                        <span className="capitalize">{v.class}</span>
-                        <span className="mx-1">&middot;</span>
-                        <span className="capitalize">{v.vehicle_type}</span>
-                      </p>
-                    </div>
-                    <p className="font-bold text-sm whitespace-nowrap">{formatCurrency(v.wholesale)}</p>
-                  </div>
-                  <div className="flex gap-1 ml-3">
-                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => fetchNui('adminStartPhotoCapture', { catalogId: v.id, model: v.model, label: v.label, class: v.class })} title="Set Photo">
-                      <Camera className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(v)}>
-                      <Pencil className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => handleRemove(v.id)}>
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
+                    </CardContent>
+                  </Card>
+                </div>
+              )
+            })}
           </div>
         )}
-      </ScrollArea>
+        {loadingMore && (
+          <div className="flex justify-center py-3">
+            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+          </div>
+        )}
+      </div>
 
       <Dialog open={formOpen} onOpenChange={setFormOpen}>
         <DialogContent onClose={() => setFormOpen(false)}>

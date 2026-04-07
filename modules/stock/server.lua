@@ -1,15 +1,25 @@
 --- Returns the wholesale catalog filtered by dealership tier and type (DB-driven)
 ---@param source number
----@param locationKey string
-lib.callback.register('pickle_dealerships:getCatalog', function(source, locationKey)
+---@param data table|string
+lib.callback.register('pickle_dealerships:getCatalog', function(source, data)
+    local locationKey = type(data) == 'string' and data or (data and data.location)
+    if not locationKey then return { items = {}, total = 0, page = 1, pageSize = 50 } end
+
     local dealership = MySQL.single.await(
         'SELECT * FROM dealerships WHERE location = ?',
         { locationKey }
     )
-    if not dealership then return {} end
+    if not dealership then return { items = {}, total = 0, page = 1, pageSize = 50 } end
 
     local tier = dealership.tier or 1
     local vehicleType = dealership.type or 'car'
+
+    local page = tonumber(data and data.page) or 1
+    local pageSize = tonumber(data and data.pageSize) or 50
+    local search = data and data.search or ''
+    local classFilter = data and data.classFilter or 'all'
+    local tierFilter = data and data.tierFilter or 'all'
+    local offset = (page - 1) * pageSize
 
     -- Build type filter
     local types = {}
@@ -32,7 +42,7 @@ lib.callback.register('pickle_dealerships:getCatalog', function(source, location
         end
     end
 
-    if #allowedTiers == 0 then return {} end
+    if #allowedTiers == 0 then return { items = {}, total = 0, page = 1, pageSize = pageSize } end
 
     -- Build query with placeholders
     local typePlaceholders = {}
@@ -48,14 +58,49 @@ lib.callback.register('pickle_dealerships:getCatalog', function(source, location
         params[#params + 1] = t
     end
 
-    local query = string.format(
-        'SELECT * FROM wholesale_catalog WHERE vehicle_type IN (%s) AND tier IN (%s) ORDER BY wholesale ASC',
+    local where = string.format(
+        'vehicle_type IN (%s) AND tier IN (%s)',
         table.concat(typePlaceholders, ','),
         table.concat(tierPlaceholders, ',')
     )
 
-    local results = MySQL.query.await(query, params)
-    return results or {}
+    if search ~= '' then
+        where = where .. ' AND (label LIKE ? OR model LIKE ?)'
+        local pattern = '%' .. search .. '%'
+        params[#params + 1] = pattern
+        params[#params + 1] = pattern
+    end
+
+    if classFilter ~= 'all' then
+        where = where .. ' AND class = ?'
+        params[#params + 1] = classFilter
+    end
+
+    if tierFilter ~= 'all' then
+        where = where .. ' AND tier = ?'
+        params[#params + 1] = tierFilter
+    end
+
+    local countParams = { table.unpack(params) }
+    local countResult = MySQL.scalar.await(
+        ('SELECT COUNT(*) FROM wholesale_catalog WHERE %s'):format(where),
+        countParams
+    )
+
+    params[#params + 1] = pageSize
+    params[#params + 1] = offset
+
+    local results = MySQL.query.await(
+        ('SELECT * FROM wholesale_catalog WHERE %s ORDER BY wholesale ASC LIMIT ? OFFSET ?'):format(where),
+        params
+    )
+
+    return {
+        items = results or {},
+        total = countResult or 0,
+        page = page,
+        pageSize = pageSize,
+    }
 end)
 
 --- Returns all unsold stock for a dealership (including pending deliveries)
@@ -69,7 +114,7 @@ lib.callback.register('pickle_dealerships:getStock', function(source, locationKe
     if not dealership then return {} end
 
     local stock = MySQL.query.await(
-        'SELECT * FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NULL ORDER BY ordered_at DESC',
+        'SELECT ds.*, wc.image FROM dealership_stock ds LEFT JOIN wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL ORDER BY ds.ordered_at DESC',
         { dealership.id }
     )
 

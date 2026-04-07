@@ -189,10 +189,15 @@ end)
 
 -- ─── Catalog Management NUI Callbacks ───────────────────────────────────────
 
-RegisterNUICallback("adminGetCatalog", function(_, cb)
-    local result = lib.callback.await("pickle_dealerships:adminGetCatalog", false)
+RegisterNUICallback("adminGetCatalog", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:adminGetCatalog", false, {
+        page = data.page or 1,
+        pageSize = data.pageSize or 50,
+        search = data.search or "",
+        typeFilter = data.typeFilter or "all",
+    })
     if result then
-        cb({ success = true, catalog = result })
+        cb({ success = true, items = result.items, total = result.total, page = result.page, pageSize = result.pageSize })
     else
         cb({ success = false, message = "Failed to fetch catalog." })
     end
@@ -232,40 +237,169 @@ end)
 
 local PhotoBoothState = nil
 
-local function UpdatePhotoBoothCamera()
-    if not PhotoBoothState then return end
-    local s = PhotoBoothState
-    local rad = math.rad(s.angle)
-    local camX = s.center.x + s.radius * math.cos(rad)
-    local camY = s.center.y + s.radius * math.sin(rad)
-    local camZ = s.center.z + s.camHeight
-    SetCamCoord(s.cam, camX, camY, camZ)
-    PointCamAtCoord(s.cam, s.center.x, s.center.y, s.camLookZ or (s.center.z + 0.5))
+local PhotoBoothCamThread = nil
+local PhotoBoothInput = {
+    forward = false, back = false, left = false, right = false,
+    up = false, down = false,
+    lookX = 0.0, lookY = 0.0,
+    dragging = false,
+}
+
+RegisterNUICallback("photoBoothInput", function(data, cb)
+    if data.forward ~= nil then PhotoBoothInput.forward = data.forward end
+    if data.back ~= nil then PhotoBoothInput.back = data.back end
+    if data.left ~= nil then PhotoBoothInput.left = data.left end
+    if data.right ~= nil then PhotoBoothInput.right = data.right end
+    if data.up ~= nil then PhotoBoothInput.up = data.up end
+    if data.down ~= nil then PhotoBoothInput.down = data.down end
+    if data.lookX then PhotoBoothInput.lookX = PhotoBoothInput.lookX + (tonumber(data.lookX) or 0.0) end
+    if data.lookY then PhotoBoothInput.lookY = PhotoBoothInput.lookY + (tonumber(data.lookY) or 0.0) end
+    if data.dragging ~= nil then PhotoBoothInput.dragging = data.dragging end
+    cb({})
+end)
+
+local function StartPhotoBoothCamThread()
+    if PhotoBoothCamThread then return end
+    PhotoBoothCamThread = true
+
+    -- Reset input
+    PhotoBoothInput = {
+        forward = false, back = false, left = false, right = false,
+        up = false, down = false,
+        lookX = 0.0, lookY = 0.0,
+        dragging = false,
+    }
+
+    CreateThread(function()
+        local moveSpeed = 0.05
+        local vertSpeed = 0.04
+        local dragSpeed = 0.01
+        local camMode = 'free' -- 'free' (WASD on s.cam) or 'drag' (mouse pans s.dragCam)
+
+        while PhotoBoothState and PhotoBoothCamThread do
+            local s = PhotoBoothState
+            if not s or not s.cam then break end
+
+            local inp = PhotoBoothInput
+            local hasMovement = inp.forward or inp.back or inp.left or inp.right or inp.up or inp.down
+
+            -- Mode switching: drag starts → create independent dragCam from current cam state
+            if inp.dragging and not hasMovement and camMode == 'free' then
+                local coord = GetCamCoord(s.cam)
+                local rot = GetCamRot(s.cam, 2)
+                s.dragCam = CreateCam("DEFAULT_SCRIPTED_CAMERA", true)
+                SetCamCoord(s.dragCam, coord.x, coord.y, coord.z)
+                SetCamRot(s.dragCam, rot.x, 0.0, rot.z, 2)
+                SetCamActive(s.dragCam, true)
+                SetCamActive(s.cam, false)
+                camMode = 'drag'
+            elseif hasMovement and camMode == 'drag' then
+                -- WASD pressed → sync main cam to dragCam position, switch back
+                local coord = GetCamCoord(s.dragCam)
+                SetCamCoord(s.cam, coord.x, coord.y, coord.z)
+                SetCamActive(s.cam, true)
+                SetCamActive(s.dragCam, false)
+                DestroyCam(s.dragCam, false)
+                s.dragCam = nil
+                camMode = 'free'
+                inp.lookX = 0.0
+                inp.lookY = 0.0
+            end
+
+            if camMode == 'drag' and s.dragCam then
+                -- Drag moves dragCam position laterally/vertically (rotation stays fixed)
+                if inp.lookX ~= 0.0 or inp.lookY ~= 0.0 then
+                    local rot = GetCamRot(s.dragCam, 2)
+                    local headingRad = math.rad(rot.z)
+                    local rightX = math.cos(headingRad)
+                    local rightY = math.sin(headingRad)
+
+                    local coord = GetCamCoord(s.dragCam)
+                    local mx = coord.x - rightX * inp.lookX * dragSpeed
+                    local my = coord.y - rightY * inp.lookX * dragSpeed
+                    local mz = coord.z + inp.lookY * dragSpeed
+
+                    local minZ = s.groundZ + 0.3
+                    if mz < minZ then mz = minZ end
+
+                    SetCamCoord(s.dragCam, mx, my, mz)
+                    inp.lookX = 0.0
+                    inp.lookY = 0.0
+                end
+            else
+                -- Free movement on main cam (PointCamAtCoord keeps it aimed at vehicle)
+                local rot = GetCamRot(s.cam, 2)
+                local headingRad = math.rad(rot.z)
+                local fwdX = -math.sin(headingRad)
+                local fwdY = math.cos(headingRad)
+                local rightX = math.cos(headingRad)
+                local rightY = math.sin(headingRad)
+
+                local camCoord = GetCamCoord(s.cam)
+                local mx, my, mz = camCoord.x, camCoord.y, camCoord.z
+
+                if inp.forward then mx = mx + fwdX * moveSpeed; my = my + fwdY * moveSpeed end
+                if inp.back then mx = mx - fwdX * moveSpeed; my = my - fwdY * moveSpeed end
+                if inp.left then mx = mx - rightX * moveSpeed; my = my - rightY * moveSpeed end
+                if inp.right then mx = mx + rightX * moveSpeed; my = my + rightY * moveSpeed end
+                if inp.up then mz = mz + vertSpeed end
+                if inp.down then mz = mz - vertSpeed end
+
+                local minZ = s.groundZ + 0.3
+                if mz < minZ then mz = minZ end
+
+                SetCamCoord(s.cam, mx, my, mz)
+            end
+
+            Wait(0)
+        end
+
+        PhotoBoothCamThread = nil
+    end)
+end
+
+local function StopPhotoBoothCamThread()
+    PhotoBoothCamThread = nil
 end
 
 local function CleanupPhotoBooth()
     if not PhotoBoothState then return end
+
+    -- Stop camera thread
+    StopPhotoBoothCamThread()
+
+    -- Close NUI first so it's gone before fade
+    CloseNui()
+
+    -- Fade out
+    DoScreenFadeOut(500)
+    while not IsScreenFadedOut() do Wait(0) end
 
     -- Delete vehicle
     if DoesEntityExist(PhotoBoothState.vehicle) then
         DeleteEntity(PhotoBoothState.vehicle)
     end
 
-    -- Destroy camera
+    -- Destroy cameras
     RenderScriptCams(false, false, 0, true, true)
+    if PhotoBoothState.dragCam then
+        DestroyCam(PhotoBoothState.dragCam, false)
+    end
     if PhotoBoothState.cam then
         DestroyCam(PhotoBoothState.cam, false)
     end
 
+    -- Restore routing bucket first (before teleport so collision loads in correct bucket)
+    lib.callback.await("pickle_dealerships:adminSetPhotoBucket", false, { bucket = 0 })
+
     -- Restore player
     local ped = PlayerPedId()
-    FreezeEntityPosition(ped, false)
+    local sc = PhotoBoothState.savedCoords
     SetEntityVisible(ped, true, false)
-    SetEntityCoords(ped, PhotoBoothState.savedCoords.x, PhotoBoothState.savedCoords.y, PhotoBoothState.savedCoords.z, false, false, false, true)
+    SetEntityCoords(ped, sc.x, sc.y, sc.z - 1.0, false, false, false, false)
+    FreezeEntityPosition(ped, false)
+    PlaceObjectOnGroundProperly(ped)
     SetEntityHeading(ped, PhotoBoothState.savedHeading)
-
-    -- Restore routing bucket
-    lib.callback.await("pickle_dealerships:adminSetPhotoBucket", false, { bucket = 0 })
 
     -- Restore HUD
     DisplayRadar(true)
@@ -277,20 +411,30 @@ local function CleanupPhotoBooth()
 
     PhotoBoothState = nil
 
-    -- Close current NUI state before reopening admin panel
-    CloseNui()
+    -- Fade back in and reopen admin panel
+    DoScreenFadeIn(500)
+    while not IsScreenFadedIn() do Wait(0) end
 
-    -- Reopen admin panel
     OpenNui('admin', {
         dealershipId = 0,
         dealershipName = 'Admin Panel',
         role = 'admin',
         tier = 4,
+        initialTab = 'catalog',
     })
 end
 
 RegisterNUICallback("adminStartPhotoCapture", function(data, cb)
     CloseNui()
+
+    -- Fetch upload config from server before proceeding
+    local uploadConfig = lib.callback.await("pickle_dealerships:adminGetUploadConfig", false)
+    if not uploadConfig then
+        ShowNotification("Image upload is not configured. Check config_sv.lua.")
+        cb({ success = false })
+        return
+    end
+
     cb({ success = true })
 
     local ped = PlayerPedId()
@@ -315,23 +459,35 @@ RegisterNUICallback("adminStartPhotoCapture", function(data, cb)
         if location then break end
     end
     location = location or fallback or Config.PhotoBooth.locations[1]
+    local boothCoords = location.coords
+
+    -- Fade out
+    DoScreenFadeOut(500)
+    while not IsScreenFadedOut() do Wait(0) end
 
     -- Move to isolated routing bucket
     lib.callback.await("pickle_dealerships:adminSetPhotoBucket", false, { bucket = Config.PhotoBooth.routingBucket })
 
-    -- Teleport to photo booth
-    local boothCoords = location.coords
+    -- Teleport player to booth and load the area
     SetEntityCoords(ped, boothCoords.x, boothCoords.y, boothCoords.z, false, false, false, true)
     FreezeEntityPosition(ped, true)
     SetEntityVisible(ped, false, false)
 
-    -- Spawn vehicle
+    -- Request collision and wait for the area to fully load
+    RequestCollisionAtCoord(boothCoords.x, boothCoords.y, boothCoords.z)
+    NewLoadSceneStart(boothCoords.x, boothCoords.y, boothCoords.z, boothCoords.x, boothCoords.y, boothCoords.z, 50.0, 0)
+    local loadTimeout = GetGameTimer() + 10000
+    while not IsNewLoadSceneLoaded() and GetGameTimer() < loadTimeout do Wait(0) end
+    NewLoadSceneStop()
+
+    -- Load the vehicle model while the scene loads
     local modelHash = joaat(data.model)
     RequestModel(modelHash)
     while not HasModelLoaded(modelHash) do Wait(0) end
-    local vehCoords = vector3(boothCoords.x, boothCoords.y, boothCoords.z)
+
+    -- Spawn vehicle now that collision is ready
     local vehHeading = boothCoords.w or 0.0
-    local veh = CreateVehicle(modelHash, vehCoords.x, vehCoords.y, vehCoords.z, vehHeading, false, false)
+    local veh = CreateVehicle(modelHash, boothCoords.x, boothCoords.y, boothCoords.z, vehHeading, false, false)
     SetEntityHeading(veh, vehHeading)
     FreezeEntityPosition(veh, true)
     SetVehicleOnGroundProperly(veh)
@@ -345,29 +501,26 @@ RegisterNUICallback("adminStartPhotoCapture", function(data, cb)
     DisplayRadar(false)
     DisplayHud(false)
 
-    -- Scale camera distance based on vehicle dimensions
+    -- Scale camera start position based on vehicle dimensions
     local dimMin, dimMax = GetModelDimensions(modelHash)
-    local vehLength = dimMax.y - dimMin.y
-    local vehWidth = dimMax.x - dimMin.x
     local vehHeight = dimMax.z - dimMin.z
-    local vehSize = math.max(vehLength, vehWidth, vehHeight)
-    local sizeScale = vehSize / 5.0 -- normalize: ~5m is a standard sedan
+    local vehSize = math.max(dimMax.y - dimMin.y, dimMax.x - dimMin.x, vehHeight)
+    local sizeScale = math.max(0.8, vehSize / 5.0)
 
-    local baseCamRadius = location.camRadius or 6.0
-    local baseCamHeight = location.camHeight or 2.0
-    local camRadius = baseCamRadius * math.max(0.8, sizeScale)
-    local camHeight = baseCamHeight * math.max(0.8, sizeScale)
-    local camLookZ = boothCoords.z + (vehHeight * 0.4)
+    local camRadius = (location.camRadius or 6.0) * sizeScale
 
-    -- Create orbital camera
-    local angle = 225.0
-    local rad = math.rad(angle)
-    local camX = boothCoords.x + camRadius * math.cos(rad)
-    local camY = boothCoords.y + camRadius * math.sin(rad)
-    local camZ = boothCoords.z + camHeight
+    -- Get actual vehicle position after ground placement, then find its vertical center
+    local vehPos = GetEntityCoords(veh)
+    local vehCenterZ = vehPos.z + (dimMin.z + dimMax.z) * 0.5
+
+    -- Create free camera at initial position looking at vehicle center
+    local initAngle = math.rad(225.0)
+    local camX = vehPos.x + camRadius * math.cos(initAngle)
+    local camY = vehPos.y + camRadius * math.sin(initAngle)
+    local camZ = vehCenterZ
     local cam = CreateCam("DEFAULT_SCRIPTED_CAMERA", true)
     SetCamCoord(cam, camX, camY, camZ)
-    PointCamAtCoord(cam, boothCoords.x, boothCoords.y, camLookZ)
+    PointCamAtCoord(cam, vehPos.x, vehPos.y, vehCenterZ)
     SetCamActive(cam, true)
     RenderScriptCams(true, false, 0, true, true)
 
@@ -375,22 +528,24 @@ RegisterNUICallback("adminStartPhotoCapture", function(data, cb)
     PhotoBoothState = {
         vehicle = veh,
         cam = cam,
-        angle = angle,
-        radius = camRadius,
-        camHeight = camHeight,
-        camLookZ = camLookZ,
-        sizeScale = math.max(0.8, sizeScale),
         center = boothCoords,
+        groundZ = boothCoords.z - 2.0,
         savedCoords = savedCoords,
         savedHeading = savedHeading,
         catalogId = data.catalogId,
         model = data.model,
         label = data.label or data.model,
+        uploadConfig = uploadConfig,
     }
 
-    -- Open photo booth UI
-    Wait(200)
-    OpenNui('photoBooth', {
+    -- Start noclip camera thread
+    StartPhotoBoothCamThread()
+
+    -- Fade in and open UI
+    DoScreenFadeIn(500)
+    while not IsScreenFadedIn() do Wait(0) end
+
+    local nuiData = {
         dealershipId = 0,
         dealershipName = 'Photo Booth',
         role = 'admin',
@@ -398,27 +553,10 @@ RegisterNUICallback("adminStartPhotoCapture", function(data, cb)
         catalogId = data.catalogId,
         model = data.model,
         label = data.label or data.model,
-    })
-end)
+        uploadConfig = uploadConfig,
+    }
 
-RegisterNUICallback("photoBoothRotate", function(data, cb)
-    if not PhotoBoothState then cb({ success = false }) return end
-
-    if data.deltaAngle then
-        PhotoBoothState.angle = PhotoBoothState.angle + (tonumber(data.deltaAngle) or 0)
-    end
-    local scale = PhotoBoothState.sizeScale or 1.0
-    if data.deltaZoom then
-        local newRadius = PhotoBoothState.radius + ((tonumber(data.deltaZoom) or 0) * scale)
-        PhotoBoothState.radius = math.max(3.0 * scale, math.min(12.0 * scale, newRadius))
-    end
-    if data.deltaHeight then
-        local newHeight = PhotoBoothState.camHeight + ((tonumber(data.deltaHeight) or 0) * scale)
-        PhotoBoothState.camHeight = math.max(0.5 * scale, math.min(6.0 * scale, newHeight))
-    end
-
-    UpdatePhotoBoothCamera()
-    cb({ success = true })
+    OpenNui('photoBooth', nuiData)
 end)
 
 RegisterNUICallback("photoBoothCapture", function(_, cb)
@@ -429,7 +567,7 @@ RegisterNUICallback("photoBoothCapture", function(_, cb)
     Wait(200)
 
     exports['screenshot-basic']:requestScreenshot(function(screenshotData)
-        -- Reopen the photo booth UI first so the component is mounted
+        -- Reopen the photo booth UI so the component is mounted
         OpenNui('photoBooth', {
             dealershipId = 0,
             dealershipName = 'Photo Booth',
@@ -438,9 +576,9 @@ RegisterNUICallback("photoBoothCapture", function(_, cb)
             catalogId = PhotoBoothState and PhotoBoothState.catalogId,
             model = PhotoBoothState and PhotoBoothState.model,
             label = PhotoBoothState and PhotoBoothState.label,
+            uploadConfig = PhotoBoothState and PhotoBoothState.uploadConfig,
         })
 
-        -- Give React a frame to mount, then send the captured image
         Wait(100)
         SendNUIMessage({ type = 'photoBoothCaptured', imageData = screenshotData })
     end)
@@ -451,9 +589,16 @@ end)
 RegisterNUICallback("photoBoothSave", function(data, cb)
     if not PhotoBoothState then cb({ success = false }) return end
 
+    if not data.imageData or data.imageData == "" then
+        ShowNotification("No image to save.")
+        cb({ success = false })
+        CleanupPhotoBooth()
+        return
+    end
+
     local result = lib.callback.await("pickle_dealerships:adminSaveCatalogImage", false, {
         catalogId = PhotoBoothState.catalogId,
-        imageData = data.imageData,
+        imageUrl = data.imageData,
     })
 
     if result and result.success then

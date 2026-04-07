@@ -1,22 +1,33 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { Card, CardContent } from '../components/ui/card'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
-import { ScrollArea } from '../components/ui/scroll-area'
 import { Separator } from '../components/ui/separator'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog'
 import { fetchNui, formatCurrency } from '../lib/utils'
-import { getCached, setCache, buildKey } from '../lib/cache'
 import { SkeletonCardGrid } from '../components/ui/skeleton'
-import { X, Search, ShoppingCart, Truck, Lock } from 'lucide-react'
+import { X, Search, ShoppingCart, Truck, Lock, Loader2, Car } from 'lucide-react'
 import type { DealershipData, CatalogItem } from '../types'
 
 interface Props {
   data: DealershipData
   onClose: () => void
 }
+
+interface CatalogResponse {
+  items: CatalogItem[]
+  total: number
+  page: number
+  pageSize: number
+}
+
+const PAGE_SIZE = 50
+const COLUMNS = 3
+const ROW_HEIGHT = 280
+const GAP = 12
 
 const tierOrder = ['basic', 'expanded', 'full', 'exclusive']
 const tierColors: Record<string, string> = {
@@ -27,37 +38,88 @@ const tierColors: Record<string, string> = {
 }
 
 export default function CatalogPage({ data, onClose }: Props) {
-  const cacheKey = buildKey(data.dealershipId, 'catalog')
-  const cached = getCached<CatalogItem[]>(cacheKey)
-  const [catalog, setCatalog] = useState<CatalogItem[]>(cached ?? [])
+  const [items, setItems] = useState<CatalogItem[]>([])
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1)
   const [search, setSearch] = useState('')
   const [classFilter, setClassFilter] = useState('all')
   const [tierFilter, setTierFilter] = useState('all')
-  const [loading, setLoading] = useState(!cached)
+  const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [ordering, setOrdering] = useState<CatalogItem | null>(null)
   const [retailPrice, setRetailPrice] = useState('')
   const [quantity, setQuantity] = useState('1')
+  const [classes, setClasses] = useState<string[]>([])
+  const searchTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const parentRef = useRef<HTMLDivElement>(null)
 
-  useEffect(() => {
-    fetchNui<{ catalog: CatalogItem[] }>('getCatalog', {
+  const hasMore = items.length < total
+
+  const fetchPage = useCallback((p: number, s: string, cf: string, tf: string, append: boolean) => {
+    if (append) {
+      setLoadingMore(true)
+    } else {
+      setLoading(true)
+    }
+    fetchNui<CatalogResponse>('getCatalog', {
       dealershipId: data.dealershipId,
       location: data.location,
       type: data.type,
+      page: p,
+      pageSize: PAGE_SIZE,
+      search: s,
+      classFilter: cf,
+      tierFilter: tf,
     }).then((res) => {
-      const items = res && Array.isArray(res.catalog) ? res.catalog : (Array.isArray(res) ? res as unknown as CatalogItem[] : [])
-      setCatalog(items)
-      setCache(cacheKey, items)
+      const loadedItems = res && Array.isArray(res.items) ? res.items : []
+      setItems(prev => append ? [...prev, ...loadedItems] : loadedItems)
+      setTotal(res?.total ?? 0)
+      setPage(res?.page ?? 1)
+      if (p === 1 && s === '' && cf === 'all' && tf === 'all') {
+        setClasses([...new Set(loadedItems.map((v) => v.class))].sort())
+      }
       setLoading(false)
-    }).catch(() => setLoading(false))
-  }, [data.dealershipId])
+      setLoadingMore(false)
+    }).catch(() => { setLoading(false); setLoadingMore(false) })
+  }, [data.dealershipId, data.location, data.type])
 
-  const classes = [...new Set(catalog.map((v) => v.class))].sort()
+  useEffect(() => { fetchPage(1, '', 'all', 'all', false) }, [data.dealershipId])
 
-  const filtered = catalog
-    .filter((v) => (v.label || v.model).toLowerCase().includes(search.toLowerCase()))
-    .filter((v) => classFilter === 'all' || v.class === classFilter)
-    .filter((v) => tierFilter === 'all' || v.tier === tierFilter)
-    .sort((a, b) => tierOrder.indexOf(a.tier) - tierOrder.indexOf(b.tier) || a.wholesale - b.wholesale)
+  const handleSearchChange = (value: string) => {
+    setSearch(value)
+    clearTimeout(searchTimer.current)
+    searchTimer.current = setTimeout(() => {
+      fetchPage(1, value, classFilter, tierFilter, false)
+    }, 300)
+  }
+
+  const handleClassChange = (value: string) => {
+    setClassFilter(value)
+    fetchPage(1, search, value, tierFilter, false)
+  }
+
+  const handleTierChange = (value: string) => {
+    setTierFilter(value)
+    fetchPage(1, search, classFilter, value, false)
+  }
+
+  const rowCount = Math.ceil(items.length / COLUMNS)
+
+  const virtualizer = useVirtualizer({
+    count: rowCount,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => ROW_HEIGHT + GAP,
+    overscan: 5,
+    onChange: (instance) => {
+      const vItems = instance.getVirtualItems()
+      const lastRow = vItems[vItems.length - 1]
+      if (!lastRow) return
+      const lastItemIndex = (lastRow.index + 1) * COLUMNS
+      if (lastItemIndex >= items.length - 10 && hasMore && !loadingMore) {
+        fetchPage(page + 1, search, classFilter, tierFilter, true)
+      }
+    },
+  })
 
   const handleOrder = () => {
     if (!ordering) return
@@ -94,9 +156,9 @@ export default function CatalogPage({ data, onClose }: Props) {
           <div className="px-5 pt-3 flex flex-wrap gap-2">
             <div className="relative flex-1 min-w-[200px]">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input placeholder="Search..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" />
+              <Input placeholder="Search..." value={search} onChange={(e) => handleSearchChange(e.target.value)} className="pl-9" />
             </div>
-            <Select value={classFilter} onValueChange={setClassFilter}>
+            <Select value={classFilter} onValueChange={handleClassChange}>
               <SelectTrigger className="w-[140px]">
                 <SelectValue placeholder="Class" />
               </SelectTrigger>
@@ -107,7 +169,7 @@ export default function CatalogPage({ data, onClose }: Props) {
                 ))}
               </SelectContent>
             </Select>
-            <Select value={tierFilter} onValueChange={setTierFilter}>
+            <Select value={tierFilter} onValueChange={handleTierChange}>
               <SelectTrigger className="w-[140px]">
                 <SelectValue placeholder="Tier" />
               </SelectTrigger>
@@ -125,97 +187,128 @@ export default function CatalogPage({ data, onClose }: Props) {
       )}
 
       <div className="relative flex-1 flex flex-col overflow-hidden">
-      <ScrollArea className="flex-1 p-5">
-        {loading ? (
-          <SkeletonCardGrid count={6} columns={3} />
-        ) : filtered.length === 0 ? (
-          <div className="flex items-center justify-center h-48 text-muted-foreground">No vehicles found</div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {filtered.map((item) => {
-              const locked = !canAccessTier(item.tier, data.tier)
-              return (
-                <Card key={item.model} className={`overflow-hidden transition-colors ${locked ? 'opacity-50' : 'hover:border-accent/50'}`}>
-                  <CardContent className="p-4">
-                    <div className="flex items-start justify-between mb-2">
-                      <div>
-                        <h3 className="font-semibold">{item.label}</h3>
-                        <p className="text-xs text-muted-foreground font-mono">{item.model}</p>
-                      </div>
-                      <Badge className={`${tierColors[item.tier] || ''} border-0 text-xs capitalize`}>
-                        {item.tier}
-                      </Badge>
-                    </div>
-                    <p className="text-xs text-muted-foreground capitalize mb-3">{item.class}</p>
-                    <div className="flex items-center justify-between">
-                      <p className="font-bold">{formatCurrency(item.wholesale)}</p>
-                      {locked ? (
-                        <Badge variant="outline" className="gap-1 text-muted-foreground">
-                          <Lock className="h-3 w-3" /> Locked
-                        </Badge>
-                      ) : (
-                        <Button size="sm" onClick={() => { setOrdering(item); setRetailPrice(String(Math.round(item.wholesale * 1.3))) }}>
-                          <ShoppingCart className="h-3 w-3" /> Order
-                        </Button>
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
-              )
-            })}
-          </div>
-        )}
-      </ScrollArea>
+        <div ref={parentRef} className="flex-1 overflow-auto p-5">
+          {loading ? (
+            <SkeletonCardGrid count={6} columns={3} />
+          ) : items.length === 0 ? (
+            <div className="flex items-center justify-center h-48 text-muted-foreground">No vehicles found</div>
+          ) : (
+            <div className="relative w-full" style={{ height: `${virtualizer.getTotalSize()}px` }}>
+              {virtualizer.getVirtualItems().map((virtualRow) => {
+                const startIdx = virtualRow.index * COLUMNS
+                const rowItems = items.slice(startIdx, startIdx + COLUMNS)
 
-      <Dialog open={!!ordering} onOpenChange={(open) => !open && setOrdering(null)}>
-        <DialogContent onClose={() => setOrdering(null)}>
-          <DialogHeader>
-            <DialogTitle>Order {ordering?.label}</DialogTitle>
-            <DialogDescription>Set the retail price and quantity for this order.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 pt-2">
-            <div>
-              <p className="text-sm text-muted-foreground mb-1">Wholesale Cost</p>
-              <p className="text-lg font-bold">{formatCurrency(ordering?.wholesale || 0)}</p>
+                return (
+                  <div
+                    key={virtualRow.index}
+                    className="absolute top-0 left-0 w-full grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3"
+                    style={{
+                      height: `${ROW_HEIGHT}px`,
+                      gap: `${GAP}px`,
+                      transform: `translateY(${virtualRow.start}px)`,
+                    }}
+                  >
+                    {rowItems.map((item) => {
+                      const locked = !canAccessTier(item.tier, data.tier)
+                      return (
+                        <Card key={item.model} className={`overflow-hidden transition-colors ${locked ? 'opacity-50' : 'hover:border-accent/50'}`}>
+                          {item.image ? (
+                            <div className="w-full aspect-video bg-muted">
+                              <img src={item.image} alt={item.label} className="w-full h-full object-cover" />
+                            </div>
+                          ) : (
+                            <div className="w-full aspect-video bg-muted flex items-center justify-center">
+                              <Car className="h-8 w-8 text-muted-foreground/30" />
+                            </div>
+                          )}
+                          <CardContent className="p-4">
+                            <div className="flex items-start justify-between mb-2">
+                              <div>
+                                <h3 className="font-semibold">{item.label}</h3>
+                                <p className="text-xs text-muted-foreground font-mono">{item.model}</p>
+                              </div>
+                              <Badge className={`${tierColors[item.tier] || ''} border-0 text-xs capitalize`}>
+                                {item.tier}
+                              </Badge>
+                            </div>
+                            <p className="text-xs text-muted-foreground capitalize mb-3">{item.class}</p>
+                            <div className="flex items-center justify-between">
+                              <p className="font-bold">{formatCurrency(item.wholesale)}</p>
+                              {locked ? (
+                                <Badge variant="outline" className="gap-1 text-muted-foreground">
+                                  <Lock className="h-3 w-3" /> Locked
+                                </Badge>
+                              ) : (
+                                <Button size="sm" onClick={() => { setOrdering(item); setRetailPrice(String(Math.round(item.wholesale * 1.3))) }}>
+                                  <ShoppingCart className="h-3 w-3" /> Order
+                                </Button>
+                              )}
+                            </div>
+                          </CardContent>
+                        </Card>
+                      )
+                    })}
+                  </div>
+                )
+              })}
             </div>
-            <div>
-              <label className="text-sm font-medium">Retail Price</label>
-              <Input
-                type="number"
-                value={retailPrice}
-                onChange={(e) => setRetailPrice(e.target.value)}
-                placeholder="Set retail price..."
-                className="mt-1"
-              />
-              {retailPrice && ordering && (
-                <p className="text-xs text-muted-foreground mt-1">
-                  Markup: {formatCurrency(parseInt(retailPrice) - ordering.wholesale)} ({Math.round(((parseInt(retailPrice) - ordering.wholesale) / ordering.wholesale) * 100)}%)
-                </p>
-              )}
+          )}
+          {loadingMore && (
+            <div className="flex justify-center py-3">
+              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
             </div>
-            <div>
-              <label className="text-sm font-medium">Quantity</label>
-              <Input
-                type="number"
-                min="1"
-                max="10"
-                value={quantity}
-                onChange={(e) => setQuantity(e.target.value)}
-                className="mt-1"
-              />
-            </div>
-            <div className="flex items-center justify-between pt-2 border-t border-border">
+          )}
+        </div>
+
+        <Dialog open={!!ordering} onOpenChange={(open) => !open && setOrdering(null)}>
+          <DialogContent onClose={() => setOrdering(null)}>
+            <DialogHeader>
+              <DialogTitle>Order {ordering?.label}</DialogTitle>
+              <DialogDescription>Set the retail price and quantity for this order.</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 pt-2">
               <div>
-                <p className="text-xs text-muted-foreground">Total Cost (with tax)</p>
-                <p className="font-bold">{formatCurrency(Math.round((ordering?.wholesale || 0) * 1.1 * (parseInt(quantity) || 1)))}</p>
+                <p className="text-sm text-muted-foreground mb-1">Wholesale Cost</p>
+                <p className="text-lg font-bold">{formatCurrency(ordering?.wholesale || 0)}</p>
               </div>
-              <Button onClick={handleOrder} className="gap-2">
-                <Truck className="h-4 w-4" /> Place Order
-              </Button>
+              <div>
+                <label className="text-sm font-medium">Retail Price</label>
+                <Input
+                  type="number"
+                  value={retailPrice}
+                  onChange={(e) => setRetailPrice(e.target.value)}
+                  placeholder="Set retail price..."
+                  className="mt-1"
+                />
+                {retailPrice && ordering && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Markup: {formatCurrency(parseInt(retailPrice) - ordering.wholesale)} ({Math.round(((parseInt(retailPrice) - ordering.wholesale) / ordering.wholesale) * 100)}%)
+                  </p>
+                )}
+              </div>
+              <div>
+                <label className="text-sm font-medium">Quantity</label>
+                <Input
+                  type="number"
+                  min="1"
+                  max="10"
+                  value={quantity}
+                  onChange={(e) => setQuantity(e.target.value)}
+                  className="mt-1"
+                />
+              </div>
+              <div className="flex items-center justify-between pt-2 border-t border-border">
+                <div>
+                  <p className="text-xs text-muted-foreground">Total Cost (with tax)</p>
+                  <p className="font-bold">{formatCurrency(Math.round((ordering?.wholesale || 0) * 1.1 * (parseInt(quantity) || 1)))}</p>
+                </div>
+                <Button onClick={handleOrder} className="gap-2">
+                  <Truck className="h-4 w-4" /> Place Order
+                </Button>
+              </div>
             </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+          </DialogContent>
+        </Dialog>
       </div>
     </>
   )

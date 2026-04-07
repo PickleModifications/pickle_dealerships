@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { fetchNui, formatCurrency } from '../lib/utils'
 import { getCached, setCache, buildKey } from '../lib/cache'
 import { SkeletonCardGrid } from '../components/ui/skeleton'
-import { X, Search, Package, Eye, EyeOff, Truck, Clock, ParkingSquare } from 'lucide-react'
+import { X, Search, Package, Eye, EyeOff, Truck, Clock, ParkingSquare, Car } from 'lucide-react'
 import type { DealershipData, StockItem } from '../types'
 
 interface Props {
@@ -135,9 +135,13 @@ export default function StockPage({ data, onClose }: Props) {
                     <Card key={item.id} className="overflow-hidden border-dashed opacity-80">
                       <CardContent className="p-3 flex items-center justify-between">
                         <div className="flex items-center gap-3">
-                          <div className="h-9 w-9 rounded-md bg-amber-500/10 flex items-center justify-center">
-                            <Truck className="h-4 w-4 text-amber-400" />
-                          </div>
+                          {item.image ? (
+                            <img src={item.image} alt={item.vehicle_label} className="h-9 w-16 object-cover rounded-md bg-muted shrink-0" />
+                          ) : (
+                            <div className="h-9 w-16 rounded-md bg-amber-500/10 flex items-center justify-center shrink-0">
+                              <Truck className="h-4 w-4 text-amber-400" />
+                            </div>
+                          )}
                           <div>
                             <div className="flex items-center gap-2">
                               <p className="font-semibold text-sm">{item.vehicle_label || item.vehicle_model}</p>
@@ -176,14 +180,23 @@ export default function StockPage({ data, onClose }: Props) {
                     <Card key={item.id} className="overflow-hidden hover:border-accent/50 transition-colors">
                       <CardContent className="p-4">
                         <div className="flex items-start justify-between">
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2">
-                              <h3 className="font-semibold truncate">{item.vehicle_label || item.vehicle_model}</h3>
-                              {(item.quantity || 1) > 1 && (
-                                <Badge variant="secondary" className="text-xs shrink-0">x{item.quantity}</Badge>
-                              )}
+                          <div className="flex items-start gap-3 flex-1 min-w-0">
+                            {item.image ? (
+                              <img src={item.image} alt={item.vehicle_label} className="h-12 w-[84px] object-cover rounded-md bg-muted shrink-0" />
+                            ) : (
+                              <div className="h-12 w-[84px] rounded-md bg-muted flex items-center justify-center shrink-0">
+                                <Car className="h-5 w-5 text-muted-foreground/30" />
+                              </div>
+                            )}
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                <h3 className="font-semibold truncate">{item.vehicle_label || item.vehicle_model}</h3>
+                                {(item.quantity || 1) > 1 && (
+                                  <Badge variant="secondary" className="text-xs shrink-0">x{item.quantity}</Badge>
+                                )}
+                              </div>
+                              <p className="text-xs text-muted-foreground font-mono">{item.vehicle_model}</p>
                             </div>
-                            <p className="text-xs text-muted-foreground font-mono">{item.vehicle_model}</p>
                           </div>
                           <div className="flex items-center gap-2 ml-3">
                             {item.display_spot ? (

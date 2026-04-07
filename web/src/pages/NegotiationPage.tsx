@@ -8,7 +8,7 @@ import { Progress } from '../components/ui/progress'
 import { fetchNui, formatCurrency } from '../lib/utils'
 import {
   X, MessageCircle, HandCoins, Shield, Sparkles, Clock, Target,
-  ThumbsUp, Candy, UserX
+  ThumbsUp, Candy, UserX, Car
 } from 'lucide-react'
 import type { NPCProfile, StockItem } from '../types'
 
@@ -270,9 +270,18 @@ export default function NegotiationPage({ profile, greeting, onClose }: Props) {
                 {stock.map((item) => (
                   <Card
                     key={item.id}
-                    className="cursor-pointer hover:border-accent/50 transition-colors"
+                    className="cursor-pointer hover:border-accent/50 transition-colors overflow-hidden"
                     onClick={() => handlePresent(item)}
                   >
+                    {item.image ? (
+                      <div className="w-full aspect-video bg-muted">
+                        <img src={item.image} alt={item.vehicle_label} className="w-full h-full object-cover" />
+                      </div>
+                    ) : (
+                      <div className="w-full aspect-video bg-muted flex items-center justify-center">
+                        <Car className="h-6 w-6 text-muted-foreground/30" />
+                      </div>
+                    )}
                     <CardContent className="p-3">
                       <div className="flex items-center gap-2">
                         <p className="text-sm font-semibold">{item.vehicle_label || item.vehicle_model}</p>

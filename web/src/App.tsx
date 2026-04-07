@@ -23,11 +23,13 @@ function App() {
   const [data, setData] = useState<DealershipData | null>(null)
   const [npcProfile, setNpcProfile] = useState<NPCProfile | null>(null)
   const [npcGreeting, setNpcGreeting] = useState('')
+  const [openKey, setOpenKey] = useState(0)
 
   useNuiEvent('open', (payload: { page: PageType; data: DealershipData; accentColor?: string }) => {
     setPage(payload.page)
     setData(payload.data)
     setVisible(true)
+    setOpenKey((k) => k + 1)
 
     if (payload.accentColor) {
       const hsl = hexToHSL(payload.accentColor)
@@ -120,11 +122,11 @@ function App() {
       <InteractText />
       {visible && page && (
         page === 'photoBooth' ? (
-          <div className="fixed inset-0 z-50">
+          <div key={openKey} className="fixed inset-0 z-50">
             {renderPage()}
           </div>
         ) : (
-          <div className="fixed inset-0 flex items-center justify-center p-8 z-50">
+          <div key={openKey} className="fixed inset-0 flex items-center justify-center p-8 z-50">
             <div className="relative w-full max-w-5xl h-[50vh] bg-background border border-border rounded-xl shadow-2xl shadow-black/50 flex flex-col overflow-hidden">
               {renderPage()}
             </div>

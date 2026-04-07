@@ -15,6 +15,7 @@ files {
 shared_scripts {
     "@ox_lib/init.lua",
     "config.lua",
+    "config_sv.lua",
     "locales/locale.lua",
     "locales/translations/*.lua",
     "core/shared.lua",
@@ -37,6 +38,7 @@ lua54 'yes'
 
 escrow_ignore {
     "config.lua",
+    "config_sv.lua",
     "core/*.*",
     "bridge/**/**/*.*",
     "bridge/**/*.*",

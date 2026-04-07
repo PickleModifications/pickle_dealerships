@@ -222,11 +222,18 @@ end
 RegisterNUICallback("getCatalog", function(data, cb)
     local location = ResolveLocation(data)
     if not location then
-        cb({ catalog = {} })
+        cb({ items = {}, total = 0, page = 1, pageSize = 50 })
         return
     end
-    local result = lib.callback.await('pickle_dealerships:getCatalog', false, location)
-    cb({ catalog = result or {} })
+    local result = lib.callback.await('pickle_dealerships:getCatalog', false, {
+        location = location,
+        page = data.page or 1,
+        pageSize = data.pageSize or 50,
+        search = data.search or '',
+        classFilter = data.classFilter or 'all',
+        tierFilter = data.tierFilter or 'all',
+    })
+    cb(result or { items = {}, total = 0, page = 1, pageSize = 50 })
 end)
 
 RegisterNUICallback("orderVehicle", function(data, cb)

@@ -26,9 +26,14 @@ type AdminTab = 'dealerships' | 'catalog' | 'positions'
 type AdminAction = 'transfer' | 'balance' | 'tier' | 'reset' | 'toggle' | 'create' | null
 
 export default function AdminPage({ data, onClose }: Props) {
-  const [tab, setTab] = useState<AdminTab>('dealerships')
+  const [tab, setTab] = useState<AdminTab>((data.initialTab as AdminTab) || 'dealerships')
   const [dealerships, setDealerships] = useState<AdminDealership[]>([])
   const [loading, setLoading] = useState(true)
+
+  // Sync tab when reopened with a different initialTab (e.g. returning from photo booth)
+  useEffect(() => {
+    if (data.initialTab) setTab(data.initialTab as AdminTab)
+  }, [data.initialTab])
   const [selected, setSelected] = useState<AdminDealership | null>(null)
   const [action, setAction] = useState<AdminAction>(null)
   const [inputValue, setInputValue] = useState('')

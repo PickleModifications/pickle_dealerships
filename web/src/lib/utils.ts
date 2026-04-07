@@ -28,6 +28,7 @@ export function closeNui() {
 
 export function hexToHSL(hex: string): { h: number; s: number; l: number } {
   hex = hex.replace('#', '')
+  if (hex.length === 8) hex = hex.substring(2) // strip alpha prefix (AARRGGBB → RRGGBB)
   const r = parseInt(hex.substring(0, 2), 16) / 255
   const g = parseInt(hex.substring(2, 4), 16) / 255
   const b = parseInt(hex.substring(4, 6), 16) / 255

@@ -113,6 +113,15 @@ export default function SalesPage({ data, onClose }: Props) {
                 className="overflow-hidden hover:border-accent/50 transition-colors cursor-pointer"
                 onClick={() => setSelected(item)}
               >
+                {item.image ? (
+                  <div className="w-full aspect-video bg-muted">
+                    <img src={item.image} alt={item.vehicle_label} className="w-full h-full object-cover" />
+                  </div>
+                ) : (
+                  <div className="w-full aspect-video bg-muted flex items-center justify-center">
+                    <Car className="h-8 w-8 text-muted-foreground/30" />
+                  </div>
+                )}
                 <CardContent className="p-4">
                   <div className="flex items-start justify-between mb-2">
                     <div>

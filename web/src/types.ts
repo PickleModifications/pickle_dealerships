@@ -18,6 +18,12 @@ export interface DealershipData {
   catalogId?: number
   model?: string
   label?: string
+  uploadConfig?: {
+    url: string
+    field: string
+    headers?: Record<string, string>
+    returnPathKey?: string
+  }
 }
 
 export interface DealershipMetadata {
@@ -53,6 +59,7 @@ export interface StockItem {
   sold_to: string | null
   sold_by: string | null
   quantity: number
+  image?: string | null
 }
 
 export interface VehicleColor {
@@ -69,6 +76,7 @@ export interface CatalogItem {
   wholesale: number
   tier: string
   class: string
+  image?: string | null
 }
 
 export interface Employee {
