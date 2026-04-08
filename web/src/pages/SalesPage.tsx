@@ -7,7 +7,7 @@ import { ScrollArea } from '../components/ui/scroll-area'
 import { Separator } from '../components/ui/separator'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
-import { fetchNui, formatCurrency } from '../lib/utils'
+import { fetchNui, formatCurrency, getVehicleImage } from '../lib/utils'
 import { getCached, setCache, buildKey } from '../lib/cache'
 import { SkeletonCardGrid } from '../components/ui/skeleton'
 import { X, Search, CreditCard, Car, Tag, Banknote } from 'lucide-react'
@@ -113,9 +113,9 @@ export default function SalesPage({ data, onClose }: Props) {
                 className="overflow-hidden hover:border-accent/50 transition-colors cursor-pointer"
                 onClick={() => setSelected(item)}
               >
-                {item.image ? (
+                {getVehicleImage(item.image, item.vehicle_model) ? (
                   <div className="w-full aspect-video bg-muted">
-                    <img src={item.image} alt={item.vehicle_label} className="w-full h-full object-cover" />
+                    <img src={getVehicleImage(item.image, item.vehicle_model)!} alt={item.vehicle_label} loading="lazy" className="w-full h-full object-contain" />
                   </div>
                 ) : (
                   <div className="w-full aspect-video bg-muted flex items-center justify-center">
@@ -126,7 +126,7 @@ export default function SalesPage({ data, onClose }: Props) {
                   <div className="flex items-start justify-between mb-2">
                     <div>
                       <h3 className="font-semibold">{item.vehicle_label || item.vehicle_model}</h3>
-                      <p className="text-xs text-muted-foreground font-mono">{item.vehicle_model}</p>
+                      <p className="text-xs text-muted-foreground capitalize">{item.class || 'Vehicle'}</p>
                     </div>
                     <div className="flex gap-1">
                       {(item.quantity || 1) > 1 && <Badge variant="secondary">x{item.quantity}</Badge>}
@@ -155,8 +155,8 @@ export default function SalesPage({ data, onClose }: Props) {
             <div className="space-y-4 pt-2">
               <div className="flex justify-between">
                 <div>
-                  <p className="text-xs text-muted-foreground">Model</p>
-                  <p className="font-mono text-sm">{selected.vehicle_model}</p>
+                  <p className="text-xs text-muted-foreground">Class</p>
+                  <p className="text-sm capitalize">{selected.class || 'Vehicle'}</p>
                 </div>
                 <div className="text-right">
                   <p className="text-xs text-muted-foreground">Condition</p>

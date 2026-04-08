@@ -7,14 +7,13 @@ import { ScrollArea } from '../components/ui/scroll-area'
 import { fetchNui, formatCurrency } from '../lib/utils'
 import {
   X, LayoutDashboard, Package, Truck, Users, LineChart, Ticket,
-  ShoppingCart, DollarSign, Store,
+  DollarSign, Store,
 } from 'lucide-react'
 import type { DealershipData } from '../types'
 
 import DashboardPage from './DashboardPage'
 import StockPage from './StockPage'
 import CatalogPage from './CatalogPage'
-import SalesPage from './SalesPage'
 import EmployeesPage from './EmployeesPage'
 import FinancesPage from './FinancesPage'
 import CouponsPage from './CouponsPage'
@@ -28,7 +27,6 @@ type ManagementTab =
   | 'dashboard'
   | 'stock'
   | 'catalog'
-  | 'sales'
   | 'employees'
   | 'finances'
   | 'coupons'
@@ -43,7 +41,6 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="h-4 w-4" /> },
-  { id: 'sales', label: 'Sales', icon: <ShoppingCart className="h-4 w-4" /> },
   { id: 'stock', label: 'Stock', icon: <Package className="h-4 w-4" /> },
   { id: 'catalog', label: 'Order Vehicles', icon: <Truck className="h-4 w-4" /> },
   { id: 'employees', label: 'Employees', icon: <Users className="h-4 w-4" />, minRole: ['owner', 'manager', 'admin'] },
@@ -135,8 +132,6 @@ export default function ManagementPage({ data, onClose }: Props) {
         return <StockPage {...subProps} />
       case 'catalog':
         return <CatalogPage {...subProps} />
-      case 'sales':
-        return <SalesPage {...subProps} />
       case 'employees':
         return <EmployeesPage {...subProps} />
       case 'finances':

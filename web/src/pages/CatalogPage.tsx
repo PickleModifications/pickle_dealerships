@@ -5,11 +5,10 @@ import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { Separator } from '../components/ui/separator'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog'
-import { fetchNui, formatCurrency } from '../lib/utils'
+import { fetchNui, formatCurrency, getVehicleImage } from '../lib/utils'
 import { SkeletonCardGrid } from '../components/ui/skeleton'
-import { X, Search, ShoppingCart, Truck, Lock, Loader2, Car } from 'lucide-react'
+import { X, Search, ShoppingCart, Truck, Lock, Loader2, Car, SlidersHorizontal } from 'lucide-react'
 import type { DealershipData, CatalogItem } from '../types'
 
 interface Props {
@@ -26,7 +25,7 @@ interface CatalogResponse {
 
 const PAGE_SIZE = 50
 const COLUMNS = 3
-const ROW_HEIGHT = 280
+const ROW_HEIGHT = 240
 const GAP = 12
 
 const tierOrder = ['basic', 'expanded', 'full', 'exclusive']
@@ -50,6 +49,7 @@ export default function CatalogPage({ data, onClose }: Props) {
   const [retailPrice, setRetailPrice] = useState('')
   const [quantity, setQuantity] = useState('1')
   const [classes, setClasses] = useState<string[]>([])
+  const [showFilters, setShowFilters] = useState(false)
   const searchTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const parentRef = useRef<HTMLDivElement>(null)
 
@@ -92,6 +92,8 @@ export default function CatalogPage({ data, onClose }: Props) {
       fetchPage(1, value, classFilter, tierFilter, false)
     }, 300)
   }
+
+  const activeFilterCount = (classFilter !== 'all' ? 1 : 0) + (tierFilter !== 'all' ? 1 : 0)
 
   const handleClassChange = (value: string) => {
     setClassFilter(value)
@@ -142,49 +144,63 @@ export default function CatalogPage({ data, onClose }: Props) {
   return (
     <>
       {!data.embedded && (
-        <>
-          <div className="flex items-center justify-between p-5 pb-0">
-            <div>
-              <h1 className="text-xl font-bold">Wholesale Catalog</h1>
-              <p className="text-sm text-muted-foreground">Order vehicles for your dealership</p>
-            </div>
-            <Button variant="ghost" size="icon" onClick={onClose}>
-              <X className="h-5 w-5" />
-            </Button>
+        <div className="flex items-center justify-between p-5 pb-0">
+          <div>
+            <h1 className="text-xl font-bold">Wholesale Catalog</h1>
+            <p className="text-sm text-muted-foreground">Order vehicles for your dealership</p>
           </div>
-
-          <div className="px-5 pt-3 flex flex-wrap gap-2">
-            <div className="relative flex-1 min-w-[200px]">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input placeholder="Search..." value={search} onChange={(e) => handleSearchChange(e.target.value)} className="pl-9" />
-            </div>
-            <Select value={classFilter} onValueChange={handleClassChange}>
-              <SelectTrigger className="w-[140px]">
-                <SelectValue placeholder="Class" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Classes</SelectItem>
-                {classes.map((c) => (
-                  <SelectItem key={c} value={c} className="capitalize">{c}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select value={tierFilter} onValueChange={handleTierChange}>
-              <SelectTrigger className="w-[140px]">
-                <SelectValue placeholder="Tier" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Tiers</SelectItem>
-                {tierOrder.map((t) => (
-                  <SelectItem key={t} value={t} className="capitalize">{t}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <Separator className="mt-3" />
-        </>
+          <Button variant="ghost" size="icon" onClick={onClose}>
+            <X className="h-5 w-5" />
+          </Button>
+        </div>
       )}
+
+      <div className="px-5 pt-3 flex gap-2">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input placeholder="Search vehicles..." value={search} onChange={(e) => handleSearchChange(e.target.value)} className="pl-9" />
+        </div>
+        <Button
+          variant={showFilters || activeFilterCount > 0 ? 'default' : 'outline'}
+          size="icon"
+          className="h-9 w-9 shrink-0 relative"
+          onClick={() => setShowFilters(!showFilters)}
+        >
+          <SlidersHorizontal className="h-4 w-4" />
+          {activeFilterCount > 0 && (
+            <span className="absolute -top-1 -right-1 bg-accent text-accent-foreground text-[9px] font-bold rounded-full w-4 h-4 flex items-center justify-center">
+              {activeFilterCount}
+            </span>
+          )}
+        </Button>
+      </div>
+
+      {showFilters && (
+        <div className="px-5 pt-3 flex flex-wrap gap-3">
+          {classes.length > 0 && (
+            <div className="flex-1 min-w-[140px]">
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">Class</p>
+              <div className="flex flex-wrap gap-1">
+                <button onClick={() => handleClassChange('all')} className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${classFilter === 'all' ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>All</button>
+                {classes.map((c) => (
+                  <button key={c} onClick={() => handleClassChange(c)} className={`px-2 py-0.5 rounded text-[10px] font-medium capitalize transition-colors ${classFilter === c ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>{c}</button>
+                ))}
+              </div>
+            </div>
+          )}
+          <div className="flex-1 min-w-[140px]">
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">Tier</p>
+            <div className="flex flex-wrap gap-1">
+              <button onClick={() => handleTierChange('all')} className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${tierFilter === 'all' ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>All</button>
+              {tierOrder.map((t) => (
+                <button key={t} onClick={() => handleTierChange(t)} className={`px-2 py-0.5 rounded text-[10px] font-medium capitalize transition-colors ${tierFilter === t ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>{t}</button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <Separator className="mt-3" />
 
       <div className="relative flex-1 flex flex-col overflow-hidden">
         <div ref={parentRef} className="flex-1 overflow-auto p-5">
@@ -211,29 +227,26 @@ export default function CatalogPage({ data, onClose }: Props) {
                     {rowItems.map((item) => {
                       const locked = !canAccessTier(item.tier, data.tier)
                       return (
-                        <Card key={item.model} className={`overflow-hidden transition-colors ${locked ? 'opacity-50' : 'hover:border-accent/50'}`}>
-                          {item.image ? (
-                            <div className="w-full aspect-video bg-muted">
-                              <img src={item.image} alt={item.label} className="w-full h-full object-cover" />
-                            </div>
+                        <Card key={item.model} className={`overflow-hidden transition-colors flex flex-col h-full ${locked ? 'opacity-50' : 'hover:border-accent/50'}`}>
+                          {getVehicleImage(item.image, item.model) ? (
+                            <img src={getVehicleImage(item.image, item.model)!} alt={item.label} loading="lazy" className="w-full aspect-video object-contain bg-muted" />
                           ) : (
                             <div className="w-full aspect-video bg-muted flex items-center justify-center">
                               <Car className="h-8 w-8 text-muted-foreground/30" />
                             </div>
                           )}
-                          <CardContent className="p-4">
-                            <div className="flex items-start justify-between mb-2">
+                          <CardContent className="p-3 flex flex-col flex-1">
+                            <div className="flex items-start justify-between mb-1">
                               <div>
-                                <h3 className="font-semibold">{item.label}</h3>
-                                <p className="text-xs text-muted-foreground font-mono">{item.model}</p>
+                                <h3 className="font-semibold text-sm">{item.label}</h3>
+                                <p className="text-xs text-muted-foreground capitalize">{item.class}</p>
                               </div>
                               <Badge className={`${tierColors[item.tier] || ''} border-0 text-xs capitalize`}>
                                 {item.tier}
                               </Badge>
                             </div>
-                            <p className="text-xs text-muted-foreground capitalize mb-3">{item.class}</p>
-                            <div className="flex items-center justify-between">
-                              <p className="font-bold">{formatCurrency(item.wholesale)}</p>
+                            <div className="flex items-center justify-between mt-auto pt-2">
+                              <p className="font-bold text-sm">{formatCurrency(item.wholesale)}</p>
                               {locked ? (
                                 <Badge variant="outline" className="gap-1 text-muted-foreground">
                                   <Lock className="h-3 w-3" /> Locked

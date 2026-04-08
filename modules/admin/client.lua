@@ -535,6 +535,7 @@ RegisterNUICallback("adminStartPhotoCapture", function(data, cb)
         catalogId = data.catalogId,
         model = data.model,
         label = data.label or data.model,
+        vehicleClass = data.class,
         uploadConfig = uploadConfig,
     }
 
@@ -553,6 +554,7 @@ RegisterNUICallback("adminStartPhotoCapture", function(data, cb)
         catalogId = data.catalogId,
         model = data.model,
         label = data.label or data.model,
+        vehicleClass = data.class,
         uploadConfig = uploadConfig,
     }
 
@@ -576,6 +578,7 @@ RegisterNUICallback("photoBoothCapture", function(_, cb)
             catalogId = PhotoBoothState and PhotoBoothState.catalogId,
             model = PhotoBoothState and PhotoBoothState.model,
             label = PhotoBoothState and PhotoBoothState.label,
+            vehicleClass = PhotoBoothState and PhotoBoothState.vehicleClass,
             uploadConfig = PhotoBoothState and PhotoBoothState.uploadConfig,
         })
 

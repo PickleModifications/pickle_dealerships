@@ -4,8 +4,8 @@ import { Button } from '../components/ui/button'
 import { Badge } from '../components/ui/badge'
 import { Input } from '../components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
-import { fetchNui, formatCurrency } from '../lib/utils'
-import { Search, X, CreditCard, Banknote, Car, Loader2, Palette } from 'lucide-react'
+import { fetchNui, formatCurrency, getVehicleImage } from '../lib/utils'
+import { Search, X, CreditCard, Banknote, Car, Loader2, Palette, SlidersHorizontal } from 'lucide-react'
 import type { DealershipData, StockItem, VehicleColor } from '../types'
 
 interface Props {
@@ -13,15 +13,6 @@ interface Props {
   onClose: () => void
 }
 
-interface ShowroomStockResponse {
-  items: StockItem[]
-  total: number
-  page: number
-  pageSize: number
-  classes?: string[]
-}
-
-const PAGE_SIZE = 20
 const COLUMNS = 2
 const ROW_HEIGHT = 120
 const GAP = 10
@@ -42,14 +33,14 @@ const PRESET_COLORS = [
 ]
 
 export default function ShowroomPage({ data }: Props) {
-  const [items, setItems] = useState<StockItem[]>([])
-  const [total, setTotal] = useState(0)
-  const [page, setPage] = useState(1)
+  const [allStock, setAllStock] = useState<StockItem[]>([])
   const [loading, setLoading] = useState(true)
-  const [loadingMore, setLoadingMore] = useState(false)
   const [search, setSearch] = useState('')
   const [classFilter, setClassFilter] = useState('all')
-  const [classes, setClasses] = useState<string[]>([])
+  const [priceRange, setPriceRange] = useState<[number, number]>([0, 0])
+  const [maxRetailPrice, setMaxRetailPrice] = useState(0)
+  const [showFilters, setShowFilters] = useState(false)
+  const [sortBy, setSortBy] = useState<'name_asc' | 'name_desc' | 'price_asc' | 'price_desc'>('name_asc')
   const [selected, setSelected] = useState<StockItem | null>(null)
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'bank'>('bank')
   const [purchasing, setPurchasing] = useState(false)
@@ -57,76 +48,64 @@ export default function ShowroomPage({ data }: Props) {
   const [primaryColor, setPrimaryColor] = useState<VehicleColor | null>(null)
   const [secondaryColor, setSecondaryColor] = useState<VehicleColor | null>(null)
   const [colorPicker, setColorPicker] = useState<'primary' | 'secondary' | null>(null)
-  const searchTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const parentRef = useRef<HTMLDivElement>(null)
   const draggingRef = useRef(false)
   const lastMouseRef = useRef<{ x: number; y: number } | null>(null)
 
-  const hasMore = items.length < total
-
-  const fetchPage = useCallback((p: number, s: string, cf: string, append: boolean) => {
-    if (append) {
-      setLoadingMore(true)
-    } else {
-      setLoading(true)
-    }
-    fetchNui<ShowroomStockResponse>('getShowroomStock', {
+  // Single fetch on mount — all filtering/sorting is client-side
+  useEffect(() => {
+    fetchNui<StockItem[] | { stock: StockItem[] }>('getStock', {
+      dealershipId: data.dealershipId,
       location: data.location,
-      page: p,
-      pageSize: PAGE_SIZE,
-      search: s,
-      classFilter: cf,
     }).then((res) => {
-      if (res && res.items) {
-        const newItems = append ? [...items, ...res.items] : res.items
-        setItems(prev => append ? [...prev, ...res.items] : res.items)
-        setTotal(res.total)
-        setPage(res.page)
-        if (res.classes && res.classes.length > 0) {
-          setClasses(res.classes)
-        }
-        // Auto-select first vehicle on initial load
-        if (!append && res.items.length > 0 && !selected) {
-          setSelected(res.items[0])
-          fetchNui('showroomSwapVehicle', { model: res.items[0].vehicle_model })
-        }
+      const items = Array.isArray(res) ? res : (res && 'stock' in res ? res.stock : [])
+      const available = items.filter((s) => !s.sold_at && s.delivered_at && new Date(s.delivered_at) <= new Date())
+      setAllStock(available)
+      const highest = available.reduce((max, s) => Math.max(max, s.retail_price), 0)
+      setMaxRetailPrice(highest)
+      setPriceRange([0, highest])
+      if (available.length > 0) {
+        setSelected(available[0])
+        fetchNui('showroomSwapVehicle', { model: available[0].vehicle_model })
       }
       setLoading(false)
-      setLoadingMore(false)
-    }).catch(() => { setLoading(false); setLoadingMore(false) })
-  }, [data.location, selected])
+    }).catch(() => setLoading(false))
+  }, [data.dealershipId])
 
-  useEffect(() => { fetchPage(1, '', 'all', false) }, [])
+  // Derive classes from cached stock
+  const classes = Array.from(new Set(allStock.map((s) => s.class).filter(Boolean))).sort() as string[]
 
-  const handleSearchChange = (value: string) => {
-    setSearch(value)
-    clearTimeout(searchTimer.current)
-    searchTimer.current = setTimeout(() => {
-      fetchPage(1, value, classFilter, false)
-    }, 300)
-  }
+  const isPriceFiltered = (range: [number, number]) => range[0] > 0 || (maxRetailPrice > 0 && range[1] < maxRetailPrice)
+  const activeFilterCount = (classFilter !== 'all' ? 1 : 0) + (isPriceFiltered(priceRange) ? 1 : 0)
 
-  const handleClassChange = (value: string) => {
-    setClassFilter(value)
-    fetchPage(1, search, value, false)
-  }
+  // Client-side filter + sort
+  const filtered = allStock.filter((item) => {
+    if (search) {
+      const q = search.toLowerCase()
+      if (!(item.vehicle_label || item.vehicle_model).toLowerCase().includes(q)) return false
+    }
+    if (classFilter !== 'all' && item.class !== classFilter) return false
+    if (isPriceFiltered(priceRange)) {
+      if (item.retail_price < priceRange[0] || item.retail_price > priceRange[1]) return false
+    }
+    return true
+  }).sort((a, b) => {
+    switch (sortBy) {
+      case 'name_asc': return (a.vehicle_label || a.vehicle_model).localeCompare(b.vehicle_label || b.vehicle_model)
+      case 'name_desc': return (b.vehicle_label || b.vehicle_model).localeCompare(a.vehicle_label || a.vehicle_model)
+      case 'price_asc': return a.retail_price - b.retail_price
+      case 'price_desc': return b.retail_price - a.retail_price
+      default: return 0
+    }
+  })
 
-  const rowCount = Math.ceil(items.length / COLUMNS)
+  const rowCount = Math.ceil(filtered.length / COLUMNS)
 
   const virtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => parentRef.current,
     estimateSize: () => ROW_HEIGHT + GAP,
     overscan: 5,
-    onChange: (instance) => {
-      const vItems = instance.getVirtualItems()
-      const lastRow = vItems[vItems.length - 1]
-      if (!lastRow) return
-      const lastItemIndex = (lastRow.index + 1) * COLUMNS
-      if (lastItemIndex >= items.length - 6 && hasMore && !loadingMore) {
-        fetchPage(page + 1, search, classFilter, true)
-      }
-    },
   })
 
   const handleSelect = useCallback((item: StockItem) => {
@@ -206,8 +185,6 @@ export default function ShowroomPage({ data }: Props) {
     }
   }, [])
 
-  const categories = ['all', ...classes]
-
   return (
     <div className="fixed inset-0 flex">
       {/* Left sidebar — vehicle grid */}
@@ -217,7 +194,7 @@ export default function ShowroomPage({ data }: Props) {
           <div className="flex items-center justify-between mb-2">
             <div>
               <h1 className="text-white text-base font-bold">{data.dealershipName}</h1>
-              <p className="text-white/40 text-xs">{total} vehicles available</p>
+              <p className="text-white/40 text-xs">{filtered.length} vehicles available</p>
             </div>
             <Button
               variant="ghost"
@@ -229,36 +206,124 @@ export default function ShowroomPage({ data }: Props) {
             </Button>
           </div>
 
-          {/* Search */}
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-white/30" />
-            <Input
-              placeholder="Search vehicles..."
-              value={search}
-              onChange={(e) => handleSearchChange(e.target.value)}
-              className="pl-8 h-8 text-xs bg-white/5 border-white/10 text-white placeholder:text-white/30"
-            />
+          {/* Search + Filter button */}
+          <div className="flex gap-1.5">
+            <div className="relative flex-1">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-white/30" />
+              <Input
+                placeholder="Search vehicles..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="pl-8 h-8 text-xs bg-white/5 border-white/10 text-white placeholder:text-white/30"
+              />
+            </div>
+            <button
+              onClick={() => setShowFilters(!showFilters)}
+              className={`h-8 px-2.5 rounded-md border flex items-center gap-1.5 text-xs shrink-0 transition-colors ${
+                showFilters || activeFilterCount > 0
+                  ? 'border-accent bg-accent/10 text-accent'
+                  : 'border-white/10 bg-white/5 text-white/50 hover:bg-white/10 hover:text-white/70'
+              }`}
+            >
+              <SlidersHorizontal className="h-3.5 w-3.5" />
+              {activeFilterCount > 0 && (
+                <span className="bg-accent text-accent-foreground text-[9px] font-bold rounded-full w-4 h-4 flex items-center justify-center">
+                  {activeFilterCount}
+                </span>
+              )}
+            </button>
           </div>
         </div>
 
-        {/* Category tabs */}
-        {categories.length > 1 && (
-          <div className="px-3 pb-2">
-            <div className="flex flex-wrap gap-1">
-              {categories.map((cat) => (
-                <button
-                  key={cat}
-                  onClick={() => handleClassChange(cat)}
-                  className={`shrink-0 px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors capitalize ${
-                    classFilter === cat
-                      ? 'bg-accent text-accent-foreground'
-                      : 'bg-white/5 text-white/50 hover:bg-white/10 hover:text-white/70'
-                  }`}
-                >
-                  {cat === 'all' ? 'All' : cat}
-                </button>
-              ))}
+        {/* Filters panel */}
+        {showFilters && (
+          <div className="px-3 pb-2 space-y-3">
+            {/* Price range — dual slider */}
+            {maxRetailPrice > 0 && (
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <p className="text-[10px] uppercase tracking-wider text-white/40">Price Range</p>
+                  {isPriceFiltered(priceRange) && (
+                    <button
+                      onClick={() => setPriceRange([0, maxRetailPrice])}
+                      className="text-[9px] text-accent hover:text-accent/80"
+                    >
+                      Reset
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 mb-1.5">
+                  <span className="text-[10px] text-white/50 w-16 truncate">{formatCurrency(priceRange[0])}</span>
+                  <span className="text-[10px] text-white/30">&mdash;</span>
+                  <span className="text-[10px] text-white/50 w-16 truncate text-right">{formatCurrency(priceRange[1])}</span>
+                </div>
+                <DualRangeSlider
+                  min={0}
+                  max={maxRetailPrice}
+                  value={priceRange}
+                  step={Math.max(1, Math.round(maxRetailPrice / 100))}
+                  onChange={setPriceRange}
+                  onCommit={() => {}}
+                />
+              </div>
+            )}
+
+            {/* Sort */}
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-white/40 mb-1.5">Sort By</p>
+              <div className="flex flex-wrap gap-1">
+                {([
+                  ['name_asc', 'A — Z'],
+                  ['name_desc', 'Z — A'],
+                  ['price_asc', 'Price Low'],
+                  ['price_desc', 'Price High'],
+                ] as const).map(([value, label]) => (
+                  <button
+                    key={value}
+                    onClick={() => setSortBy(value)}
+                    className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
+                      sortBy === value
+                        ? 'bg-accent text-accent-foreground'
+                        : 'bg-white/5 text-white/40 hover:bg-white/10 hover:text-white/60'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
             </div>
+
+            {/* Class filter */}
+            {classes.length > 0 && (
+              <div>
+                <p className="text-[10px] uppercase tracking-wider text-white/40 mb-1.5">Class</p>
+                <div className="flex flex-wrap gap-1">
+                  <button
+                    onClick={() => setClassFilter('all')}
+                    className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
+                      classFilter === 'all'
+                        ? 'bg-accent text-accent-foreground'
+                        : 'bg-white/5 text-white/40 hover:bg-white/10 hover:text-white/60'
+                    }`}
+                  >
+                    All
+                  </button>
+                  {classes.map((cls) => (
+                    <button
+                      key={cls}
+                      onClick={() => setClassFilter(cls)}
+                      className={`px-2 py-0.5 rounded text-[10px] font-medium capitalize transition-colors ${
+                        classFilter === cls
+                          ? 'bg-accent text-accent-foreground'
+                          : 'bg-white/5 text-white/40 hover:bg-white/10 hover:text-white/60'
+                      }`}
+                    >
+                      {cls}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -269,7 +334,7 @@ export default function ShowroomPage({ data }: Props) {
               <div className="flex items-center justify-center py-12">
                 <Loader2 className="h-5 w-5 animate-spin text-white/30" />
               </div>
-            ) : items.length === 0 ? (
+            ) : filtered.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-12 text-white/30">
                 <Car className="h-8 w-8 mb-2" />
                 <p className="text-xs">No vehicles found</p>
@@ -278,7 +343,7 @@ export default function ShowroomPage({ data }: Props) {
               <div className="relative w-full" style={{ height: `${virtualizer.getTotalSize()}px` }}>
                 {virtualizer.getVirtualItems().map((virtualRow) => {
                   const startIdx = virtualRow.index * COLUMNS
-                  const rowItems = items.slice(startIdx, startIdx + COLUMNS)
+                  const rowItems = filtered.slice(startIdx, startIdx + COLUMNS)
 
                   return (
                     <div
@@ -303,8 +368,8 @@ export default function ShowroomPage({ data }: Props) {
                                 : 'bg-white/5 hover:bg-white/8'
                             }`}
                           >
-                            {item.image ? (
-                              <img src={item.image} alt={item.vehicle_label} className="w-full aspect-[16/9] object-cover rounded-t-sm" />
+                            {getVehicleImage(item.image, item.vehicle_model) ? (
+                              <img src={getVehicleImage(item.image, item.vehicle_model)!} alt={item.vehicle_label} loading="lazy" className="w-full aspect-[16/9] object-contain rounded-t-sm bg-black/50" />
                             ) : (
                               <div className="w-full aspect-[16/9] bg-white/5 flex items-center justify-center rounded-t-sm">
                                 <Car className="h-5 w-5 text-white/10" />
@@ -327,11 +392,6 @@ export default function ShowroomPage({ data }: Props) {
                     </div>
                   )
                 })}
-              </div>
-            )}
-            {loadingMore && (
-              <div className="flex justify-center py-3">
-                <Loader2 className="h-4 w-4 animate-spin text-white/30" />
               </div>
             )}
           </div>
@@ -426,6 +486,58 @@ export default function ShowroomPage({ data }: Props) {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+function DualRangeSlider({ min, max, value, step, onChange, onCommit }: {
+  min: number
+  max: number
+  value: [number, number]
+  step: number
+  onChange: (value: [number, number]) => void
+  onCommit: (value: [number, number]) => void
+}) {
+  const pctLow = max > min ? ((value[0] - min) / (max - min)) * 100 : 0
+  const pctHigh = max > min ? ((value[1] - min) / (max - min)) * 100 : 100
+
+  return (
+    <div className="relative h-5 flex items-center">
+      {/* Track background */}
+      <div className="absolute left-0 right-0 h-1 bg-white/10 rounded-full" />
+      {/* Active range */}
+      <div
+        className="absolute h-1 bg-accent/60 rounded-full"
+        style={{ left: `${pctLow}%`, right: `${100 - pctHigh}%` }}
+      />
+      {/* Min slider */}
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value[0]}
+        onChange={(e) => {
+          const v = Math.min(parseInt(e.target.value), value[1] - step)
+          onChange([v, value[1]])
+        }}
+        onMouseUp={() => onCommit(value)}
+        className="absolute w-full appearance-none bg-transparent pointer-events-none [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:bg-accent [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:relative [&::-webkit-slider-thumb]:z-10"
+      />
+      {/* Max slider */}
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value[1]}
+        onChange={(e) => {
+          const v = Math.max(parseInt(e.target.value), value[0] + step)
+          onChange([value[0], v])
+        }}
+        onMouseUp={() => onCommit(value)}
+        className="absolute w-full appearance-none bg-transparent pointer-events-none [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:bg-accent [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:relative [&::-webkit-slider-thumb]:z-20"
+      />
     </div>
   )
 }

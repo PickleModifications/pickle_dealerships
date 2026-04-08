@@ -275,8 +275,27 @@ RegisterNUICallback("getShowroomStock", function(data, cb)
         pageSize = data.pageSize or 20,
         search = data.search or '',
         classFilter = data.classFilter or 'all',
+        minPrice = data.minPrice,
+        maxPrice = data.maxPrice,
+        sortBy = data.sortBy,
     })
     cb(result or { items = {}, total = 0, page = 1, pageSize = 20 })
+end)
+
+RegisterNUICallback("setRetailPrice", function(data, cb)
+    local location = ResolveLocation(data)
+    if not location then
+        cb({ success = false, message = "Could not resolve location." })
+        return
+    end
+
+    local success, err = lib.callback.await('pickle_dealerships:setRetailPrice', false, location, data.stockId, data.retailPrice)
+    if success then
+        cb({ success = true })
+    else
+        ShowNotification(err or "Failed to set retail price.")
+        cb({ success = false, message = err or "Failed." })
+    end
 end)
 
 RegisterNUICallback("setDisplaySpot", function(data, cb)

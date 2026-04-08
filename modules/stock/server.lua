@@ -138,7 +138,18 @@ lib.callback.register('pickle_dealerships:getShowroomStock', function(source, da
     local pageSize = tonumber(data.pageSize) or 20
     local search = data.search or ''
     local classFilter = data.classFilter or 'all'
+    local minPrice = tonumber(data.minPrice)
+    local maxPrice = tonumber(data.maxPrice)
+    local sortBy = data.sortBy or 'name_asc'
     local offset = (page - 1) * pageSize
+
+    local sortMap = {
+        name_asc = 'ds.vehicle_label ASC',
+        name_desc = 'ds.vehicle_label DESC',
+        price_asc = 'ds.retail_price ASC',
+        price_desc = 'ds.retail_price DESC',
+    }
+    local orderBy = sortMap[sortBy] or 'ds.vehicle_label ASC'
 
     local where = 'ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.delivered_at IS NOT NULL AND ds.delivered_at <= NOW()'
     local params = { dealership.id }
@@ -155,6 +166,16 @@ lib.callback.register('pickle_dealerships:getShowroomStock', function(source, da
         params[#params + 1] = classFilter
     end
 
+    if minPrice then
+        where = where .. ' AND ds.retail_price >= ?'
+        params[#params + 1] = minPrice
+    end
+
+    if maxPrice then
+        where = where .. ' AND ds.retail_price <= ?'
+        params[#params + 1] = maxPrice
+    end
+
     local countParams = { table.unpack(params) }
     local countResult = MySQL.scalar.await(
         ('SELECT COUNT(*) FROM dealership_stock ds LEFT JOIN wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE %s'):format(where),
@@ -165,13 +186,14 @@ lib.callback.register('pickle_dealerships:getShowroomStock', function(source, da
     params[#params + 1] = offset
 
     local results = MySQL.query.await(
-        ('SELECT ds.*, wc.image, wc.class FROM dealership_stock ds LEFT JOIN wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE %s ORDER BY ds.vehicle_label ASC LIMIT ? OFFSET ?'):format(where),
+        ('SELECT ds.*, wc.image, wc.class FROM dealership_stock ds LEFT JOIN wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE %s ORDER BY %s LIMIT ? OFFSET ?'):format(where, orderBy),
         params
     )
 
-    -- Get all distinct classes for filter tabs (only on first unfiltered page)
+    -- Get filter metadata (only on first unfiltered page)
     local classes = {}
-    if page == 1 and search == '' and classFilter == 'all' then
+    local highestPrice = 0
+    if page == 1 and search == '' and classFilter == 'all' and not minPrice and not maxPrice then
         local classRows = MySQL.query.await(
             'SELECT DISTINCT wc.class FROM dealership_stock ds LEFT JOIN wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.delivered_at IS NOT NULL AND ds.delivered_at <= NOW() AND wc.class IS NOT NULL ORDER BY wc.class',
             { dealership.id }
@@ -181,6 +203,11 @@ lib.callback.register('pickle_dealerships:getShowroomStock', function(source, da
                 classes[#classes + 1] = row.class
             end
         end
+
+        highestPrice = MySQL.scalar.await(
+            'SELECT COALESCE(MAX(ds.retail_price), 0) FROM dealership_stock ds WHERE ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.delivered_at IS NOT NULL AND ds.delivered_at <= NOW()',
+            { dealership.id }
+        ) or 0
     end
 
     return {
@@ -189,6 +216,7 @@ lib.callback.register('pickle_dealerships:getShowroomStock', function(source, da
         page = page,
         pageSize = pageSize,
         classes = classes,
+        maxRetailPrice = tonumber(highestPrice) or 0,
     }
 end)
 

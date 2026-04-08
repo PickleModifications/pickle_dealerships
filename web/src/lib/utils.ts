@@ -26,6 +26,15 @@ export function closeNui() {
   fetchNui('close')
 }
 
+/**
+ * Returns the vehicle image URL: DB image if available, otherwise falls back to local vehicle_images folder.
+ */
+export function getVehicleImage(dbImage: string | null | undefined, model: string): string | null {
+  if (dbImage) return dbImage
+  if (model) return `nui://pickle_dealerships/vehicle_images/${model.toLowerCase()}.webp`
+  return null
+}
+
 export function hexToHSL(hex: string): { h: number; s: number; l: number } {
   hex = hex.replace('#', '')
   if (hex.length === 8) hex = hex.substring(2) // strip alpha prefix (AARRGGBB → RRGGBB)

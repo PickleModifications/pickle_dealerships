@@ -18,6 +18,7 @@ export interface DealershipData {
   catalogId?: number
   model?: string
   label?: string
+  vehicleClass?: string
   uploadConfig?: {
     url: string
     field: string

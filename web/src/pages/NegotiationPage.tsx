@@ -5,7 +5,7 @@ import { Button } from '../components/ui/button'
 import { ScrollArea } from '../components/ui/scroll-area'
 import { Separator } from '../components/ui/separator'
 import { Progress } from '../components/ui/progress'
-import { fetchNui, formatCurrency } from '../lib/utils'
+import { fetchNui, formatCurrency, getVehicleImage } from '../lib/utils'
 import {
   X, MessageCircle, HandCoins, Shield, Sparkles, Clock, Target,
   ThumbsUp, Candy, UserX, Car
@@ -273,9 +273,9 @@ export default function NegotiationPage({ profile, greeting, onClose }: Props) {
                     className="cursor-pointer hover:border-accent/50 transition-colors overflow-hidden"
                     onClick={() => handlePresent(item)}
                   >
-                    {item.image ? (
+                    {getVehicleImage(item.image, item.vehicle_model) ? (
                       <div className="w-full aspect-video bg-muted">
-                        <img src={item.image} alt={item.vehicle_label} className="w-full h-full object-cover" />
+                        <img src={getVehicleImage(item.image, item.vehicle_model)!} alt={item.vehicle_label} loading="lazy" className="w-full h-full object-contain" />
                       </div>
                     ) : (
                       <div className="w-full aspect-video bg-muted flex items-center justify-center">
@@ -289,7 +289,7 @@ export default function NegotiationPage({ profile, greeting, onClose }: Props) {
                           <span className="text-xs text-muted-foreground">x{item.quantity}</span>
                         )}
                       </div>
-                      <p className="text-xs text-muted-foreground font-mono">{item.vehicle_model}</p>
+                      <p className="text-xs text-muted-foreground capitalize">{item.class || 'Vehicle'}</p>
                       <p className="text-sm font-bold text-accent mt-1">{formatCurrency(item.retail_price)}</p>
                     </CardContent>
                   </Card>

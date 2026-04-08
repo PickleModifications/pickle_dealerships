@@ -140,8 +140,11 @@ local function StartShowroomCamThread()
 end
 
 --- Clean up the showroom and restore player state
-local function CleanupShowroom()
+--- If skipFadeIn is true, the screen stays faded out (caller handles fade-in)
+local function CleanupShowroom(skipFadeIn)
     if not ShowroomState then return end
+
+    local locationKey = ShowroomState.locationKey
 
     ShowroomCamThread = nil
     CloseNui()
@@ -171,11 +174,12 @@ local function CleanupShowroom()
     DisplayRadar(true)
     DisplayHud(true)
 
-    local locationKey = ShowroomState.locationKey
     ShowroomState = nil
 
-    DoScreenFadeIn(500)
-    while not IsScreenFadedIn() do Wait(0) end
+    if not skipFadeIn then
+        DoScreenFadeIn(500)
+        while not IsScreenFadedIn() do Wait(0) end
+    end
 
     -- Refresh display vehicles in case a purchase was made
     TriggerEvent('pickle_dealerships:refreshDisplay', locationKey)
@@ -307,17 +311,21 @@ RegisterNUICallback("showroomPurchase", function(data, cb)
         return
     end
 
-    -- Clean up showroom (restores player position, camera, etc.)
-    CleanupShowroom()
+    -- Clean up showroom but keep screen faded out
+    local location = data.location
+    CleanupShowroom(true)
 
-    -- Spawn the purchased vehicle at the dealership spawn point and warp player in
-    local cfg = DealershipConfigs[data.location]
+    -- Spawn the purchased vehicle and warp player in while screen is still black
+    local cfg = DealershipConfigs[location]
     local spawnPoint = cfg and cfg.spawnPoint
     if spawnPoint then
         SpawnPurchasedVehicle(result.model, spawnPoint, color, secColor)
     end
 
-    ShowNotification(_L("showroom_purchase_success"):format(result.label or result.model))
+    -- Now fade in with player already in the vehicle
+    DoScreenFadeIn(500)
+
+    ShowNotification(_L("showroom_purchase_success", result.label or result.model))
     cb(result)
 end)
 

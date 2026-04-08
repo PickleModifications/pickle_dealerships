@@ -6,7 +6,7 @@ import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog'
-import { fetchNui, formatCurrency } from '../lib/utils'
+import { fetchNui, formatCurrency, getVehicleImage } from '../lib/utils'
 import { SkeletonList } from '../components/ui/skeleton'
 import { Plus, Trash2, Pencil, Search, Car, Camera, Loader2 } from 'lucide-react'
 
@@ -216,8 +216,8 @@ export default function AdminCatalogPage() {
                   <Card className="overflow-hidden h-full">
                     <CardContent className="p-3 flex items-center justify-between h-full">
                       <div className="flex items-center gap-3 min-w-0 flex-1">
-                        {v.image ? (
-                          <img src={v.image} alt={v.label} className="h-10 w-[72px] object-cover rounded bg-muted shrink-0" />
+                        {getVehicleImage(v.image, v.model) ? (
+                          <img src={getVehicleImage(v.image, v.model)!} alt={v.label} loading="lazy" className="h-10 w-[72px] object-contain rounded bg-muted shrink-0" />
                         ) : (
                           <div className="h-10 w-[72px] rounded bg-muted flex items-center justify-center shrink-0">
                             <Car className="h-5 w-5 text-muted-foreground/50" />

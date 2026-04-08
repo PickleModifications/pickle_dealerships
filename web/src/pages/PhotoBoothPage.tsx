@@ -282,7 +282,7 @@ export default function PhotoBoothPage({ data }: Props) {
       {/* Unified HUD bar — anchored below crop area */}
       <PhotoHud
         label={data.label || data.model}
-        model={data.model}
+        subtitle={data.vehicleClass}
         onCapture={handleCapture}
         onCancel={handleCancel}
       />
@@ -318,9 +318,9 @@ function CropOverlay() {
   )
 }
 
-function PhotoHud({ label, model, onCapture, onCancel }: {
+function PhotoHud({ label, subtitle, onCapture, onCancel }: {
   label?: string
-  model?: string
+  subtitle?: string
   onCapture: () => void
   onCancel: () => void
 }) {
@@ -345,7 +345,7 @@ function PhotoHud({ label, model, onCapture, onCancel }: {
       {/* Vehicle name */}
       <div className="shrink-0 min-w-0 flex flex-col justify-center">
         <p className="text-white text-sm font-semibold truncate leading-none">{label}</p>
-        <p className="text-white/40 text-[10px] font-mono leading-none mt-0.5">{model}</p>
+        {subtitle && <p className="text-white/40 text-[10px] capitalize leading-none mt-0.5">{subtitle}</p>}
       </div>
 
       {/* Controls — pushed to center via flex */}
