@@ -2,12 +2,13 @@ import { useEffect, useState } from 'react'
 import { Button } from '../components/ui/button'
 import { Badge } from '../components/ui/badge'
 import { Card, CardContent } from '../components/ui/card'
+import { Input } from '../components/ui/input'
 import { Separator } from '../components/ui/separator'
 import { ScrollArea } from '../components/ui/scroll-area'
 import { fetchNui, formatCurrency } from '../lib/utils'
 import {
   X, LayoutDashboard, Package, Truck, Users, LineChart, Ticket,
-  DollarSign, Store,
+  DollarSign, Store, Clock, Percent,
 } from 'lucide-react'
 import type { DealershipData } from '../types'
 
@@ -30,6 +31,7 @@ type ManagementTab =
   | 'employees'
   | 'finances'
   | 'coupons'
+  | 'commission'
 
 interface NavItem {
   id: ManagementTab
@@ -45,6 +47,7 @@ const navItems: NavItem[] = [
   { id: 'catalog', label: 'Order Vehicles', icon: <Truck className="h-4 w-4" /> },
   { id: 'employees', label: 'Employees', icon: <Users className="h-4 w-4" />, minRole: ['owner', 'manager', 'admin'] },
   { id: 'finances', label: 'Finances', icon: <LineChart className="h-4 w-4" />, minRole: ['owner', 'manager', 'admin'] },
+  { id: 'commission', label: 'Commission', icon: <Percent className="h-4 w-4" />, minRole: ['owner', 'admin'] },
   { id: 'coupons', label: 'Coupons', icon: <Ticket className="h-4 w-4" />, minRole: ['owner', 'admin'], feature: 'coupons' },
 ]
 
@@ -63,6 +66,7 @@ export default function ManagementPage({ data, onClose }: Props) {
   const [activeTab, setActiveTab] = useState<ManagementTab>(data.initialTab as ManagementTab || 'dashboard')
   const [balance, setBalance] = useState<number | null>(null)
   const [purchasing, setPurchasing] = useState(false)
+  const [isClockedIn, setIsClockedIn] = useState(false)
 
   useEffect(() => {
     if (data.isOwned !== false) {
@@ -138,6 +142,8 @@ export default function ManagementPage({ data, onClose }: Props) {
         return <FinancesPage {...subProps} />
       case 'coupons':
         return <CouponsPage {...subProps} />
+      case 'commission':
+        return <CommissionSettings dealershipId={data.dealershipId} />
       default:
         return null
     }
@@ -158,8 +164,7 @@ export default function ManagementPage({ data, onClose }: Props) {
             </Badge>
           </div>
           {balance !== null && (
-            <p className="text-xs text-muted-foreground mt-2 flex items-center gap-1">
-              <DollarSign className="h-3 w-3" />
+            <p className="text-xs font-semibold text-emerald-400 mt-2">
               {formatCurrency(balance)}
             </p>
           )}
@@ -188,21 +193,117 @@ export default function ManagementPage({ data, onClose }: Props) {
 
         <Separator />
 
-        <div className="p-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="w-full justify-start gap-2 text-muted-foreground"
+        <div className="p-2 space-y-0.5">
+          {data.role !== 'customer' && (
+            <button
+              onClick={() => {
+                fetchNui(isClockedIn ? 'clockOut' : 'clockIn', { dealershipId: data.dealershipId }).then((res: any) => {
+                  if (res?.success) setIsClockedIn(!isClockedIn)
+                })
+              }}
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-colors ${
+                isClockedIn
+                  ? 'text-emerald-400 hover:bg-muted'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+              }`}
+            >
+              <Clock className="h-4 w-4" />
+              {isClockedIn ? 'Clock Out' : 'Clock In'}
+            </button>
+          )}
+          <button
             onClick={onClose}
+            className="w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-sm text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
           >
             <X className="h-4 w-4" /> Close
-          </Button>
+          </button>
         </div>
       </div>
 
       {/* Content area */}
       <div className="flex-1 flex flex-col overflow-hidden">
         {renderContent()}
+      </div>
+    </div>
+  )
+}
+
+function CommissionSettings({ dealershipId }: { dealershipId: number }) {
+  const [salesperson, setSalesperson] = useState('')
+  const [manager, setManager] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    fetchNui<{ success: boolean; rates: { salesperson: number; manager: number } }>('getCommissionRates', {
+      dealershipId,
+    }).then((res) => {
+      if (res.success && res.rates) {
+        setSalesperson(String(res.rates.salesperson))
+        setManager(String(res.rates.manager))
+      }
+      setLoading(false)
+    }).catch(() => setLoading(false))
+  }, [dealershipId])
+
+  const handleSave = () => {
+    setSaving(true)
+    fetchNui('setCommissionRates', {
+      dealershipId,
+      salesperson: parseInt(salesperson) || 0,
+      manager: parseInt(manager) || 0,
+    }).then(() => setSaving(false)).catch(() => setSaving(false))
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-48 text-muted-foreground">
+        Loading...
+      </div>
+    )
+  }
+
+  return (
+    <div className="p-5 space-y-4">
+      <div>
+        <h2 className="text-lg font-bold">Commission Rates</h2>
+        <p className="text-sm text-muted-foreground">Set commission percentage per role. Applied when employees make a sale.</p>
+      </div>
+
+      <div className="space-y-3 max-w-sm">
+        <div>
+          <label className="text-sm font-medium">Salesperson</label>
+          <div className="flex items-center gap-2 mt-1">
+            <Input
+              type="number"
+              min="0"
+              max="100"
+              value={salesperson}
+              onChange={(e) => setSalesperson(e.target.value)}
+              className="w-24"
+            />
+            <span className="text-sm text-muted-foreground">%</span>
+          </div>
+        </div>
+
+        <div>
+          <label className="text-sm font-medium">Manager</label>
+          <div className="flex items-center gap-2 mt-1">
+            <Input
+              type="number"
+              min="0"
+              max="100"
+              value={manager}
+              onChange={(e) => setManager(e.target.value)}
+              className="w-24"
+            />
+            <span className="text-sm text-muted-foreground">%</span>
+          </div>
+        </div>
+
+        <Button onClick={handleSave} disabled={saving} className="mt-2">
+          {saving ? 'Saving...' : 'Save Rates'}
+        </Button>
       </div>
     </div>
   )

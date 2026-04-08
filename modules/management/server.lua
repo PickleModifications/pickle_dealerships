@@ -286,6 +286,51 @@ lib.callback.register("pickle_dealerships:validateCoupon", function(source, data
     }
 end)
 
+--- Get commission rates per role
+lib.callback.register("pickle_dealerships:getCommissionRates", function(source, dealershipId)
+    if not CanPlayerManage(source, dealershipId) then
+        return nil
+    end
+
+    local dealership = GetDealership(dealershipId)
+    if not dealership then return nil end
+
+    local meta = dealership.metadata
+    if type(meta) == "string" then meta = json.decode(meta) or {} end
+    if type(meta) ~= "table" then meta = {} end
+
+    local defaultRate = math.floor((Config.DefaultCommission or 0.08) * 100)
+    return {
+        salesperson = meta.commissionRates and meta.commissionRates.salesperson or defaultRate,
+        manager = meta.commissionRates and meta.commissionRates.manager or defaultRate,
+    }
+end)
+
+--- Set commission rates per role
+lib.callback.register("pickle_dealerships:setCommissionRates", function(source, data)
+    local dealershipId = data.dealershipId
+    if not CanPlayerManage(source, dealershipId) then
+        return { success = false, message = "You do not have permission." }
+    end
+
+    local dealership = GetDealership(dealershipId)
+    if not dealership then return { success = false, message = "Dealership not found." } end
+
+    local meta = dealership.metadata
+    if type(meta) == "string" then meta = json.decode(meta) or {} end
+    if type(meta) ~= "table" then meta = {} end
+
+    meta.commissionRates = {
+        salesperson = math.max(0, math.min(100, tonumber(data.salesperson) or 0)),
+        manager = math.max(0, math.min(100, tonumber(data.manager) or 0)),
+    }
+
+    MySQL.update.await("UPDATE dealerships SET metadata = ? WHERE id = ?", { json.encode(meta), dealershipId })
+    UpdateDealershipCache(dealershipId, { metadata = meta })
+
+    return { success = true, message = "Commission rates updated." }
+end)
+
 --- Get comprehensive dashboard stats
 lib.callback.register("pickle_dealerships:getDashboardStats", function(source, dealershipId)
     if not CanPlayerManage(source, dealershipId) then

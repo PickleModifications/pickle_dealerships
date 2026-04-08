@@ -113,13 +113,21 @@ local function ProcessSale(source, dealershipId, stockItem, paymentMethod, coupo
 
     -- Commission
     if soldByCitizenid then
+        -- Look up employee role, then get role-based commission from dealership metadata
         local empRows = MySQL.query.await(
-            "SELECT `commission_rate` FROM `dealership_employees` WHERE `dealership_id` = ? AND `citizenid` = ? LIMIT 1",
+            "SELECT `role`, `commission_rate` FROM `dealership_employees` WHERE `dealership_id` = ? AND `citizenid` = ? LIMIT 1",
             { tonumber(dealershipId), soldByCitizenid }
         )
-        local commissionRate = Config.DefaultCommission
-        if empRows and empRows[1] and tonumber(empRows[1].commission_rate) > 0 then
-            commissionRate = tonumber(empRows[1].commission_rate) / 100
+        local commissionRate = Config.DefaultCommission or 0.08
+        if empRows and empRows[1] then
+            local empRole = empRows[1].role or 'salesperson'
+            -- Check dealership metadata for role-based commission rates
+            local dealership = GetDealership(tonumber(dealershipId))
+            local meta = dealership and dealership.metadata
+            if type(meta) == "string" then meta = json.decode(meta) or {} end
+            if type(meta) == "table" and meta.commissionRates and meta.commissionRates[empRole] then
+                commissionRate = tonumber(meta.commissionRates[empRole]) / 100
+            end
         end
         local commission = math.floor(finalPrice * commissionRate)
         if commission > 0 then

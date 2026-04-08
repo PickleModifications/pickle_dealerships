@@ -34,6 +34,7 @@ export default function EmployeesPage({ data, onClose }: Props) {
   const [loadingPlayers, setLoadingPlayers] = useState(false)
   const [selectedPlayer, setSelectedPlayer] = useState<string>('')
   const [isClockedIn, setIsClockedIn] = useState(false)
+  const [commissionRates, setCommissionRates] = useState<Record<string, number>>({})
 
   const loadEmployees = () => {
     if (!getCached(cacheKey)) setLoading(true)
@@ -47,7 +48,14 @@ export default function EmployeesPage({ data, onClose }: Props) {
     }).catch(() => setLoading(false))
   }
 
-  useEffect(() => { loadEmployees() }, [data.dealershipId])
+  useEffect(() => {
+    loadEmployees()
+    fetchNui<{ success: boolean; rates: Record<string, number> }>('getCommissionRates', {
+      dealershipId: data.dealershipId,
+    }).then((res) => {
+      if (res.success && res.rates) setCommissionRates(res.rates)
+    }).catch(() => {})
+  }, [data.dealershipId])
 
   const openHireDialog = () => {
     setHireDialogOpen(true)
@@ -179,7 +187,7 @@ export default function EmployeesPage({ data, onClose }: Props) {
                     <div className="flex items-center gap-3">
                       <div className="text-right">
                         <p className="text-xs text-muted-foreground">Commission</p>
-                        <p className="text-sm font-medium">{Math.round(emp.commission_rate * 100)}%</p>
+                        <p className="text-sm font-medium">{commissionRates[emp.role] ?? Math.round(emp.commission_rate * 100)}%</p>
                       </div>
 
                       {canManage && (

@@ -97,6 +97,30 @@ RegisterNUICallback("getCoupons", function(data, cb)
     end
 end)
 
+RegisterNUICallback("getCommissionRates", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:getCommissionRates", false, data.dealershipId)
+    if result then
+        cb({ success = true, rates = result })
+    else
+        cb({ success = false, message = "Failed to fetch commission rates." })
+    end
+end)
+
+RegisterNUICallback("setCommissionRates", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:setCommissionRates", false, {
+        dealershipId = data.dealershipId,
+        salesperson  = data.salesperson,
+        manager      = data.manager,
+    })
+    if result and result.success then
+        ShowNotification(result.message)
+        cb({ success = true })
+    else
+        ShowNotification(result and result.message or "Failed to update commission rates.")
+        cb({ success = false, message = result and result.message or "Failed." })
+    end
+end)
+
 RegisterNUICallback("getDashboardStats", function(data, cb)
     local result = lib.callback.await("pickle_dealerships:getDashboardStats", false, data.dealershipId)
     if result then

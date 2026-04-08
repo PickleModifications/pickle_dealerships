@@ -3,6 +3,49 @@ local npcSpawnTimer = 0
 local currentNPCInteraction = nil
 local isOnDuty = false
 local currentDealershipId = nil
+local npcCam = nil
+
+--- Create a camera focused on the NPC for immersive interaction
+---@param npcPed number
+local function StartNPCCamera(npcPed)
+    if npcCam then
+        DestroyCam(npcCam, false)
+    end
+
+    local playerPed = PlayerPedId()
+    local npcCoords = GetEntityCoords(npcPed)
+    local playerCoords = GetEntityCoords(playerPed)
+
+    -- Position camera slightly to the side, between player and NPC, focused on NPC upper body
+    local midX = (npcCoords.x + playerCoords.x) / 2
+    local midY = (npcCoords.y + playerCoords.y) / 2
+    local camZ = npcCoords.z + 0.5
+
+    -- Offset camera to the right of the player-NPC axis
+    local dx = npcCoords.x - playerCoords.x
+    local dy = npcCoords.y - playerCoords.y
+    local dist = math.sqrt(dx * dx + dy * dy)
+    local perpX = -dy / dist * 0.8
+    local perpY = dx / dist * 0.8
+
+    local camX = midX + perpX
+    local camY = midY + perpY
+
+    npcCam = CreateCam("DEFAULT_SCRIPTED_CAMERA", true)
+    SetCamCoord(npcCam, camX, camY, camZ)
+    PointCamAtCoord(npcCam, npcCoords.x, npcCoords.y, npcCoords.z + 0.3)
+    SetCamActive(npcCam, true)
+    RenderScriptCams(true, true, 800, true, true)
+end
+
+--- Destroy the NPC interaction camera
+local function StopNPCCamera()
+    if npcCam then
+        RenderScriptCams(false, true, 800, true, true)
+        DestroyCam(npcCam, false)
+        npcCam = nil
+    end
+end
 
 --- Clean up a single NPC
 ---@param npcData table
@@ -21,6 +64,9 @@ local function CleanupAllNPCs()
         CleanupNPC(activeNPCs[i])
         table.remove(activeNPCs, i)
     end
+    StopNPCCamera()
+    DisplayRadar(true)
+    DisplayHud(true)
     currentNPCInteraction = nil
 end
 
@@ -139,6 +185,14 @@ local function SpawnNPCCustomer(dealershipId, dealershipConfig)
 
             -- Cancel patience timer
             npcData.assisted = true
+
+            -- Zoom camera on NPC
+            Wait(500) -- let NPC turn first
+            StartNPCCamera(ped)
+
+            -- Hide HUD
+            DisplayRadar(false)
+            DisplayHud(false)
 
             -- Send NUI message to open negotiation UI
             local typePref = npcData.profile.typePreference or "default"
@@ -301,6 +355,11 @@ RegisterNUICallback("completeNPCSale", function(data, cb)
             DismissNPC(npcData)
         end)
 
+        -- Restore camera and HUD
+        StopNPCCamera()
+        DisplayRadar(true)
+        DisplayHud(true)
+
         -- Close NUI
         SendNUIMessage({ type = "closeNPCNegotiation" })
         SetNuiFocus(false, false)
@@ -317,6 +376,10 @@ RegisterNUICallback("dismissNPC", function(_, cb)
     if currentNPCInteraction then
         local npcData = currentNPCInteraction.npcData
         DismissNPC(npcData)
+
+        StopNPCCamera()
+        DisplayRadar(true)
+        DisplayHud(true)
 
         SendNUIMessage({ type = "closeNPCNegotiation" })
         SetNuiFocus(false, false)

@@ -74,6 +74,8 @@ function App() {
           fetchNui('photoBoothCancel', {})
         } else if (page === 'showroom') {
           fetchNui('showroomClose', {})
+        } else if (page === 'negotiation') {
+          fetchNui('dismissNPC', {})
         } else {
           handleClose()
         }
@@ -126,7 +128,7 @@ function App() {
     <>
       <InteractText />
       {visible && page && (
-        page === 'photoBooth' || page === 'showroom' ? (
+        page === 'photoBooth' || page === 'showroom' || page === 'negotiation' ? (
           <div key={openKey} className="fixed inset-0 z-50">
             {renderPage()}
           </div>
