@@ -6,6 +6,7 @@ import { Input } from '../components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { fetchNui, formatCurrency, getVehicleImage } from '../lib/utils'
 import { Search, X, CreditCard, Banknote, Car, Loader2, Palette, SlidersHorizontal } from 'lucide-react'
+import VehicleImg from '../components/VehicleImg'
 import type { DealershipData, StockItem, VehicleColor } from '../types'
 
 interface Props {
@@ -14,7 +15,6 @@ interface Props {
 }
 
 const COLUMNS = 2
-const ROW_HEIGHT = 120
 const GAP = 10
 
 const PRESET_COLORS = [
@@ -104,7 +104,8 @@ export default function ShowroomPage({ data }: Props) {
   const virtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => ROW_HEIGHT + GAP,
+    estimateSize: () => 130,
+    measureElement: (el: Element) => el.getBoundingClientRect().height,
     overscan: 5,
   })
 
@@ -348,11 +349,12 @@ export default function ShowroomPage({ data }: Props) {
                   return (
                     <div
                       key={virtualRow.index}
+                      data-index={virtualRow.index}
+                      ref={virtualizer.measureElement}
                       className="absolute top-0 left-0 w-full grid grid-cols-2"
                       style={{
-                        height: `${ROW_HEIGHT}px`,
-                        rowGap: `${GAP}px`,
-                        columnGap: '2px',
+                        columnGap: '4px',
+                        paddingBottom: `${GAP}px`,
                         transform: `translateY(${virtualRow.start}px)`,
                       }}
                     >
@@ -368,13 +370,7 @@ export default function ShowroomPage({ data }: Props) {
                                 : 'bg-white/5 hover:bg-white/8'
                             }`}
                           >
-                            {getVehicleImage(item.image, item.vehicle_model) ? (
-                              <img src={getVehicleImage(item.image, item.vehicle_model)!} alt={item.vehicle_label} loading="lazy" className="w-full aspect-[16/9] object-contain rounded-t-sm bg-black/50" />
-                            ) : (
-                              <div className="w-full aspect-[16/9] bg-white/5 flex items-center justify-center rounded-t-sm">
-                                <Car className="h-5 w-5 text-white/10" />
-                              </div>
-                            )}
+                            <VehicleImg image={item.image} model={item.vehicle_model} alt={item.vehicle_label} className="w-full aspect-[16/9] object-contain rounded-t-sm bg-black/50" fallbackClassName="w-full aspect-[16/9] bg-white/5 flex items-center justify-center rounded-t-sm" iconClassName="h-5 w-5 text-white/10" />
                             <div className="p-2">
                               <div className="flex items-start justify-between gap-1">
                                 <p className="text-white text-[11px] font-semibold truncate leading-tight">

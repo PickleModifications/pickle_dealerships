@@ -10,6 +10,7 @@ import {
   X, MessageCircle, HandCoins, Shield, Sparkles, Clock, Target,
   ThumbsUp, Candy, UserX, Car
 } from 'lucide-react'
+import VehicleImg from '../components/VehicleImg'
 import type { NPCProfile, StockItem } from '../types'
 
 interface Props {
@@ -273,15 +274,7 @@ export default function NegotiationPage({ profile, greeting, onClose }: Props) {
                     className="cursor-pointer hover:border-accent/50 transition-colors overflow-hidden"
                     onClick={() => handlePresent(item)}
                   >
-                    {getVehicleImage(item.image, item.vehicle_model) ? (
-                      <div className="w-full aspect-video bg-muted">
-                        <img src={getVehicleImage(item.image, item.vehicle_model)!} alt={item.vehicle_label} loading="lazy" className="w-full h-full object-contain" />
-                      </div>
-                    ) : (
-                      <div className="w-full aspect-video bg-muted flex items-center justify-center">
-                        <Car className="h-6 w-6 text-muted-foreground/30" />
-                      </div>
-                    )}
+                    <VehicleImg image={item.image} model={item.vehicle_model} alt={item.vehicle_label} className="w-full aspect-video object-contain bg-muted" fallbackClassName="w-full aspect-video bg-muted flex items-center justify-center" iconClassName="h-6 w-6 text-muted-foreground/30" />
                     <CardContent className="p-3">
                       <div className="flex items-center gap-2">
                         <p className="text-sm font-semibold">{item.vehicle_label || item.vehicle_model}</p>

@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { fetchNui, formatCurrency, getVehicleImage } from '../lib/utils'
 import { SkeletonList } from '../components/ui/skeleton'
 import { Plus, Trash2, Pencil, Search, Car, Camera, Loader2 } from 'lucide-react'
+import VehicleImg from '../components/VehicleImg'
 
 interface CatalogVehicle {
   id: number
@@ -216,13 +217,7 @@ export default function AdminCatalogPage() {
                   <Card className="overflow-hidden h-full">
                     <CardContent className="p-3 flex items-center justify-between h-full">
                       <div className="flex items-center gap-3 min-w-0 flex-1">
-                        {getVehicleImage(v.image, v.model) ? (
-                          <img src={getVehicleImage(v.image, v.model)!} alt={v.label} loading="lazy" className="h-10 w-[72px] object-contain rounded bg-muted shrink-0" />
-                        ) : (
-                          <div className="h-10 w-[72px] rounded bg-muted flex items-center justify-center shrink-0">
-                            <Car className="h-5 w-5 text-muted-foreground/50" />
-                          </div>
-                        )}
+                        <VehicleImg image={v.image} model={v.model} alt={v.label} className="h-10 w-[72px] object-contain rounded bg-muted shrink-0" fallbackClassName="h-10 w-[72px] rounded bg-muted flex items-center justify-center shrink-0" iconClassName="h-5 w-5 text-muted-foreground/50" />
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2">
                             <p className="font-semibold text-sm truncate">{v.label}</p>

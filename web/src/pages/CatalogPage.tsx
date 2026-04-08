@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { fetchNui, formatCurrency, getVehicleImage } from '../lib/utils'
 import { SkeletonCardGrid } from '../components/ui/skeleton'
 import { X, Search, ShoppingCart, Truck, Lock, Loader2, Car, SlidersHorizontal } from 'lucide-react'
+import VehicleImg from '../components/VehicleImg'
 import type { DealershipData, CatalogItem } from '../types'
 
 interface Props {
@@ -25,7 +26,6 @@ interface CatalogResponse {
 
 const PAGE_SIZE = 50
 const COLUMNS = 3
-const ROW_HEIGHT = 240
 const GAP = 12
 
 const tierOrder = ['basic', 'expanded', 'full', 'exclusive']
@@ -110,7 +110,8 @@ export default function CatalogPage({ data, onClose }: Props) {
   const virtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => ROW_HEIGHT + GAP,
+    estimateSize: () => 250,
+    measureElement: (el) => el.getBoundingClientRect().height,
     overscan: 5,
     onChange: (instance) => {
       const vItems = instance.getVirtualItems()
@@ -217,25 +218,21 @@ export default function CatalogPage({ data, onClose }: Props) {
                 return (
                   <div
                     key={virtualRow.index}
+                    data-index={virtualRow.index}
+                    ref={virtualizer.measureElement}
                     className="absolute top-0 left-0 w-full grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3"
                     style={{
-                      height: `${ROW_HEIGHT}px`,
                       gap: `${GAP}px`,
+                      paddingBottom: `${GAP}px`,
                       transform: `translateY(${virtualRow.start}px)`,
                     }}
                   >
                     {rowItems.map((item) => {
                       const locked = !canAccessTier(item.tier, data.tier)
                       return (
-                        <Card key={item.model} className={`overflow-hidden transition-colors flex flex-col h-full ${locked ? 'opacity-50' : 'hover:border-accent/50'}`}>
-                          {getVehicleImage(item.image, item.model) ? (
-                            <img src={getVehicleImage(item.image, item.model)!} alt={item.label} loading="lazy" className="w-full aspect-video object-contain bg-muted" />
-                          ) : (
-                            <div className="w-full aspect-video bg-muted flex items-center justify-center">
-                              <Car className="h-8 w-8 text-muted-foreground/30" />
-                            </div>
-                          )}
-                          <CardContent className="p-3 flex flex-col flex-1">
+                        <Card key={item.model} className={`overflow-hidden transition-colors ${locked ? 'opacity-50' : 'hover:border-accent/50'}`}>
+                          <VehicleImg image={item.image} model={item.model} alt={item.label} className="w-full aspect-video object-contain bg-muted" fallbackClassName="w-full aspect-video bg-muted flex items-center justify-center" iconClassName="h-8 w-8 text-muted-foreground/30" />
+                          <CardContent className="p-3">
                             <div className="flex items-start justify-between mb-1">
                               <div>
                                 <h3 className="font-semibold text-sm">{item.label}</h3>
@@ -245,7 +242,7 @@ export default function CatalogPage({ data, onClose }: Props) {
                                 {item.tier}
                               </Badge>
                             </div>
-                            <div className="flex items-center justify-between mt-auto pt-2">
+                            <div className="flex items-center justify-between mt-2">
                               <p className="font-bold text-sm">{formatCurrency(item.wholesale)}</p>
                               {locked ? (
                                 <Badge variant="outline" className="gap-1 text-muted-foreground">

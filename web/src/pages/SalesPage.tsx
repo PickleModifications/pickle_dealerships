@@ -11,6 +11,7 @@ import { fetchNui, formatCurrency, getVehicleImage } from '../lib/utils'
 import { getCached, setCache, buildKey } from '../lib/cache'
 import { SkeletonCardGrid } from '../components/ui/skeleton'
 import { X, Search, CreditCard, Car, Tag, Banknote } from 'lucide-react'
+import VehicleImg from '../components/VehicleImg'
 import type { DealershipData, StockItem } from '../types'
 
 interface Props {
@@ -113,15 +114,7 @@ export default function SalesPage({ data, onClose }: Props) {
                 className="overflow-hidden hover:border-accent/50 transition-colors cursor-pointer"
                 onClick={() => setSelected(item)}
               >
-                {getVehicleImage(item.image, item.vehicle_model) ? (
-                  <div className="w-full aspect-video bg-muted">
-                    <img src={getVehicleImage(item.image, item.vehicle_model)!} alt={item.vehicle_label} loading="lazy" className="w-full h-full object-contain" />
-                  </div>
-                ) : (
-                  <div className="w-full aspect-video bg-muted flex items-center justify-center">
-                    <Car className="h-8 w-8 text-muted-foreground/30" />
-                  </div>
-                )}
+                <VehicleImg image={item.image} model={item.vehicle_model} alt={item.vehicle_label} className="w-full aspect-video object-contain bg-muted" fallbackClassName="w-full aspect-video bg-muted flex items-center justify-center" iconClassName="h-8 w-8 text-muted-foreground/30" />
                 <CardContent className="p-4">
                   <div className="flex items-start justify-between mb-2">
                     <div>

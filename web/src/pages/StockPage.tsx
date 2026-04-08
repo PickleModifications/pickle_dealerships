@@ -5,12 +5,12 @@ import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { Separator } from '../components/ui/separator'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog'
 import { fetchNui, formatCurrency, getVehicleImage } from '../lib/utils'
 import { getCached, setCache, buildKey } from '../lib/cache'
 import { SkeletonCardGrid } from '../components/ui/skeleton'
 import { X, Search, Package, Truck, Clock, ParkingSquare, Car, Pencil, SlidersHorizontal } from 'lucide-react'
+import VehicleImg from '../components/VehicleImg'
 import type { DealershipData, StockItem } from '../types'
 
 interface Props {
@@ -19,7 +19,6 @@ interface Props {
 }
 
 const COLUMNS = 3
-const ROW_HEIGHT = 120
 const GAP = 8
 
 function getDeliveryStatus(item: StockItem): 'available' | 'in_transit' | 'pending' {
@@ -46,6 +45,7 @@ export default function StockPage({ data, onClose }: Props) {
   const [spotList, setSpotList] = useState<{ id: number; index: number }[]>([])
   const [editingPrice, setEditingPrice] = useState<StockItem | null>(null)
   const [priceInput, setPriceInput] = useState('')
+  const [assigningSpot, setAssigningSpot] = useState<StockItem | null>(null)
   const [classFilter, setClassFilter] = useState('all')
   const [sortBy, setSortBy] = useState<'name_asc' | 'name_desc' | 'price_asc' | 'price_desc'>('name_asc')
   const [priceRange, setPriceRange] = useState<[number, number]>([0, 0])
@@ -141,12 +141,9 @@ export default function StockPage({ data, onClose }: Props) {
   const virtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => ROW_HEIGHT + GAP,
+    estimateSize: () => 128,
     overscan: 5,
   })
-
-  // Calculate offset for virtualizer: in-transit section height
-  const transitSectionHeight = inTransit.length > 0 ? (inTransit.length * 54 + 32) : 0
 
   return (
     <>
@@ -226,69 +223,62 @@ export default function StockPage({ data, onClose }: Props) {
 
       <Separator className="mt-3" />
 
-      <div ref={parentRef} className="flex-1 overflow-auto p-5">
-        {loading ? (
-          <SkeletonCardGrid count={6} columns={3} />
-        ) : filtered.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
-            <Package className="h-10 w-10 mb-2 opacity-50" />
-            <p>{search ? 'No matching vehicles found' : 'No vehicles in stock'}</p>
+      {/* In-transit — not virtualized (usually small count) */}
+      {!loading && inTransit.length > 0 && (
+        <div className="px-5 pt-3">
+          <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1.5">
+            <Truck className="h-3.5 w-3.5" /> In Transit ({inTransit.length})
+          </p>
+          <div className="space-y-1.5">
+            {inTransit.map((item) => (
+              <Card key={item.id} className="overflow-hidden border-dashed opacity-80">
+                <CardContent className="p-3 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <VehicleImg image={item.image} model={item.vehicle_model} alt={item.vehicle_label} className="h-9 w-16 object-contain rounded-md bg-muted shrink-0" fallbackClassName="h-9 w-16 rounded-md bg-amber-500/10 flex items-center justify-center shrink-0" iconClassName="h-4 w-4 text-amber-400" />
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <p className="font-semibold text-sm">{item.vehicle_label || item.vehicle_model}</p>
+                        {(item.quantity || 1) > 1 && (
+                          <Badge variant="secondary" className="text-xs">x{item.quantity}</Badge>
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground capitalize">{item.class || 'Vehicle'}</p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    {item.delivered_at ? (
+                      <Badge variant="outline" className="gap-1 text-amber-400 border-amber-400/30">
+                        <Clock className="h-3 w-3" /> {getTimeRemaining(item.delivered_at)}
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline" className="text-muted-foreground">Awaiting Pickup</Badge>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
           </div>
-        ) : (
-          <>
-            {/* In-transit — not virtualized (usually small count) */}
-            {inTransit.length > 0 && (
-              <div className="mb-4">
-                <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1.5">
-                  <Truck className="h-3.5 w-3.5" /> In Transit ({inTransit.length})
-                </p>
-                <div className="space-y-1.5">
-                  {inTransit.map((item) => (
-                    <Card key={item.id} className="overflow-hidden border-dashed opacity-80">
-                      <CardContent className="p-3 flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          {getVehicleImage(item.image, item.vehicle_model) ? (
-                            <img src={getVehicleImage(item.image, item.vehicle_model)!} alt={item.vehicle_label} loading="lazy" className="h-9 w-16 object-contain rounded-md bg-muted shrink-0" />
-                          ) : (
-                            <div className="h-9 w-16 rounded-md bg-amber-500/10 flex items-center justify-center shrink-0">
-                              <Truck className="h-4 w-4 text-amber-400" />
-                            </div>
-                          )}
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <p className="font-semibold text-sm">{item.vehicle_label || item.vehicle_model}</p>
-                              {(item.quantity || 1) > 1 && (
-                                <Badge variant="secondary" className="text-xs">x{item.quantity}</Badge>
-                              )}
-                            </div>
-                            <p className="text-xs text-muted-foreground capitalize">{item.class || 'Vehicle'}</p>
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          {item.delivered_at ? (
-                            <Badge variant="outline" className="gap-1 text-amber-400 border-amber-400/30">
-                              <Clock className="h-3 w-3" /> {getTimeRemaining(item.delivered_at)}
-                            </Badge>
-                          ) : (
-                            <Badge variant="outline" className="text-muted-foreground">Awaiting Pickup</Badge>
-                          )}
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
-              </div>
-            )}
+        </div>
+      )}
 
-            {/* Available — virtualized 3-column grid */}
-            {available.length > 0 && (
-              <div>
-                {inTransit.length > 0 && (
-                  <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1.5">
-                    <Package className="h-3.5 w-3.5" /> Available ({available.length})
-                  </p>
-                )}
-                <div className="relative w-full" style={{ height: `${virtualizer.getTotalSize()}px` }}>
+      {/* Available — virtualized 3-column grid */}
+      <div className="relative flex-1 flex flex-col overflow-hidden">
+        <div ref={parentRef} className="flex-1 overflow-auto p-5">
+          {loading ? (
+            <SkeletonCardGrid count={6} columns={3} />
+          ) : filtered.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
+              <Package className="h-10 w-10 mb-2 opacity-50" />
+              <p>{search ? 'No matching vehicles found' : 'No vehicles in stock'}</p>
+            </div>
+          ) : available.length > 0 ? (
+            <div>
+              {inTransit.length > 0 && (
+                <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1.5">
+                  <Package className="h-3.5 w-3.5" /> Available ({available.length})
+                </p>
+              )}
+              <div className="relative w-full" style={{ height: `${virtualizer.getTotalSize()}px` }}>
                   {virtualizer.getVirtualItems().map((virtualRow) => {
                     const startIdx = virtualRow.index * COLUMNS
                     const rowItems = available.slice(startIdx, startIdx + COLUMNS)
@@ -298,98 +288,76 @@ export default function StockPage({ data, onClose }: Props) {
                         key={virtualRow.index}
                         className="absolute top-0 left-0 w-full grid grid-cols-3"
                         style={{
-                          height: `${ROW_HEIGHT}px`,
+                          height: '120px',
                           gap: `${GAP}px`,
                           transform: `translateY(${virtualRow.start}px)`,
                         }}
                       >
                         {rowItems.map((item) => (
-                          <Card key={item.id} className="overflow-hidden hover:border-accent/50 transition-colors h-full">
-                            <CardContent className="p-3 flex flex-col h-full">
-                              <div className="flex items-start justify-between">
-                                <div className="flex items-start gap-2 flex-1 min-w-0">
-                                  {getVehicleImage(item.image, item.vehicle_model) ? (
-                                    <img src={getVehicleImage(item.image, item.vehicle_model)!} alt={item.vehicle_label} loading="lazy" className="h-10 w-[70px] object-contain rounded-md bg-muted shrink-0" />
-                                  ) : (
-                                    <div className="h-10 w-[70px] rounded-md bg-muted flex items-center justify-center shrink-0">
-                                      <Car className="h-4 w-4 text-muted-foreground/30" />
-                                    </div>
-                                  )}
-                                  <div className="flex-1 min-w-0">
-                                    <div className="flex items-center gap-1.5">
-                                      <h3 className="font-semibold text-sm truncate">{item.vehicle_label || item.vehicle_model}</h3>
-                                      {(item.quantity || 1) > 1 && (
-                                        <Badge variant="secondary" className="text-[10px] shrink-0">x{item.quantity}</Badge>
-                                      )}
-                                    </div>
-                                    <p className="text-[11px] text-muted-foreground capitalize">{item.class || 'Vehicle'}</p>
-                                  </div>
-                                </div>
-                                {canManage && (
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-6 w-6 shrink-0"
-                                    title="Edit retail price"
-                                    onClick={() => { setEditingPrice(item); setPriceInput(String(item.retail_price)) }}
-                                  >
-                                    <Pencil className="h-3 w-3" />
-                                  </Button>
-                                )}
-                              </div>
-                              <div className="flex items-center justify-between mt-auto pt-2 border-t border-border">
-                                <div className="flex gap-3">
-                                  <div>
-                                    <p className="text-[10px] text-muted-foreground">Retail</p>
-                                    <p className="text-sm font-bold text-accent">{formatCurrency(item.retail_price)}</p>
-                                  </div>
-                                  <div>
-                                    <p className="text-[10px] text-muted-foreground">Profit</p>
-                                    <p className="text-sm font-medium text-emerald-400">
-                                      {formatCurrency(item.retail_price - item.wholesale_cost)}
-                                    </p>
-                                  </div>
-                                </div>
-                                {canManage && (
-                                  <div className="flex items-center">
-                                    {item.display_spot ? (
-                                      <Button
-                                        variant="outline"
-                                        size="sm"
-                                        className="gap-1 text-[11px] h-7"
-                                        onClick={() => handleSetSpot(item.id, null)}
-                                      >
-                                        Spot #{item.display_spot} &times;
-                                      </Button>
-                                    ) : (
-                                      <Select onValueChange={(val) => handleSetSpot(item.id, parseInt(val))}>
-                                        <SelectTrigger className="w-[100px] h-7 text-[11px]">
-                                          <ParkingSquare className="h-3 w-3 mr-1" />
-                                          <SelectValue placeholder="Display..." />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                          {spotList.map((spot) => (
-                                            <SelectItem key={spot.id} value={String(spot.id)} disabled={takenSpots.has(spot.id)}>
-                                              Spot #{spot.index} {takenSpots.has(spot.id) ? '(taken)' : ''}
-                                            </SelectItem>
-                                          ))}
-                                        </SelectContent>
-                                      </Select>
+                          <div key={item.id} className="rounded-lg border border-border hover:border-accent/50 transition-colors h-full p-3 flex flex-col overflow-hidden">
+                            <div className="flex items-start justify-between">
+                              <div className="flex items-start gap-2 flex-1 min-w-0">
+                                <VehicleImg image={item.image} model={item.vehicle_model} alt={item.vehicle_label} className="h-10 w-[70px] object-contain rounded-md bg-muted shrink-0" fallbackClassName="h-10 w-[70px] rounded-md bg-muted flex items-center justify-center shrink-0" />
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="font-semibold text-sm truncate">{item.vehicle_label || item.vehicle_model}</span>
+                                    {(item.quantity || 1) > 1 && (
+                                      <span className="text-[10px] bg-muted px-1 rounded shrink-0">x{item.quantity}</span>
                                     )}
                                   </div>
-                                )}
+                                  <p className="text-[11px] text-muted-foreground capitalize">{item.class || 'Vehicle'}</p>
+                                </div>
                               </div>
-                            </CardContent>
-                          </Card>
+                              {canManage && (
+                                <button
+                                  className="h-6 w-6 shrink-0 flex items-center justify-center rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+                                  title="Edit retail price"
+                                  onClick={() => { setEditingPrice(item); setPriceInput(String(item.retail_price)) }}
+                                >
+                                  <Pencil className="h-3 w-3" />
+                                </button>
+                              )}
+                            </div>
+                            <div className="flex items-center justify-between mt-auto pt-2 border-t border-border">
+                              <div className="flex gap-3">
+                                <div>
+                                  <p className="text-[10px] text-muted-foreground">Retail</p>
+                                  <p className="text-sm font-bold text-accent">{formatCurrency(item.retail_price)}</p>
+                                </div>
+                                <div>
+                                  <p className="text-[10px] text-muted-foreground">Profit</p>
+                                  <p className="text-sm font-medium text-emerald-400">
+                                    {formatCurrency(item.retail_price - item.wholesale_cost)}
+                                  </p>
+                                </div>
+                              </div>
+                              {canManage && (
+                                item.display_spot ? (
+                                  <button
+                                    className="text-[11px] h-7 px-2 rounded border border-border hover:bg-muted flex items-center gap-1"
+                                    onClick={() => handleSetSpot(item.id, null)}
+                                  >
+                                    Spot #{item.display_spot} &times;
+                                  </button>
+                                ) : (
+                                  <button
+                                    className="text-[11px] h-7 px-2 rounded border border-border hover:bg-muted flex items-center gap-1 text-muted-foreground"
+                                    onClick={() => setAssigningSpot(item)}
+                                  >
+                                    <ParkingSquare className="h-3 w-3" /> Display...
+                                  </button>
+                                )
+                              )}
+                            </div>
+                          </div>
                         ))}
                       </div>
                     )
                   })}
                 </div>
-              </div>
-            )}
-          </>
-        )}
+            </div>
+          ) : null}
+        </div>
       </div>
 
       {/* Edit retail price dialog */}
@@ -423,6 +391,38 @@ export default function StockPage({ data, onClose }: Props) {
               <Button variant="outline" className="flex-1" onClick={() => setEditingPrice(null)}>Cancel</Button>
               <Button className="flex-1" onClick={handleSetPrice}>Save Price</Button>
             </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Assign display spot dialog */}
+      <Dialog open={!!assigningSpot} onOpenChange={(open) => { if (!open) setAssigningSpot(null) }}>
+        <DialogContent onClose={() => setAssigningSpot(null)}>
+          <DialogHeader>
+            <DialogTitle>Assign Display Spot</DialogTitle>
+            <DialogDescription>{assigningSpot?.vehicle_label || assigningSpot?.vehicle_model}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 pt-2">
+            {spotList.map((spot) => (
+              <button
+                key={spot.id}
+                disabled={takenSpots.has(spot.id)}
+                onClick={() => {
+                  if (assigningSpot) {
+                    handleSetSpot(assigningSpot.id, spot.id)
+                    setAssigningSpot(null)
+                  }
+                }}
+                className={`w-full text-left px-3 py-2 rounded-md text-sm transition-colors ${
+                  takenSpots.has(spot.id)
+                    ? 'opacity-40 cursor-not-allowed bg-muted'
+                    : 'hover:bg-accent hover:text-accent-foreground bg-muted'
+                }`}
+              >
+                Spot #{spot.index} {takenSpots.has(spot.id) ? '(taken)' : ''}
+              </button>
+            ))}
+            <Button variant="outline" className="w-full mt-2" onClick={() => setAssigningSpot(null)}>Cancel</Button>
           </div>
         </DialogContent>
       </Dialog>
