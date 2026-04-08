@@ -15,7 +15,7 @@ local testDriveOrigin = nil
 
 -- ─── Vehicle Spawn Helper ───────────────────────────────────────────────────
 
-local function SpawnPurchasedVehicle(model, spawnPoint, color)
+function SpawnPurchasedVehicle(model, spawnPoint, color, secondaryColor)
     local modelHash = type(model) == "number" and model or joaat(model)
     RequestModel(modelHash)
     local timeout = 0
@@ -36,7 +36,12 @@ local function SpawnPurchasedVehicle(model, spawnPoint, color)
     if color and type(color) == "table" then
         if color.r and color.g and color.b then
             SetVehicleCustomPrimaryColour(veh, color.r, color.g, color.b)
-            SetVehicleCustomSecondaryColour(veh, color.r, color.g, color.b)
+            -- Use secondary color if provided, otherwise fall back to primary
+            if secondaryColor and type(secondaryColor) == "table" and secondaryColor.r then
+                SetVehicleCustomSecondaryColour(veh, secondaryColor.r, secondaryColor.g, secondaryColor.b)
+            else
+                SetVehicleCustomSecondaryColour(veh, color.r, color.g, color.b)
+            end
         elseif color.colorId then
             SetVehicleColours(veh, color.colorId, color.colorId)
         end
@@ -97,7 +102,11 @@ RegisterNUICallback("purchaseVehicle", function(data, cb)
             if color and type(color) == "string" then
                 color = json.decode(color)
             end
-            SpawnPurchasedVehicle(result.model, spawnPoint, color)
+            local secColor = data.secondaryColor
+            if secColor and type(secColor) == "string" then
+                secColor = json.decode(secColor)
+            end
+            SpawnPurchasedVehicle(result.model, spawnPoint, color, secColor)
         end
 
         ShowNotification(("Congratulations! You purchased a %s."):format(result.label or result.model))

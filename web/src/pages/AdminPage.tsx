@@ -239,6 +239,15 @@ export default function AdminPage({ data, onClose }: Props) {
                 onPlace={() => startGizmo('interactionPoint', 'sales')}
                 onRemove={() => removePosition('interactionPoint', { pointType: 'sales' })}
               />
+              <PositionRow
+                icon={<Car className="h-4 w-4" />}
+                label="Showroom Vehicle Position"
+                description="Where the showroom preview vehicle spawns"
+                placed={!!interactions.showroom}
+                coords={interactions.showroom}
+                onPlace={() => startGizmo('interactionPoint', 'showroom')}
+                onRemove={() => removePosition('interactionPoint', { pointType: 'showroom' })}
+              />
 
               {/* Display Spots */}
               <Card>

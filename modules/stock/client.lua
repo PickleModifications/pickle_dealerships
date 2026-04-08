@@ -263,6 +263,22 @@ RegisterNUICallback("getStock", function(data, cb)
     cb(result or {})
 end)
 
+RegisterNUICallback("getShowroomStock", function(data, cb)
+    local location = ResolveLocation(data)
+    if not location then
+        cb({ items = {}, total = 0, page = 1, pageSize = 20 })
+        return
+    end
+    local result = lib.callback.await('pickle_dealerships:getShowroomStock', false, {
+        location = location,
+        page = data.page or 1,
+        pageSize = data.pageSize or 20,
+        search = data.search or '',
+        classFilter = data.classFilter or 'all',
+    })
+    cb(result or { items = {}, total = 0, page = 1, pageSize = 20 })
+end)
+
 RegisterNUICallback("setDisplaySpot", function(data, cb)
     local location = ResolveLocation(data)
     if not location then

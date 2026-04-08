@@ -19,6 +19,7 @@ Language["en"] = {
     interact_management = "Management",
     interact_sales = "Sales Tablet",
     interact_kiosk = "Self-Service Kiosk",
+    showroom_purchase_success = "Congratulations! You purchased a %s.",
     interact_assist_customer = "Assist Customer",
     interact_view_vehicle = "View Vehicle",
     interact_clock_in = "Clock In",

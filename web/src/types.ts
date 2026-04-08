@@ -60,6 +60,7 @@ export interface StockItem {
   sold_by: string | null
   quantity: number
   image?: string | null
+  class?: string
 }
 
 export interface VehicleColor {
@@ -194,6 +195,7 @@ export type PageType =
   | 'management'
   | 'vehicleDetails'
   | 'photoBooth'
+  | 'showroom'
 
 export interface NuiMessage {
   type: string

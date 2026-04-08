@@ -15,6 +15,7 @@ import NegotiationPage from './pages/NegotiationPage'
 import AdminPage from './pages/AdminPage'
 import ManagementPage from './pages/ManagementPage'
 import PhotoBoothPage from './pages/PhotoBoothPage'
+import ShowroomPage from './pages/ShowroomPage'
 import InteractText from './components/InteractText'
 
 function App() {
@@ -71,6 +72,8 @@ function App() {
       if (e.key === 'Escape' && visible) {
         if (page === 'photoBooth') {
           fetchNui('photoBoothCancel', {})
+        } else if (page === 'showroom') {
+          fetchNui('showroomClose', {})
         } else {
           handleClose()
         }
@@ -112,6 +115,8 @@ function App() {
         return <AdminPage {...props} />
       case 'photoBooth':
         return <PhotoBoothPage {...props} />
+      case 'showroom':
+        return <ShowroomPage {...props} />
       default:
         return null
     }
@@ -121,7 +126,7 @@ function App() {
     <>
       <InteractText />
       {visible && page && (
-        page === 'photoBooth' ? (
+        page === 'photoBooth' || page === 'showroom' ? (
           <div key={openKey} className="fixed inset-0 z-50">
             {renderPage()}
           </div>

@@ -586,3 +586,52 @@ RegisterCommand("dealership", function(source, args, rawCommand)
 
     TriggerClientEvent("pickle_dealerships:openAdminPanel", source)
 end, false)
+
+--- Debug: add all catalog vehicles to a dealership's stock
+RegisterCommand("dealership_stockall", function(source, args, rawCommand)
+    if source == 0 then
+        print("This command cannot be used from the console.")
+        return
+    end
+
+    if not IsPlayerAdmin(source) then
+        ShowNotification(source, "You do not have permission to use this command.")
+        return
+    end
+
+    local dealershipId = tonumber(args[1])
+    if not dealershipId then
+        ShowNotification(source, "Usage: /dealership_stockall [dealership_id]")
+        return
+    end
+
+    local dealership = MySQL.single.await("SELECT * FROM dealerships WHERE id = ?", { dealershipId })
+    if not dealership then
+        ShowNotification(source, "Dealership not found.")
+        return
+    end
+
+    local catalog = MySQL.query.await("SELECT * FROM wholesale_catalog", {})
+    if not catalog or #catalog == 0 then
+        ShowNotification(source, "No vehicles in catalog.")
+        return
+    end
+
+    local count = 0
+    for _, v in ipairs(catalog) do
+        local exists = MySQL.single.await(
+            "SELECT id FROM dealership_stock WHERE dealership_id = ? AND vehicle_model = ? AND sold_at IS NULL",
+            { dealershipId, v.model }
+        )
+        if not exists then
+            MySQL.insert.await(
+                "INSERT INTO dealership_stock (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, ordered_at, delivered_at) VALUES (?, ?, ?, ?, ?, NOW(), NOW())",
+                { dealershipId, v.model, v.label or v.model, v.wholesale, math.floor(v.wholesale * 1.3) }
+            )
+            count = count + 1
+        end
+    end
+
+    ShowNotification(source, ("Added %d vehicles to dealership #%d stock."):format(count, dealershipId))
+    TriggerClientEvent('pickle_dealerships:refreshDisplay', -1, dealership.location)
+end, false)

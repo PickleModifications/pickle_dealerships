@@ -291,16 +291,24 @@ function OpenManagementMenu(locationKey)
     })
 end
 
---- Opens the sales tablet UI
+--- Opens the sales point — immersive showroom if a showroom position is set, otherwise sales tablet
 function OpenSalesTablet(locationKey)
+    local data = lib.callback.await('pickle_dealerships:getDealershipData', false, locationKey)
+    if not data then return end
+
+    -- If a showroom position is set, open the immersive showroom
+    local cfg = DealershipConfigs[locationKey]
+    if cfg and cfg.interactionPoints and cfg.interactionPoints.showroom then
+        StartShowroom(locationKey, data)
+        return
+    end
+
+    -- Fallback to regular sales tablet (requires employee role)
     local role = lib.callback.await('pickle_dealerships:getPlayerRole', false, locationKey)
     if not role then
         ShowNotification(_L("no_permission"))
         return
     end
-
-    local data = lib.callback.await('pickle_dealerships:getDealershipData', false, locationKey)
-    if not data then return end
 
     OpenNui('sales', {
         dealershipId = data.id,

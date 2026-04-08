@@ -114,11 +114,82 @@ lib.callback.register('pickle_dealerships:getStock', function(source, locationKe
     if not dealership then return {} end
 
     local stock = MySQL.query.await(
-        'SELECT ds.*, wc.image FROM dealership_stock ds LEFT JOIN wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL ORDER BY ds.ordered_at DESC',
+        'SELECT ds.*, wc.image, wc.class FROM dealership_stock ds LEFT JOIN wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL ORDER BY ds.ordered_at DESC',
         { dealership.id }
     )
 
     return stock or {}
+end)
+
+--- Returns paginated available stock for the showroom
+---@param source number
+---@param data table
+lib.callback.register('pickle_dealerships:getShowroomStock', function(source, data)
+    local locationKey = data and data.location
+    if not locationKey then return { items = {}, total = 0, page = 1, pageSize = 20 } end
+
+    local dealership = MySQL.single.await(
+        'SELECT * FROM dealerships WHERE location = ?',
+        { locationKey }
+    )
+    if not dealership then return { items = {}, total = 0, page = 1, pageSize = 20 } end
+
+    local page = tonumber(data.page) or 1
+    local pageSize = tonumber(data.pageSize) or 20
+    local search = data.search or ''
+    local classFilter = data.classFilter or 'all'
+    local offset = (page - 1) * pageSize
+
+    local where = 'ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.delivered_at IS NOT NULL AND ds.delivered_at <= NOW()'
+    local params = { dealership.id }
+
+    if search ~= '' then
+        where = where .. ' AND (ds.vehicle_label LIKE ? OR ds.vehicle_model LIKE ?)'
+        local pattern = '%' .. search .. '%'
+        params[#params + 1] = pattern
+        params[#params + 1] = pattern
+    end
+
+    if classFilter ~= 'all' then
+        where = where .. ' AND wc.class = ?'
+        params[#params + 1] = classFilter
+    end
+
+    local countParams = { table.unpack(params) }
+    local countResult = MySQL.scalar.await(
+        ('SELECT COUNT(*) FROM dealership_stock ds LEFT JOIN wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE %s'):format(where),
+        countParams
+    )
+
+    params[#params + 1] = pageSize
+    params[#params + 1] = offset
+
+    local results = MySQL.query.await(
+        ('SELECT ds.*, wc.image, wc.class FROM dealership_stock ds LEFT JOIN wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE %s ORDER BY ds.vehicle_label ASC LIMIT ? OFFSET ?'):format(where),
+        params
+    )
+
+    -- Get all distinct classes for filter tabs (only on first unfiltered page)
+    local classes = {}
+    if page == 1 and search == '' and classFilter == 'all' then
+        local classRows = MySQL.query.await(
+            'SELECT DISTINCT wc.class FROM dealership_stock ds LEFT JOIN wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.delivered_at IS NOT NULL AND ds.delivered_at <= NOW() AND wc.class IS NOT NULL ORDER BY wc.class',
+            { dealership.id }
+        )
+        if classRows then
+            for _, row in ipairs(classRows) do
+                classes[#classes + 1] = row.class
+            end
+        end
+    end
+
+    return {
+        items = results or {},
+        total = countResult or 0,
+        page = page,
+        pageSize = pageSize,
+        classes = classes,
+    }
 end)
 
 --- Owner/manager orders a vehicle from wholesale catalog
