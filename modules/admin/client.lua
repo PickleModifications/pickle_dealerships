@@ -8,6 +8,12 @@ RegisterNetEvent("pickle_dealerships:openAdminPanel", function()
     })
 end)
 
+--- Fetch online players for admin dropdown
+RegisterNUICallback("adminGetOnlinePlayers", function(_, cb)
+    local result = lib.callback.await("pickle_dealerships:adminGetOnlinePlayers", false)
+    cb(result or {})
+end)
+
 --- Fetch all dealerships for admin view
 RegisterNUICallback("adminGetAllDealerships", function(_, cb)
     local result = lib.callback.await("pickle_dealerships:adminGetAllDealerships", false)

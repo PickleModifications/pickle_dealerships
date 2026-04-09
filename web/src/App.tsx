@@ -47,11 +47,16 @@ function App() {
     setNpcProfile(null)
   })
 
-  useNuiEvent('openNPCNegotiation', (payload: { profile: NPCProfile; greeting: string }) => {
+  useNuiEvent('openNPCNegotiation', (payload: { profile: NPCProfile; greeting: string; accentColor?: string }) => {
     setNpcProfile(payload.profile)
     setNpcGreeting(payload.greeting)
     setPage('negotiation')
     setVisible(true)
+    if (payload.accentColor) {
+      const hsl = hexToHSL(payload.accentColor)
+      document.documentElement.style.setProperty('--accent', `${hsl.h} ${hsl.s}% ${hsl.l}%`)
+      document.documentElement.style.setProperty('--ring', `${hsl.h} ${hsl.s}% ${hsl.l}%`)
+    }
   })
 
   useNuiEvent('closeNPCNegotiation', () => {
@@ -60,7 +65,7 @@ function App() {
     setNpcProfile(null)
   })
 
-  useNuiEvent('openNPCShowroom', (payload: { profile: NPCProfile; greeting: string; dealershipId: number; location: string; dealershipName: string }) => {
+  useNuiEvent('openNPCShowroom', (payload: { profile: NPCProfile; greeting: string; dealershipId: number; location: string; dealershipName: string; accentColor?: string }) => {
     setNpcProfile(payload.profile)
     setNpcGreeting(payload.greeting)
     setData({
@@ -73,6 +78,11 @@ function App() {
     setPage('npcShowroom')
     setVisible(true)
     setOpenKey((k) => k + 1)
+    if (payload.accentColor) {
+      const hsl = hexToHSL(payload.accentColor)
+      document.documentElement.style.setProperty('--accent', `${hsl.h} ${hsl.s}% ${hsl.l}%`)
+      document.documentElement.style.setProperty('--ring', `${hsl.h} ${hsl.s}% ${hsl.l}%`)
+    }
   })
 
   useNuiEvent('closeNPCShowroom', () => {

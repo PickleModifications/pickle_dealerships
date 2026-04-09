@@ -213,7 +213,7 @@ Config.NPCCustomers = {
         muscle = 10, offroad = 5, coupe = 10,
     },
 
-    flexibilityRange = { min = 0.3, max = 1.0 },
+    flexibilityRange = { min = 0.2, max = 0.6 },
 
     pedModels = {
         budget = {

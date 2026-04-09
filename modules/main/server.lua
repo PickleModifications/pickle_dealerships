@@ -97,11 +97,11 @@ lib.callback.register('pickle_dealerships:getDealerships', function(source)
                 name = cached.name,
                 mode = cached.mode or "player-owned",
                 type = cached.type or "car",
-                owner_citizenid = cached.owner_citizenid,
+                owner_identifier = cached.owner_identifier,
                 purchasePrice = resolved.purchasePrice,
                 tier = cached.tier or 1,
                 stockCount = stockCount,
-                owned = cached.owner_citizenid ~= nil,
+                owned = cached.owner_identifier ~= nil,
                 resolvedConfig = resolved,
             }
         end
@@ -143,7 +143,7 @@ lib.callback.register('pickle_dealerships:getDealershipData', function(source, l
         name = cached and cached.name or resolved.label,
         mode = resolved.mode,
         type = resolved.type or 'car',
-        owner_citizenid = cached and cached.owner_citizenid or nil,
+        owner_identifier = cached and cached.owner_identifier or nil,
         balance = cached and cached.balance or 0,
         tier = cached and cached.tier or 1,
         purchasePrice = resolved.purchasePrice or 0,
@@ -171,13 +171,13 @@ lib.callback.register('pickle_dealerships:purchaseDealership', function(source, 
         return { success = false, error = 'This dealership cannot be purchased.' }
     end
 
-    if cached and cached.owner_citizenid then
+    if cached and cached.owner_identifier then
         return { success = false, error = 'This dealership is already owned.' }
     end
 
     local price = resolved.purchasePrice or 0
-    local citizenid = GetIdentifier(source)
-    if not citizenid then
+    local identifier = GetIdentifier(source)
+    if not identifier then
         return { success = false, error = 'Unable to identify player.' }
     end
 
@@ -192,10 +192,10 @@ lib.callback.register('pickle_dealerships:purchaseDealership', function(source, 
     end
 
     MySQL.update.await(
-        'UPDATE dealerships SET owner_citizenid = ?, balance = 0 WHERE id = ?',
-        { citizenid, cached.id }
+        'UPDATE dealerships SET owner_identifier = ?, balance = 0 WHERE id = ?',
+        { identifier, cached.id }
     )
-    cached.owner_citizenid = citizenid
+    cached.owner_identifier = identifier
     cached.balance = 0
 
     ShowNotification(source, 'You purchased the dealership for $' .. price .. '!')
@@ -212,12 +212,12 @@ lib.callback.register('pickle_dealerships:sellDealership', function(source, loca
         return { success = false, error = 'Invalid dealership location.' }
     end
 
-    if not cached or not cached.owner_citizenid then
+    if not cached or not cached.owner_identifier then
         return { success = false, error = 'This dealership is not owned.' }
     end
 
-    local citizenid = GetIdentifier(source)
-    if citizenid ~= cached.owner_citizenid then
+    local identifier = GetIdentifier(source)
+    if identifier ~= cached.owner_identifier then
         return { success = false, error = 'You do not own this dealership.' }
     end
 
@@ -226,9 +226,9 @@ lib.callback.register('pickle_dealerships:sellDealership', function(source, loca
 
     MySQL.update.await('DELETE FROM dealership_employees WHERE dealership_id = ?', { cached.id })
     MySQL.update.await('DELETE FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NULL', { cached.id })
-    MySQL.update.await('UPDATE dealerships SET owner_citizenid = NULL, balance = 0 WHERE id = ?', { cached.id })
+    MySQL.update.await('UPDATE dealerships SET owner_identifier = NULL, balance = 0 WHERE id = ?', { cached.id })
 
-    cached.owner_citizenid = nil
+    cached.owner_identifier = nil
     cached.balance = 0
 
     AddMoney(source, refund, 'bank')
@@ -244,12 +244,12 @@ end)
 ---@param newName string
 lib.callback.register('pickle_dealerships:renameDealership', function(source, locationKey, newName)
     local cached = GetCachedByLocation(locationKey)
-    if not cached or not cached.owner_citizenid then
+    if not cached or not cached.owner_identifier then
         return { success = false, error = 'This dealership is not owned.' }
     end
 
-    local citizenid = GetIdentifier(source)
-    if citizenid ~= cached.owner_citizenid then
+    local identifier = GetIdentifier(source)
+    if identifier ~= cached.owner_identifier then
         return { success = false, error = 'You do not own this dealership.' }
     end
 
@@ -268,8 +268,8 @@ end)
 ---@param source number
 ---@param locationKey string
 lib.callback.register('pickle_dealerships:getPlayerRole', function(source, locationKey)
-    local citizenid = GetIdentifier(source)
-    if not citizenid then return nil end
+    local identifier = GetIdentifier(source)
+    if not identifier then return nil end
 
     local cached = GetCachedByLocation(locationKey)
     if not cached then return nil end
@@ -279,8 +279,8 @@ lib.callback.register('pickle_dealerships:getPlayerRole', function(source, locat
         return 'admin'
     end
 
-    -- Owner check (by citizenid)
-    if cached.owner_citizenid == citizenid then
+    -- Owner check (by identifier)
+    if cached.owner_identifier == identifier then
         return 'owner'
     end
 
@@ -294,7 +294,7 @@ lib.callback.register('pickle_dealerships:getPlayerRole', function(source, locat
             for _, g in ipairs(grades) do
                 if g.level > maxGrade then maxGrade = g.level end
             end
-            -- Highest grade = owner (if also citizenid match, already handled above)
+            -- Highest grade = owner (if also identifier match, already handled above)
             -- Grade >= half of max = manager
             -- Lower grades = salesperson
             if grade >= maxGrade then

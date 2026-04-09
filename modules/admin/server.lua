@@ -5,7 +5,41 @@ lib.callback.register("pickle_dealerships:adminGetAllDealerships", function(sour
     end
 
     local dealerships = MySQL.query.await("SELECT * FROM dealerships ORDER BY id ASC")
+    if dealerships then
+        for _, d in ipairs(dealerships) do
+            if d.owner_identifier then
+                local ownerSource = GetSourceFromIdentifier(d.owner_identifier)
+                if ownerSource then
+                    d.owner_name = GetPlayerCharacterName(ownerSource) or GetPlayerName(ownerSource)
+                else
+                    d.owner_name = d.owner_identifier
+                end
+            end
+        end
+    end
     return dealerships or {}
+end)
+
+--- Get online players for admin dropdown
+lib.callback.register("pickle_dealerships:adminGetOnlinePlayers", function(source)
+    if not IsPlayerAdmin(source) then return {} end
+
+    local players = {}
+    for _, playerId in ipairs(GetPlayers()) do
+        local src = tonumber(playerId)
+        if src then
+            local identifier = GetIdentifier(src)
+            local name = GetPlayerCharacterName(src) or GetPlayerName(src)
+            if identifier and name then
+                players[#players + 1] = {
+                    source = src,
+                    name = name,
+                    identifier = identifier,
+                }
+            end
+        end
+    end
+    return players
 end)
 
 --- Force transfer dealership ownership
@@ -26,8 +60,8 @@ lib.callback.register("pickle_dealerships:adminTransferOwnership", function(sour
         return { success = false, message = "Dealership not found." }
     end
 
-    MySQL.update.await("UPDATE dealerships SET owner_id = ? WHERE id = ?", { newOwnerId, dealershipId })
-    UpdateDealershipCache(dealershipId, { owner_id = newOwnerId })
+    MySQL.update.await("UPDATE dealerships SET owner_identifier = ? WHERE id = ?", { newOwnerId, dealershipId })
+    UpdateDealershipCache(dealershipId, { owner_identifier = newOwnerId })
 
     local adminName = GetPlayerCharacterName(source) or GetPlayerName(source)
     AddLedgerEntry(dealershipId, "admin", 0, "Ownership transferred to " .. newOwnerId .. " by admin " .. adminName, GetIdentifier(source))

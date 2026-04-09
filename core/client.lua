@@ -198,7 +198,7 @@ function SelectInteraction(index, selection, targetData)
     local pcoords = GetEntityCoords(PlayerPedId())
     local data = Interactions[index]
     if not data then return end
-    if not data.target and #(data.coords - pcoords) > (data.interactRadius and data.interactRadius or Config.InteractDistance) then
+    if not data.target and not data.targetPed and #(data.coords - pcoords) > (data.interactRadius and data.interactRadius or Config.InteractDistance) then
         return ShowNotification(_L("interact_far"))
     end
     Interactions[index].selected(selection, targetData)
@@ -235,8 +235,11 @@ function CreateInteraction(data, selected)
         end
     end
     if Config.UseTarget and not data.vehicleInteract then
-        if data.target then
-            AddTargetModel(data.target, Interactions[index].radius, Interactions[index].options)
+        if data.targetPed then
+            Interactions[index].targetPed = data.targetPed
+            AddTargetPed(data.targetPed, Interactions[index].options, Interactions[index].icon)
+        elseif data.target then
+            AddTargetModel(data.target, Interactions[index].radius, Interactions[index].options, Interactions[index].icon)
         else
             Interactions[index].zone = AddTargetZone(Interactions[index].coords - vector3(0.0, 0.0, Interactions[index].zOffset), Interactions[index].radius, Interactions[index].options, Interactions[index].icon, Interactions[index].distance)
         end
@@ -251,7 +254,9 @@ function DeleteInteraction(index)
         DeleteInteractionEntity(index)
     end
     if Config.UseTarget then
-        if data.target then 
+        if data.targetPed then
+            RemoveTargetPed(data.targetPed, data.options)
+        elseif data.target then
             RemoveTargetModel(data.target, data.options)
         else
             RemoveTargetZone(data.zone)

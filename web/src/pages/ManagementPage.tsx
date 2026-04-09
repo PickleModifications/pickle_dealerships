@@ -76,6 +76,12 @@ export default function ManagementPage({ data, onClose }: Props) {
         if (res.success && res.data) setBalance(res.data.balance)
       }).catch(() => {})
     }
+    // Check clock-in status
+    fetchNui<{ clockedIn: boolean }>('getClockStatus', {
+      dealershipId: data.dealershipId,
+    }).then((res) => {
+      if (res) setIsClockedIn(res.clockedIn)
+    }).catch(() => {})
   }, [data.dealershipId, data.isOwned])
 
   // Unowned dealership — show purchase screen

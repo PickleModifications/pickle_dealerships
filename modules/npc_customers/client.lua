@@ -202,7 +202,37 @@ local function SpawnNPCCustomer(dealershipId, dealershipConfig)
 
     local spawnPoints = dealershipConfig.npcSpawnPoints
     if not spawnPoints or #spawnPoints == 0 then return end
-    local spawnPoint = spawnPoints[math.random(#spawnPoints)]
+
+    -- Find spawn points not already occupied by an active NPC
+    -- Check both by tracked index AND by proximity (in case of edge cases)
+    local occupiedPoints = {}
+    for _, npc in ipairs(activeNPCs) do
+        if npc.spawnPointIndex then
+            occupiedPoints[npc.spawnPointIndex] = true
+        end
+        -- Also block by proximity to any living NPC
+        if npc.entity and DoesEntityExist(npc.entity) then
+            local npcCoords = GetEntityCoords(npc.entity)
+            for i = 1, #spawnPoints do
+                local sp = spawnPoints[i]
+                if #(npcCoords - vector3(sp.x, sp.y, sp.z)) < 5.0 then
+                    occupiedPoints[i] = true
+                end
+            end
+        end
+    end
+
+    local availableIndices = {}
+    for i = 1, #spawnPoints do
+        if not occupiedPoints[i] then
+            availableIndices[#availableIndices + 1] = i
+        end
+    end
+
+    if #availableIndices == 0 then return end -- all spawn points occupied
+
+    local chosenIndex = availableIndices[math.random(#availableIndices)]
+    local spawnPoint = spawnPoints[chosenIndex]
 
     local model = profile.pedModel
     if not IsModelInCdimage(GetHashKey(model)) then
@@ -226,10 +256,10 @@ local function SpawnNPCCustomer(dealershipId, dealershipConfig)
     local pedCoords = GetEntityCoords(ped)
     local interactionId = CreateInteraction({
         label = _L("interact_assist_customer"),
-        icon = "fa-solid fa-comments",
+        icon = Config.TargetIcons.npc_customer,
         coords = vector3(pedCoords.x, pedCoords.y, pedCoords.z),
         distance = 2.5,
-        target = GetEntityModel(ped),
+        targetPed = ped,
     }, function()
         if currentNPCInteraction then
             ShowNotification("You are already assisting a customer.")
@@ -258,22 +288,25 @@ local function SpawnNPCCustomer(dealershipId, dealershipConfig)
         local typePref = npcData.profile.typePreference or "default"
         local greetingPool = Config.NPCCustomers.greetings and (Config.NPCCustomers.greetings[typePref] or Config.NPCCustomers.greetings["default"])
         local greeting = greetingPool and greetingPool[math.random(#greetingPool)] or "Hi, I'm looking for a vehicle."
+        currentNPCInteraction.greeting = greeting
 
         SendNUIMessage({
             type = "openNPCNegotiation",
             profile = npcData.profile,
             greeting = greeting,
+            accentColor = Config.UI and Config.UI.accentColor or "#e11d48",
         })
         SetNuiFocus(true, true)
     end)
 
     local npcData = {
-        entity       = ped,
-        profile      = profile,
-        interaction  = interactionId,
-        spawnTime    = GetGameTimer(),
-        assisted     = false,
-        dealershipId = dealershipId,
+        entity          = ped,
+        profile         = profile,
+        interaction     = interactionId,
+        spawnTime       = GetGameTimer(),
+        assisted        = false,
+        dealershipId    = dealershipId,
+        spawnPointIndex = chosenIndex,
     }
     table.insert(activeNPCs, npcData)
 
@@ -405,10 +438,11 @@ RegisterNUICallback("npcStartShowroom", function(_, cb)
     SendNUIMessage({
         type = "openNPCShowroom",
         profile = currentNPCInteraction.profile,
-        greeting = "",
+        greeting = currentNPCInteraction.greeting or "",
         dealershipId = currentNPCInteraction.dealershipId,
         location = locationKey,
         dealershipName = currentDealershipName,
+        accentColor = Config.UI and Config.UI.accentColor or "#e11d48",
     })
     SetNuiFocus(true, true)
 
@@ -478,46 +512,41 @@ RegisterNUICallback("presentVehicle", function(data, cb)
     end
 end)
 
---- Negotiation tactic
-RegisterNUICallback("negotiate", function(data, cb)
+--- Evaluate a price offer from the player
+RegisterNUICallback("npcEvaluateOffer", function(data, cb)
     if not currentNPCInteraction then
         return cb({ success = false, message = "No active NPC interaction." })
     end
 
-    local result = lib.callback.await("pickle_dealerships:processNegotiation", false, {
-        dealershipId = currentNPCInteraction.dealershipId,
-        npcProfile   = currentNPCInteraction.profile,
-        stockId      = data.stockId,
-        tactic       = data.tactic,
-        currentOffer = data.currentOffer,
-        round        = data.round,
+    local result = lib.callback.await("pickle_dealerships:evaluateOffer", false, {
+        npcProfile    = currentNPCInteraction.profile,
+        offerPrice    = data.offerPrice,
+        currentStress = data.currentStress,
     })
 
     if result then
-        -- Animate NPC if in showroom
+        -- Animate NPC based on result
         local ped = NPCShowroomState and NPCShowroomState.npcEntity or currentNPCInteraction.npcEntity
         if ped and DoesEntityExist(ped) then
-            if result.reaction == "positive" or result.reaction == "deal" then
+            if result.accepted then
                 TaskPlayAnim(ped, "gestures@m@standing@casual", "gesture_you_welcome", 8.0, -8.0, 2000, 49, 0, false, false, false)
-            elseif result.reaction == "negative" then
-                TaskPlayAnim(ped, "gestures@m@standing@casual", "gesture_shrug_hard", 8.0, -8.0, 2000, 49, 0, false, false, false)
-            elseif result.reaction == "walkaway" then
+            elseif result.walkaway then
                 TaskPlayAnim(ped, "gestures@m@standing@casual", "gesture_hand_down", 8.0, -8.0, 2000, 49, 0, false, false, false)
+            elseif result.stress >= 70 then
+                TaskPlayAnim(ped, "gestures@m@standing@casual", "gesture_shrug_hard", 8.0, -8.0, 2000, 49, 0, false, false, false)
             end
         end
 
         cb({
-            success      = true,
-            newOffer     = result.newOffer,
-            reaction     = result.reaction,
-            emotionState = result.emotionState,
-            dialogue     = result.dialogue,
-            roundOver    = result.roundOver,
-            saleComplete = result.saleComplete,
-            maxRounds    = result.maxRounds,
+            success       = true,
+            accepted      = result.accepted,
+            walkaway      = result.walkaway,
+            stress        = result.stress,
+            stressIncrease = result.stressIncrease,
+            dialogue      = result.dialogue,
         })
     else
-        cb({ success = false, message = "Negotiation failed." })
+        cb({ success = false, message = "Evaluation failed." })
     end
 end)
 

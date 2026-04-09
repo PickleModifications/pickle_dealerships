@@ -1,9 +1,12 @@
 if GetResourceState('ox_target') ~= 'started' or not Config.UseTarget then return end
 
-function AddTargetModel(models, radius, options)
+function AddTargetModel(models, radius, options, defaultIcon)
     local optionsNames = {}
-    for i=1, #options do 
+    for i=1, #options do
         optionsNames[i] = options[i].name
+        if not options[i].icon and defaultIcon then
+            options[i].icon = defaultIcon
+        end
     end
     RemoveTargetModel(models, optionsNames)
     exports.ox_target:addModel(models, options)
@@ -39,6 +42,30 @@ function GetOptionNames(options)
         optionsNames[i] = options[i].name
     end
     return optionNames
+end
+
+function AddTargetPed(entity, options, defaultIcon)
+    for i = 1, #options do
+        if not options[i].icon and defaultIcon then
+            options[i].icon = defaultIcon
+        end
+    end
+    local netId = NetworkGetNetworkIdFromEntity(entity)
+    if netId and netId > 0 then
+        exports.ox_target:addEntity(netId, options)
+    else
+        exports.ox_target:addLocalEntity(entity, options)
+    end
+end
+
+function RemoveTargetPed(entity, options)
+    local names = GetOptionNames(options)
+    local netId = NetworkGetNetworkIdFromEntity(entity)
+    if netId and netId > 0 then
+        exports.ox_target:removeEntity(netId, names)
+    else
+        exports.ox_target:removeLocalEntity(entity, names)
+    end
 end
 
 function AddTargetNetworkId(networkId, options)

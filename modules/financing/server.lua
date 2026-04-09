@@ -13,10 +13,10 @@ local function GetStockItem(stockId)
     return rows and rows[1] or nil
 end
 
-local function MarkStockSold(stockId, citizenid, soldBy)
+local function MarkStockSold(stockId, identifier, soldBy)
     MySQL.update(
         "UPDATE `dealership_stock` SET `sold_at` = NOW(), `sold_to` = ?, `sold_by` = ? WHERE `id` = ?",
-        { citizenid, soldBy, tonumber(stockId) }
+        { identifier, soldBy, tonumber(stockId) }
     )
 end
 
@@ -74,8 +74,8 @@ lib.callback.register("pickle_dealerships:createFinancing", function(source, dat
         return { success = false, message = ("Minimum down payment is %s (%d%%)."):format(GetCurrencyString(minDown), Config.FinancingMinDown * 100) }
     end
 
-    local citizenid = GetIdentifier(source)
-    if not citizenid then
+    local identifier = GetIdentifier(source)
+    if not identifier then
         return { success = false, message = "Could not identify player." }
     end
 
@@ -102,7 +102,7 @@ lib.callback.register("pickle_dealerships:createFinancing", function(source, dat
     AddDealershipBalance(dealershipId, netDownPayment)
 
     -- Mark stock as sold
-    MarkStockSold(stockId, citizenid, nil)
+    MarkStockSold(stockId, identifier, nil)
 
     -- Generate plate and register vehicle
     local plate = GeneratePlate()
@@ -114,10 +114,10 @@ lib.callback.register("pickle_dealerships:createFinancing", function(source, dat
 
     -- Create financing record
     MySQL.insert(
-        "INSERT INTO `dealership_financing` (`dealership_id`, `citizenid`, `vehicle_plate`, `total_amount`, `amount_paid`, `installment_amount`, `interest_rate`, `next_payment`, `status`) VALUES (?, ?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?), 'active')",
+        "INSERT INTO `dealership_financing` (`dealership_id`, `identifier`, `vehicle_plate`, `total_amount`, `amount_paid`, `installment_amount`, `interest_rate`, `next_payment`, `status`) VALUES (?, ?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?), 'active')",
         {
             dealershipId,
-            citizenid,
+            identifier,
             toupper(plate),
             totalWithInterest,
             0,
@@ -128,7 +128,7 @@ lib.callback.register("pickle_dealerships:createFinancing", function(source, dat
     )
 
     -- Ledger entries
-    AddLedgerEntry(dealershipId, "sale", price, ("Financed vehicle: %s (down: %s)"):format(stockItem.vehicle_label or stockItem.vehicle_model, GetCurrencyString(downPayment)), citizenid)
+    AddLedgerEntry(dealershipId, "sale", price, ("Financed vehicle: %s (down: %s)"):format(stockItem.vehicle_label or stockItem.vehicle_model, GetCurrencyString(downPayment)), identifier)
     if salesTax > 0 then
         AddLedgerEntry(dealershipId, "tax", -salesTax, ("Sales tax on financed %s"):format(stockItem.vehicle_label or stockItem.vehicle_model), nil)
     end
@@ -141,7 +141,7 @@ lib.callback.register("pickle_dealerships:createFinancing", function(source, dat
     ))
 
     debugPrint(("[Financing] Player %s financed %s - Down: %s, Installments: %d x %s"):format(
-        citizenid, stockItem.vehicle_model, GetCurrencyString(downPayment), installments, GetCurrencyString(installmentAmount)
+        identifier, stockItem.vehicle_model, GetCurrencyString(downPayment), installments, GetCurrencyString(installmentAmount)
     ))
 
     return {
@@ -164,14 +164,14 @@ lib.callback.register("pickle_dealerships:makePayment", function(source, data)
         return { success = false, message = "Invalid request." }
     end
 
-    local citizenid = GetIdentifier(source)
-    if not citizenid then
+    local identifier = GetIdentifier(source)
+    if not identifier then
         return { success = false, message = "Could not identify player." }
     end
 
     local rows = MySQL.query.await(
-        "SELECT * FROM `dealership_financing` WHERE `id` = ? AND `citizenid` = ? AND `status` = 'active' LIMIT 1",
-        { financingId, citizenid }
+        "SELECT * FROM `dealership_financing` WHERE `id` = ? AND `identifier` = ? AND `status` = 'active' LIMIT 1",
+        { financingId, identifier }
     )
     local financing = rows and rows[1] or nil
     if not financing then
@@ -212,18 +212,18 @@ lib.callback.register("pickle_dealerships:makePayment", function(source, data)
             "UPDATE `dealership_financing` SET `amount_paid` = ?, `status` = 'paid', `missed_payments` = 0 WHERE `id` = ?",
             { newAmountPaid, financingId }
         )
-        AddLedgerEntry(financing.dealership_id, "financing_payment", paymentAmount, ("Final financing payment for plate %s"):format(financing.vehicle_plate), citizenid)
+        AddLedgerEntry(financing.dealership_id, "financing_payment", paymentAmount, ("Final financing payment for plate %s"):format(financing.vehicle_plate), identifier)
         ShowNotification(source, ("Congratulations! Your vehicle (%s) is fully paid off!"):format(financing.vehicle_plate))
     else
         MySQL.update(
             "UPDATE `dealership_financing` SET `amount_paid` = ?, `next_payment` = FROM_UNIXTIME(?), `missed_payments` = 0 WHERE `id` = ?",
             { newAmountPaid, nextPaymentTimestamp, financingId }
         )
-        AddLedgerEntry(financing.dealership_id, "financing_payment", paymentAmount, ("Financing payment for plate %s"):format(financing.vehicle_plate), citizenid)
+        AddLedgerEntry(financing.dealership_id, "financing_payment", paymentAmount, ("Financing payment for plate %s"):format(financing.vehicle_plate), identifier)
         ShowNotification(source, ("Payment of %s received. Remaining: %s"):format(GetCurrencyString(paymentAmount), GetCurrencyString(financing.total_amount - newAmountPaid)))
     end
 
-    debugPrint(("[Financing] Player %s paid %s on financing #%d"):format(citizenid, GetCurrencyString(paymentAmount), financingId))
+    debugPrint(("[Financing] Player %s paid %s on financing #%d"):format(identifier, GetCurrencyString(paymentAmount), financingId))
 
     return {
         success = true,
@@ -237,12 +237,12 @@ end)
 -- ─── Get My Financing ───────────────────────────────────────────────────────
 
 lib.callback.register("pickle_dealerships:getMyFinancing", function(source, data)
-    local citizenid = GetIdentifier(source)
-    if not citizenid then return {} end
+    local identifier = GetIdentifier(source)
+    if not identifier then return {} end
 
     local rows = MySQL.query.await(
-        "SELECT f.*, d.name AS dealership_name FROM `dealership_financing` f LEFT JOIN `dealerships` d ON f.dealership_id = d.id WHERE f.citizenid = ? AND f.status = 'active' ORDER BY f.created_at DESC",
-        { citizenid }
+        "SELECT f.*, d.name AS dealership_name FROM `dealership_financing` f LEFT JOIN `dealerships` d ON f.dealership_id = d.id WHERE f.identifier = ? AND f.status = 'active' ORDER BY f.created_at DESC",
+        { identifier }
     )
 
     if not rows then return {} end
@@ -302,10 +302,10 @@ CreateThread(function()
                         { financing.vehicle_plate }
                     )
 
-                    AddLedgerEntry(financing.dealership_id, "repossession", 0, ("Vehicle repossessed: plate %s after %d missed payments"):format(financing.vehicle_plate, newMissed), financing.citizenid)
+                    AddLedgerEntry(financing.dealership_id, "repossession", 0, ("Vehicle repossessed: plate %s after %d missed payments"):format(financing.vehicle_plate, newMissed), financing.identifier)
 
                     -- Notify player if online
-                    local playerSource = GetSourceFromIdentifier(financing.citizenid)
+                    local playerSource = GetSourceFromIdentifier(financing.identifier)
                     if playerSource then
                         TriggerClientEvent("pickle_dealerships:vehicleRepossessed", playerSource, {
                             plate = financing.vehicle_plate,
@@ -313,7 +313,7 @@ CreateThread(function()
                         })
                     end
 
-                    debugPrint(("[Financing] Vehicle %s repossessed from %s after %d missed payments"):format(financing.vehicle_plate, financing.citizenid, newMissed))
+                    debugPrint(("[Financing] Vehicle %s repossessed from %s after %d missed payments"):format(financing.vehicle_plate, financing.identifier, newMissed))
                 else
                     -- Increment missed payments and push next_payment forward
                     local paymentIntervalSeconds = (Config.FinancingPaymentInterval or 24) * 3600
@@ -325,7 +325,7 @@ CreateThread(function()
                     )
 
                     -- Notify player if online
-                    local playerSource = GetSourceFromIdentifier(financing.citizenid)
+                    local playerSource = GetSourceFromIdentifier(financing.identifier)
                     if playerSource then
                         TriggerClientEvent("pickle_dealerships:financingReminder", playerSource, {
                             plate = financing.vehicle_plate,
@@ -336,7 +336,7 @@ CreateThread(function()
                         })
                     end
 
-                    debugPrint(("[Financing] Player %s missed payment #%d on plate %s"):format(financing.citizenid, newMissed, financing.vehicle_plate))
+                    debugPrint(("[Financing] Player %s missed payment #%d on plate %s"):format(financing.identifier, newMissed, financing.vehicle_plate))
                 end
             end
         end

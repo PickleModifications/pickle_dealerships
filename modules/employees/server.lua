@@ -196,7 +196,7 @@ lib.callback.register("pickle_dealerships:getEmployees", function(source, data)
         employees[#employees + 1] = {
             id = emp.source, -- use server ID as the identifier
             serverId = emp.source,
-            citizenid = GetIdentifier(emp.source),
+            identifier = GetIdentifier(emp.source),
             name = emp.name,
             role = role,
             gradeLabel = emp.gradeLabel,
@@ -217,17 +217,45 @@ lib.callback.register("pickle_dealerships:clockIn", function(source, data)
     if not dealershipId then return { success = false } end
 
     local dealership = GetDealership(dealershipId)
-    if not dealership or not dealership.job then
+    if not dealership then
         return { success = false, message = "Dealership not found." }
     end
 
-    local playerJob = GetPlayerJobName(source)
-    if playerJob ~= dealership.job then
+    -- Allow admins, owners, and employees with matching job to clock in
+    local canClockIn = false
+    if IsPlayerAdmin(source) then
+        canClockIn = true
+    elseif dealership.owner_identifier and dealership.owner_identifier == GetIdentifier(source) then
+        canClockIn = true
+    elseif dealership.job then
+        local playerJob = GetPlayerJobName(source)
+        if playerJob == dealership.job then
+            canClockIn = true
+        end
+    else
+        -- No job set — check if they're an employee in the DB
+        local identifier = GetIdentifier(source)
+        local emp = MySQL.single.await("SELECT id FROM dealership_employees WHERE dealership_id = ? AND identifier = ? LIMIT 1", { dealershipId, identifier })
+        if emp then canClockIn = true end
+    end
+
+    if not canClockIn then
+        print(("[ClockIn] DENIED source=%s dealershipId=%s job=%s playerJob=%s"):format(
+            tostring(source), tostring(dealershipId), tostring(dealership.job), tostring(GetPlayerJobName(source))
+        ))
         return { success = false, message = "You do not work at this dealership." }
     end
 
-    OnDutyEmployees[source] = {
-        citizenid = GetIdentifier(source),
+    local src = tonumber(source)
+    print(("[ClockIn] GRANTED source=%s dealershipId=%s"):format(tostring(src), tostring(dealershipId)))
+
+    -- If already on duty at another dealership, clock out first
+    if OnDutyEmployees[src] then
+        TriggerClientEvent("pickle_dealerships:npc:stopDuty", src)
+    end
+
+    OnDutyEmployees[src] = {
+        identifier = GetIdentifier(source),
         dealershipId = dealershipId,
         name = GetPlayerCharacterName(source),
         clockedInAt = os.time(),
@@ -259,10 +287,25 @@ lib.callback.register("pickle_dealerships:clockIn", function(source, data)
     return { success = true, message = "You are now on duty." }
 end)
 
+lib.callback.register("pickle_dealerships:getClockStatus", function(source, data)
+    local src = tonumber(source)
+    local dealershipId = tonumber(data.dealershipId)
+    print(("[ClockStatus] src=%s, dealershipId=%s, OnDutyEmployees[src]=%s"):format(
+        tostring(src), tostring(dealershipId),
+        src and OnDutyEmployees[src] and json.encode(OnDutyEmployees[src]) or "nil"
+    ))
+    if not dealershipId or not src then return { clockedIn = false } end
+    local duty = OnDutyEmployees[src]
+    local result = duty ~= nil and duty.dealershipId == dealershipId
+    print(("[ClockStatus] result=%s"):format(tostring(result)))
+    return { clockedIn = result }
+end)
+
 lib.callback.register("pickle_dealerships:clockOut", function(source, data)
-    if OnDutyEmployees[source] then
-        OnDutyEmployees[source] = nil
-        TriggerClientEvent("pickle_dealerships:npc:stopDuty", source)
+    local src = tonumber(source)
+    if src and OnDutyEmployees[src] then
+        OnDutyEmployees[src] = nil
+        TriggerClientEvent("pickle_dealerships:npc:stopDuty", src)
         return { success = true, message = "You are now off duty." }
     end
     return { success = false, message = "You are not on duty." }
@@ -270,7 +313,8 @@ end)
 
 -- Clean up on player disconnect
 AddEventHandler('playerDropped', function()
-    OnDutyEmployees[source] = nil
+    local src = tonumber(source)
+    if src then OnDutyEmployees[src] = nil end
 end)
 
 RegisterNetEvent("pickle_dealerships:customerArrived", function(data)

@@ -44,6 +44,19 @@ function GetOptionNames(options)
     return optionNames
 end
 
+function AddTargetPed(entity, options, defaultIcon)
+    for i = 1, #options do
+        if not options[i].icon and defaultIcon then
+            options[i].icon = defaultIcon
+        end
+    end
+    exports.qtarget:AddTargetEntity(entity, options)
+end
+
+function RemoveTargetPed(entity, options)
+    exports.qtarget:RemoveTargetEntity(entity, GetOptionNames(options))
+end
+
 function AddTargetNetworkId(networkId, options)
     if not NetworkDoesNetworkIdExist(networkId) then return end
     RemoveTargetNetworkId(networkId, options)

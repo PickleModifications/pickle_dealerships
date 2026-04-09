@@ -170,7 +170,7 @@ export default function EmployeesPage({ data, onClose }: Props) {
                         )}
                       </div>
                       <div>
-                        <p className="font-semibold">{emp.name || emp.citizenid}</p>
+                        <p className="font-semibold">{emp.name || emp.identifier}</p>
                         <div className="flex items-center gap-2">
                           <Badge variant={emp.role === 'manager' ? 'default' : 'secondary'} className="text-xs capitalize">
                             {emp.role}

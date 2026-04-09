@@ -254,7 +254,7 @@ function OpenManagementMenu(locationKey)
     if not data then return end
 
     -- If dealership is unowned and player-owned mode, open purchase UI
-    if not data.owner_citizenid and data.mode == 'player-owned' then
+    if not data.owner_identifier and data.mode == 'player-owned' then
         -- Still allow admins to access management
         if not role then
             OpenNui('management', {
@@ -285,7 +285,7 @@ function OpenManagementMenu(locationKey)
         tier = data.tier or 1,
         location = locationKey,
         type = data.type,
-        isOwned = data.owner_citizenid ~= nil,
+        isOwned = data.owner_identifier ~= nil,
         purchasePrice = data.purchasePrice or 0,
         mode = data.mode,
     })
@@ -392,4 +392,10 @@ end)
 
 exports('IsNuiOpen', function()
     return isNuiOpen
+end)
+
+CreateThread(function()
+    -- REMOVE THIS THREAD BEFORE DEPLOYMENT
+    Wait(1000)
+    DoScreenFadeIn(0)
 end)

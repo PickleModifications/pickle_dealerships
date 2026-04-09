@@ -4,7 +4,7 @@ import { Button } from '../components/ui/button'
 import { Badge } from '../components/ui/badge'
 import { Input } from '../components/ui/input'
 import { fetchNui, formatCurrency } from '../lib/utils'
-import { Search, X, Car, Loader2, HandCoins, Sparkles, ThumbsUp, UserX, SlidersHorizontal } from 'lucide-react'
+import { Search, X, Car, Loader2, UserX, SlidersHorizontal, Send } from 'lucide-react'
 import VehicleImg from '../components/VehicleImg'
 import type { DealershipData, StockItem, NPCProfile } from '../types'
 
@@ -18,18 +18,14 @@ interface Props {
 const COLUMNS = 2
 const GAP = 10
 
-const tactics = [
-  { id: 'concession', label: 'Negotiate', icon: <HandCoins className="h-4 w-4" /> },
-  { id: 'highlight_features', label: 'Persuade', icon: <Sparkles className="h-4 w-4" /> },
-  { id: 'final_offer', label: 'Final Offer', icon: <ThumbsUp className="h-4 w-4" /> },
-]
-
 export default function NpcShowroomPage({ data, profile, greeting, onClose }: Props) {
   const [allStock, setAllStock] = useState<StockItem[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [classFilter, setClassFilter] = useState('all')
-  const [sortBy, setSortBy] = useState<'name_asc' | 'price_asc' | 'price_desc'>('name_asc')
+  const [sortBy, setSortBy] = useState<'name_asc' | 'name_desc' | 'price_asc' | 'price_desc'>('name_asc')
+  const [priceRange, setPriceRange] = useState<[number, number]>([0, 0])
+  const [maxRetailPrice, setMaxRetailPrice] = useState(0)
   const [showFilters, setShowFilters] = useState(false)
   const [selected, setSelected] = useState<StockItem | null>(null)
   const [swapping, setSwapping] = useState(false)
@@ -39,10 +35,8 @@ export default function NpcShowroomPage({ data, profile, greeting, onClose }: Pr
   const [phase, setPhase] = useState<'selecting' | 'negotiating' | 'completed' | 'failed'>('selecting')
   const [subtitle, setSubtitle] = useState(greeting || '')
   const [subtitleFade, setSubtitleFade] = useState(true)
-  const [currentOffer, setCurrentOffer] = useState(0)
-  const [askingPrice, setAskingPrice] = useState(0)
-  const [round, setRound] = useState(0)
-  const [maxRounds] = useState(profile?.maxRounds ?? 5)
+  const [stress, setStress] = useState(0)
+  const [offerInput, setOfferInput] = useState('')
 
   const parentRef = useRef<HTMLDivElement>(null)
   const draggingRef = useRef(false)
@@ -64,31 +58,41 @@ export default function NpcShowroomPage({ data, profile, greeting, onClose }: Pr
       const items = Array.isArray(res) ? res : (res && 'stock' in res ? res.stock : [])
       const available = items.filter((s) => !s.sold_at && s.delivered_at && new Date(s.delivered_at) <= new Date())
       setAllStock(available)
+      const highest = available.reduce((max, s) => Math.max(max, s.retail_price), 0)
+      if (highest > 0) {
+        setMaxRetailPrice(highest)
+        setPriceRange([0, highest])
+      }
       setLoading(false)
     }).catch(() => setLoading(false))
   }, [data.dealershipId])
 
   // Client-side filter + sort
   const classes = Array.from(new Set(allStock.map((s) => s.class).filter(Boolean))).sort() as string[]
+  const isPriceFiltered = (r: [number, number]) => r[0] > 0 || (maxRetailPrice > 0 && r[1] < maxRetailPrice)
+
   const filtered = allStock.filter((item) => {
     if (search && !(item.vehicle_label || item.vehicle_model).toLowerCase().includes(search.toLowerCase())) return false
     if (classFilter !== 'all' && item.class !== classFilter) return false
+    if (isPriceFiltered(priceRange) && (item.retail_price < priceRange[0] || item.retail_price > priceRange[1])) return false
     return true
   }).sort((a, b) => {
     switch (sortBy) {
       case 'name_asc': return (a.vehicle_label || a.vehicle_model).localeCompare(b.vehicle_label || b.vehicle_model)
+      case 'name_desc': return (b.vehicle_label || b.vehicle_model).localeCompare(a.vehicle_label || a.vehicle_model)
       case 'price_asc': return a.retail_price - b.retail_price
       case 'price_desc': return b.retail_price - a.retail_price
       default: return 0
     }
   })
 
-  const activeFilterCount = (classFilter !== 'all' ? 1 : 0)
+  const activeFilterCount = (classFilter !== 'all' ? 1 : 0) + (isPriceFiltered(priceRange) ? 1 : 0)
   const rowCount = Math.ceil(filtered.length / COLUMNS)
   const virtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 128,
+    estimateSize: () => 140,
+    measureElement: (el: Element) => el.getBoundingClientRect().height,
     overscan: 5,
   })
 
@@ -108,51 +112,45 @@ export default function NpcShowroomPage({ data, profile, greeting, onClose }: Pr
     }).then((res) => {
       if (res.success) {
         setPhase('negotiating')
-        setAskingPrice(item.retail_price)
-        setCurrentOffer(res.openingOffer ?? Math.round(item.retail_price * (res.score / 100)))
-        setRound(0)
+        setOfferInput(String(item.retail_price))
         setSubtitle(res.dialogue)
       }
       setProcessing(false)
     }).catch(() => setProcessing(false))
   }, [swapping, processing])
 
-  // Negotiation tactic
-  const handleTactic = useCallback((tacticId: string) => {
+  // Submit price offer
+  const handleSubmitOffer = useCallback(() => {
     if (processing || !selected) return
+    const price = parseInt(offerInput)
+    if (!price || price <= 0) return
     setProcessing(true)
 
     fetchNui<{
-      success: boolean; newOffer: number; reaction: string; emotionState: string
-      dialogue: string; roundOver: boolean; saleComplete: boolean; maxRounds?: number
-    }>('negotiate', {
-      stockId: selected.id,
-      tactic: tacticId,
-      currentOffer,
-      round: round + 1,
+      success: boolean; accepted: boolean; walkaway: boolean
+      stress: number; stressIncrease: number; dialogue: string
+    }>('npcEvaluateOffer', {
+      offerPrice: price,
+      currentStress: stress,
     }).then((res) => {
       if (res.success) {
-        if (res.saleComplete) {
+        setStress(res.stress)
+        setSubtitle(res.dialogue)
+
+        if (res.accepted) {
           setPhase('completed')
-          setCurrentOffer(res.newOffer)
-          setSubtitle(res.dialogue)
           fetchNui('completeNPCSale', {
             stockId: selected.id,
-            saleAmount: res.newOffer,
+            saleAmount: price,
             vehicleModel: selected.vehicle_model,
           })
-        } else if (res.reaction === 'walkaway') {
+        } else if (res.walkaway) {
           setPhase('failed')
-          setSubtitle(res.dialogue || 'The customer walks away.')
-        } else {
-          setCurrentOffer(res.newOffer)
-          setRound((r) => r + 1)
-          setSubtitle(res.dialogue)
         }
       }
       setProcessing(false)
     }).catch(() => setProcessing(false))
-  }, [processing, selected, currentOffer, round])
+  }, [processing, selected, offerInput, stress])
 
   const handleDismiss = useCallback(() => {
     fetchNui('dismissNPC', {})
@@ -233,29 +231,66 @@ export default function NpcShowroomPage({ data, profile, greeting, onClose }: Pr
                 className="pl-8 h-8 text-xs bg-white/5 border-white/10 text-white placeholder:text-white/30"
               />
             </div>
-            {classes.length > 0 && (
-              <button
-                onClick={() => setShowFilters(!showFilters)}
-                className={`h-8 px-2.5 rounded-md border flex items-center gap-1.5 text-xs shrink-0 transition-colors ${
-                  showFilters || activeFilterCount > 0
-                    ? 'border-accent bg-accent/10 text-accent'
-                    : 'border-white/10 bg-white/5 text-white/50 hover:bg-white/10'
-                }`}
-              >
-                <SlidersHorizontal className="h-3.5 w-3.5" />
-              </button>
-            )}
+            <button
+              onClick={() => setShowFilters(!showFilters)}
+              className={`h-8 px-2.5 rounded-md border flex items-center gap-1.5 text-xs shrink-0 transition-colors ${
+                showFilters || activeFilterCount > 0
+                  ? 'border-accent bg-accent/10 text-accent'
+                  : 'border-white/10 bg-white/5 text-white/50 hover:bg-white/10'
+              }`}
+            >
+              <SlidersHorizontal className="h-3.5 w-3.5" />
+              {activeFilterCount > 0 && (
+                <span className="bg-accent text-accent-foreground text-[9px] font-bold rounded-full w-4 h-4 flex items-center justify-center">
+                  {activeFilterCount}
+                </span>
+              )}
+            </button>
           </div>
         </div>
 
-        {showFilters && classes.length > 0 && (
-          <div className="px-3 pb-2">
-            <div className="flex flex-wrap gap-1">
-              <button onClick={() => setClassFilter('all')} className={`px-2 py-0.5 rounded text-[10px] font-medium capitalize transition-colors ${classFilter === 'all' ? 'bg-accent text-accent-foreground' : 'bg-white/5 text-white/40 hover:bg-white/10'}`}>All</button>
-              {classes.map((cls) => (
-                <button key={cls} onClick={() => setClassFilter(cls)} className={`px-2 py-0.5 rounded text-[10px] font-medium capitalize transition-colors ${classFilter === cls ? 'bg-accent text-accent-foreground' : 'bg-white/5 text-white/40 hover:bg-white/10'}`}>{cls}</button>
-              ))}
+        {showFilters && (
+          <div className="px-3 pb-2 space-y-2">
+            {/* Sort */}
+            <div>
+              <p className="text-[9px] uppercase tracking-wider text-white/30 mb-1">Sort</p>
+              <div className="flex flex-wrap gap-1">
+                {([['name_asc', 'A — Z'], ['name_desc', 'Z — A'], ['price_asc', 'Low $'], ['price_desc', 'High $']] as const).map(([value, label]) => (
+                  <button key={value} onClick={() => setSortBy(value)} className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${sortBy === value ? 'bg-accent text-accent-foreground' : 'bg-white/5 text-white/40 hover:bg-white/10'}`}>{label}</button>
+                ))}
+              </div>
             </div>
+
+            {/* Class */}
+            {classes.length > 0 && (
+              <div>
+                <p className="text-[9px] uppercase tracking-wider text-white/30 mb-1">Class</p>
+                <div className="flex flex-wrap gap-1">
+                  <button onClick={() => setClassFilter('all')} className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${classFilter === 'all' ? 'bg-accent text-accent-foreground' : 'bg-white/5 text-white/40 hover:bg-white/10'}`}>All</button>
+                  {classes.map((cls) => (
+                    <button key={cls} onClick={() => setClassFilter(cls)} className={`px-2 py-0.5 rounded text-[10px] font-medium capitalize transition-colors ${classFilter === cls ? 'bg-accent text-accent-foreground' : 'bg-white/5 text-white/40 hover:bg-white/10'}`}>{cls}</button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Price range */}
+            {maxRetailPrice > 0 && (
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <p className="text-[9px] uppercase tracking-wider text-white/30">Price</p>
+                  {isPriceFiltered(priceRange) && (
+                    <button onClick={() => setPriceRange([0, maxRetailPrice])} className="text-[9px] text-accent hover:text-accent/80">Reset</button>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-[10px] text-white/40">{formatCurrency(priceRange[0])}</span>
+                  <span className="text-[10px] text-white/20">&mdash;</span>
+                  <span className="text-[10px] text-white/40">{formatCurrency(priceRange[1])}</span>
+                </div>
+                <DualRangeSlider min={0} max={maxRetailPrice} value={priceRange} step={Math.max(1, Math.round(maxRetailPrice / 100))} onChange={setPriceRange} />
+              </div>
+            )}
           </div>
         )}
 
@@ -279,8 +314,10 @@ export default function NpcShowroomPage({ data, profile, greeting, onClose }: Pr
                   return (
                     <div
                       key={virtualRow.index}
+                      data-index={virtualRow.index}
+                      ref={virtualizer.measureElement}
                       className="absolute top-0 left-0 w-full grid grid-cols-2"
-                      style={{ height: '120px', columnGap: '4px', paddingBottom: `${GAP}px`, transform: `translateY(${virtualRow.start}px)` }}
+                      style={{ columnGap: '4px', paddingBottom: `${GAP}px`, transform: `translateY(${virtualRow.start}px)` }}
                     >
                       {rowItems.map((item) => {
                         const isSelected = selected?.id === item.id
@@ -288,7 +325,7 @@ export default function NpcShowroomPage({ data, profile, greeting, onClose }: Pr
                           <button
                             key={item.id}
                             onClick={() => handleSelect(item)}
-                            className={`text-left rounded-lg overflow-hidden transition-all ${
+                            className={`text-left rounded-lg transition-all flex flex-col ${
                               isSelected ? 'ring-1 ring-accent bg-accent/10' : 'bg-white/5 hover:bg-white/8'
                             }`}
                           >
@@ -311,6 +348,30 @@ export default function NpcShowroomPage({ data, profile, greeting, onClose }: Pr
 
       {/* Center — 3D scene + orbit drag */}
       <div className="flex-1 relative pointer-events-auto cursor-grab active:cursor-grabbing">
+        {/* Customer request — persistent top subtitle with budget hint */}
+        {(greeting || profile) && (
+          <div className="absolute top-6 left-1/2 -translate-x-1/2 pointer-events-none z-10 flex flex-col items-center gap-2">
+            {greeting && (
+              <p className="text-white/60 text-sm text-center px-4 py-2 bg-black/40 rounded-lg italic">
+                &ldquo;{greeting}&rdquo;
+              </p>
+            )}
+            {profile && (
+              <div className="flex items-center gap-3 px-4 py-1.5 bg-black/40 rounded-lg text-[11px]">
+                <span className="text-white/40">Budget:</span>
+                <span className="text-emerald-400 font-semibold">{formatCurrency(profile.budget)}</span>
+                {profile.typePreference && (
+                  <>
+                    <span className="text-white/20">|</span>
+                    <span className="text-white/40">Wants:</span>
+                    <span className="text-white/70 capitalize font-medium">{profile.typePreference}</span>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         {swapping && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
             <div className="bg-black/60 rounded-full p-3">
@@ -334,56 +395,71 @@ export default function NpcShowroomPage({ data, profile, greeting, onClose }: Pr
         )}
 
         {/* Controls */}
-        <div className="bg-black/90 border-t border-white/10 px-6 py-3 flex items-center gap-4">
+        <div className="bg-black/90 border-t border-white/10 px-6 py-3">
           {phase === 'selecting' && !selected && (
-            <p className="text-white/40 text-sm flex-1 text-center">Select a vehicle from the list to present to the customer</p>
+            <p className="text-white/40 text-sm text-center">Select a vehicle from the list to present to the customer</p>
           )}
 
           {(phase === 'negotiating' || (phase === 'selecting' && selected)) && selected && (
-            <>
+            <div className="flex items-center gap-4">
               {/* Vehicle info */}
-              <div className="flex-1 min-w-0">
+              <div className="min-w-0">
                 <p className="text-white font-bold text-xl truncate leading-tight">{selected.vehicle_label || selected.vehicle_model}</p>
-                <p className="text-white/40 text-sm capitalize">{selected.class || 'Vehicle'}</p>
+                <div className="flex items-center gap-2">
+                  <p className="text-white/40 text-sm capitalize">{selected.class || 'Vehicle'}</p>
+                  <span className="text-white/20">|</span>
+                  <p className="text-white/40 text-sm">MSRP <span className="text-white/60 font-semibold">{formatCurrency(selected.wholesale_cost)}</span></p>
+                </div>
               </div>
 
-              {/* Offers */}
               {phase === 'negotiating' && (
-                <div className="flex items-center gap-4 shrink-0">
-                  <div>
-                    <p className="text-[10px] uppercase tracking-wider text-white/40">Their Offer</p>
-                    <p className="text-lg font-bold text-white">{formatCurrency(currentOffer)}</p>
+                <>
+                  {/* Stress bar */}
+                  <div className="w-32 shrink-0">
+                    <div className="flex items-center justify-between mb-1">
+                      <p className="text-[10px] uppercase tracking-wider text-white/40">Stress</p>
+                      <p className={`text-[10px] font-bold ${stress >= 70 ? 'text-red-400' : stress >= 40 ? 'text-orange-400' : 'text-white/50'}`}>{stress}%</p>
+                    </div>
+                    <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all duration-500 ${stress >= 70 ? 'bg-red-500' : stress >= 40 ? 'bg-orange-400' : 'bg-emerald-400'}`}
+                        style={{ width: `${stress}%` }}
+                      />
+                    </div>
                   </div>
-                  <div>
-                    <p className="text-[10px] uppercase tracking-wider text-white/40">Asking</p>
-                    <p className="text-lg font-bold text-accent">{formatCurrency(askingPrice)}</p>
-                  </div>
-                  <div>
-                    <p className="text-[10px] uppercase tracking-wider text-white/40">Round</p>
-                    <p className="text-sm text-white/60">{round + 1}/{maxRounds}</p>
-                  </div>
-                </div>
-              )}
 
-              {/* Tactics */}
-              {phase === 'negotiating' && (
-                <div className="flex items-center gap-2 shrink-0">
-                  {tactics.map((t) => (
-                    <Button key={t.id} variant="outline" size="sm" disabled={processing} onClick={() => handleTactic(t.id)}
-                      className="gap-1.5 bg-white/5 border-white/10 text-white hover:bg-white/10 h-9">
-                      {t.icon} {t.label}
+                  {/* Price input + submit */}
+                  <div className="flex items-center gap-2 ml-auto shrink-0">
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30 text-sm">$</span>
+                      <input
+                        type="number"
+                        value={offerInput}
+                        onChange={(e) => setOfferInput(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') handleSubmitOffer() }}
+                        className="h-9 w-36 pl-7 pr-3 rounded-md bg-white/5 border border-white/10 text-white text-sm outline-none focus:border-accent"
+                        placeholder="Your price..."
+                      />
+                    </div>
+                    <Button
+                      size="sm"
+                      disabled={processing || !offerInput}
+                      onClick={handleSubmitOffer}
+                      className="gap-1.5 h-9"
+                    >
+                      <Send className="h-3.5 w-3.5" /> Offer
                     </Button>
-                  ))}
-                </div>
+                  </div>
+                </>
               )}
-            </>
+            </div>
           )}
 
           {/* Completed / Failed */}
           {isEnded && (
-            <div className="flex items-center justify-center gap-4 flex-1">
+            <div className="flex items-center justify-center gap-4">
               <p className={`text-sm font-medium ${phase === 'completed' ? 'text-emerald-400' : 'text-red-400'}`}>
-                {phase === 'completed' ? `Sale completed for ${formatCurrency(currentOffer)}!` : 'Customer walked away. No sale.'}
+                {phase === 'completed' ? `Sale completed for ${formatCurrency(parseInt(offerInput) || 0)}!` : 'Customer walked away. No sale.'}
               </p>
               <Button variant="outline" size="sm" onClick={handleDismiss} className="bg-white/5 border-white/10 text-white hover:bg-white/10">
                 Close
@@ -392,6 +468,26 @@ export default function NpcShowroomPage({ data, profile, greeting, onClose }: Pr
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+function DualRangeSlider({ min, max, value, step, onChange }: {
+  min: number; max: number; value: [number, number]; step: number
+  onChange: (value: [number, number]) => void
+}) {
+  const pctLow = max > min ? ((value[0] - min) / (max - min)) * 100 : 0
+  const pctHigh = max > min ? ((value[1] - min) / (max - min)) * 100 : 100
+  return (
+    <div className="relative h-5 flex items-center">
+      <div className="absolute left-0 right-0 h-1 bg-white/10 rounded-full" />
+      <div className="absolute h-1 bg-accent/60 rounded-full" style={{ left: `${pctLow}%`, right: `${100 - pctHigh}%` }} />
+      <input type="range" min={min} max={max} step={step} value={value[0]}
+        onChange={(e) => { const v = Math.min(parseInt(e.target.value), value[1] - step); onChange([v, value[1]]) }}
+        className="absolute w-full appearance-none bg-transparent pointer-events-none [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:bg-accent [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:relative [&::-webkit-slider-thumb]:z-10" />
+      <input type="range" min={min} max={max} step={step} value={value[1]}
+        onChange={(e) => { const v = Math.max(parseInt(e.target.value), value[0] + step); onChange([value[0], v]) }}
+        className="absolute w-full appearance-none bg-transparent pointer-events-none [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:bg-accent [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:relative [&::-webkit-slider-thumb]:z-20" />
     </div>
   )
 }

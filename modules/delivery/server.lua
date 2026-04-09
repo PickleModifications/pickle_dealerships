@@ -4,8 +4,8 @@ local activeDeliveries = {}
 ---@param source number
 ---@param locationKey string
 lib.callback.register('pickle_dealerships:startDelivery', function(source, locationKey)
-    local citizenid = GetIdentifier(source)
-    if not citizenid then return false, 'Unable to identify player.' end
+    local identifier = GetIdentifier(source)
+    if not identifier then return false, 'Unable to identify player.' end
 
     local dealership = MySQL.single.await(
         'SELECT * FROM dealerships WHERE location = ?',
@@ -24,11 +24,11 @@ lib.callback.register('pickle_dealerships:startDelivery', function(source, locat
     if not dealership then return false, 'Dealership not found.' end
 
     -- Check player has a role at this dealership
-    local isOwner = dealership.owner_citizenid == citizenid
+    local isOwner = dealership.owner_identifier == identifier
     if not isOwner then
         local employee = MySQL.single.await(
-            'SELECT role FROM dealership_employees WHERE dealership_id = ? AND citizenid = ?',
-            { dealership.id, citizenid }
+            'SELECT role FROM dealership_employees WHERE dealership_id = ? AND identifier = ?',
+            { dealership.id, identifier }
         )
         if not employee and not IsPlayerAdmin(source) then
             return false, 'You do not have permission to start deliveries.'
@@ -61,8 +61,8 @@ lib.callback.register('pickle_dealerships:startDelivery', function(source, locat
 
     -- Create delivery record
     local deliveryId = MySQL.insert.await(
-        'INSERT INTO dealership_deliveries (dealership_id, citizenid, status, route_id, created_at) VALUES (?, ?, ?, ?, NOW())',
-        { dealership.id, citizenid, 'in_progress', route.id }
+        'INSERT INTO dealership_deliveries (dealership_id, identifier, status, route_id, created_at) VALUES (?, ?, ?, ?, NOW())',
+        { dealership.id, identifier, 'in_progress', route.id }
     )
 
     -- Link pending stock items to this delivery
@@ -83,7 +83,7 @@ lib.callback.register('pickle_dealerships:startDelivery', function(source, locat
         id = deliveryId,
         dealershipId = dealership.id,
         locationKey = locationKey,
-        citizenid = citizenid,
+        identifier = identifier,
         route = route,
         stockIds = stockIds,
         vehicles = pendingStock,
@@ -127,8 +127,8 @@ lib.callback.register('pickle_dealerships:completeDelivery', function(source, de
 
     -- Add ledger entry for completed delivery
     MySQL.insert.await(
-        'INSERT INTO dealership_ledger (dealership_id, type, amount, description, citizenid, created_at) VALUES (?, ?, ?, ?, ?, NOW())',
-        { delivery.dealershipId, 'info', 0, 'Delivery completed: ' .. #delivery.stockIds .. ' vehicle(s)', delivery.citizenid }
+        'INSERT INTO dealership_ledger (dealership_id, type, amount, description, identifier, created_at) VALUES (?, ?, ?, ?, ?, NOW())',
+        { delivery.dealershipId, 'info', 0, 'Delivery completed: ' .. #delivery.stockIds .. ' vehicle(s)', delivery.identifier }
     )
 
     -- Clean up active delivery
@@ -183,8 +183,8 @@ lib.callback.register('pickle_dealerships:failDelivery', function(source, delive
 
     -- Add ledger entry
     MySQL.insert.await(
-        'INSERT INTO dealership_ledger (dealership_id, type, amount, description, citizenid, created_at) VALUES (?, ?, ?, ?, ?, NOW())',
-        { delivery.dealershipId, 'refund', totalRefund, 'Delivery failed: partial refund', delivery.citizenid }
+        'INSERT INTO dealership_ledger (dealership_id, type, amount, description, identifier, created_at) VALUES (?, ?, ?, ?, ?, NOW())',
+        { delivery.dealershipId, 'refund', totalRefund, 'Delivery failed: partial refund', delivery.identifier }
     )
 
     -- Clean up

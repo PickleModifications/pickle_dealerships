@@ -19,7 +19,7 @@ CreateThread(function()
                 `location`         VARCHAR(100)    NOT NULL,
                 `type`             VARCHAR(50)     NOT NULL DEFAULT 'car',
                 `mode`             VARCHAR(50)     NOT NULL DEFAULT 'managed',
-                `owner_citizenid`  VARCHAR(50)     DEFAULT NULL,
+                `owner_identifier`  VARCHAR(50)     DEFAULT NULL,
                 `tier`             INT UNSIGNED    NOT NULL DEFAULT 1,
                 `balance`          BIGINT          NOT NULL DEFAULT 0,
                 `reputation`       INT             NOT NULL DEFAULT 0,
@@ -29,7 +29,7 @@ CreateThread(function()
                 `updated_at`       TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                 PRIMARY KEY (`id`),
                 KEY `idx_location` (`location`),
-                KEY `idx_owner`    (`owner_citizenid`),
+                KEY `idx_owner`    (`owner_identifier`),
                 KEY `idx_job`      (`job`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ]])
@@ -39,14 +39,14 @@ CreateThread(function()
             CREATE TABLE IF NOT EXISTS `dealership_employees` (
                 `id`              INT UNSIGNED   NOT NULL AUTO_INCREMENT,
                 `dealership_id`   INT UNSIGNED   NOT NULL,
-                `citizenid`       VARCHAR(50)    NOT NULL,
+                `identifier`       VARCHAR(50)    NOT NULL,
                 `role`            VARCHAR(30)    NOT NULL DEFAULT 'salesperson',
                 `commission_rate` DECIMAL(5,2)   NOT NULL DEFAULT 0.00,
                 `hired_at`        TIMESTAMP      NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 `metadata`        JSON           DEFAULT NULL,
                 PRIMARY KEY (`id`),
                 KEY `idx_dealership` (`dealership_id`),
-                KEY `idx_citizen`    (`citizenid`)
+                KEY `idx_citizen`    (`identifier`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ]])
 
@@ -74,6 +74,12 @@ CreateThread(function()
                 KEY `idx_model`      (`vehicle_model`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ]])
+
+        -- Migration: rename citizenid columns to identifier for framework-agnostic support
+        MySQL.Async.execute([[ ALTER TABLE `dealerships` CHANGE COLUMN IF EXISTS `owner_citizenid` `owner_identifier` VARCHAR(50) DEFAULT NULL ]])
+        MySQL.Async.execute([[ ALTER TABLE `dealership_employees` CHANGE COLUMN IF EXISTS `citizenid` `identifier` VARCHAR(50) NOT NULL ]])
+        MySQL.Async.execute([[ ALTER TABLE `dealership_ledger` CHANGE COLUMN IF EXISTS `citizenid` `identifier` VARCHAR(50) DEFAULT NULL ]])
+        MySQL.Async.execute([[ ALTER TABLE `dealership_financing` CHANGE COLUMN IF EXISTS `citizenid` `identifier` VARCHAR(50) NOT NULL ]])
 
         -- Migration: add quantity column for existing databases
         MySQL.Async.execute([[
@@ -113,7 +119,7 @@ CreateThread(function()
                 `type`            VARCHAR(50)    NOT NULL,
                 `amount`          BIGINT         NOT NULL DEFAULT 0,
                 `description`     TEXT           DEFAULT NULL,
-                `citizenid`       VARCHAR(50)    DEFAULT NULL,
+                `identifier`       VARCHAR(50)    DEFAULT NULL,
                 `created_at`      TIMESTAMP      NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (`id`),
                 KEY `idx_dealership` (`dealership_id`),
@@ -126,7 +132,7 @@ CreateThread(function()
             CREATE TABLE IF NOT EXISTS `dealership_financing` (
                 `id`                 INT UNSIGNED   NOT NULL AUTO_INCREMENT,
                 `dealership_id`      INT UNSIGNED   NOT NULL,
-                `citizenid`          VARCHAR(50)    NOT NULL,
+                `identifier`          VARCHAR(50)    NOT NULL,
                 `vehicle_plate`      VARCHAR(20)    NOT NULL,
                 `total_amount`       BIGINT         NOT NULL DEFAULT 0,
                 `amount_paid`        BIGINT         NOT NULL DEFAULT 0,
@@ -138,7 +144,7 @@ CreateThread(function()
                 `created_at`         TIMESTAMP      NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (`id`),
                 KEY `idx_dealership` (`dealership_id`),
-                KEY `idx_citizen`    (`citizenid`),
+                KEY `idx_citizen`    (`identifier`),
                 KEY `idx_plate`      (`vehicle_plate`),
                 KEY `idx_status`     (`status`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -316,11 +322,11 @@ function UpdateDealershipCache(id, data)
     end
 end
 
-function AddLedgerEntry(dealershipId, type, amount, description, citizenid)
+function AddLedgerEntry(dealershipId, type, amount, description, identifier)
     if not dealershipId or not type or not amount then return end
     MySQL.insert(
-        "INSERT INTO `dealership_ledger` (`dealership_id`, `type`, `amount`, `description`, `citizenid`) VALUES (?, ?, ?, ?, ?)",
-        { tonumber(dealershipId), type, tonumber(amount), description or "", citizenid }
+        "INSERT INTO `dealership_ledger` (`dealership_id`, `type`, `amount`, `description`, `identifier`) VALUES (?, ?, ?, ?, ?)",
+        { tonumber(dealershipId), type, tonumber(amount), description or "", identifier }
     )
 end
 
@@ -335,28 +341,18 @@ function GetPlayerDealershipRole(source, dealershipId)
     local dealership = GetDealership(dealershipId)
     if not dealership then return nil end
 
-    local citizenid = nil
-
-    -- Attempt to resolve citizenid via QBCore / framework
-    local QBCore = exports["qb-core"]:GetCoreObject()
-    if QBCore then
-        local Player = QBCore.Functions.GetPlayer(source)
-        if Player then
-            citizenid = Player.PlayerData.citizenid
-        end
-    end
-
-    if not citizenid then return nil end
+    local identifier = GetIdentifier(source)
+    if not identifier then return nil end
 
     -- Owner check via dealership table
-    if dealership.owner_citizenid == citizenid then
+    if dealership.owner_identifier == identifier then
         return "owner"
     end
 
     -- Employee check via dealership_employees table
     local rows = MySQL.query.await(
-        "SELECT `role` FROM `dealership_employees` WHERE `dealership_id` = ? AND `citizenid` = ? LIMIT 1",
-        { dealershipId, citizenid }
+        "SELECT `role` FROM `dealership_employees` WHERE `dealership_id` = ? AND `identifier` = ? LIMIT 1",
+        { dealershipId, identifier }
     )
 
     if rows and rows[1] then
@@ -367,11 +363,13 @@ function GetPlayerDealershipRole(source, dealershipId)
 end
 
 function CanPlayerManage(source, dealershipId)
+    if IsPlayerAdmin(source) then return true end
     local role = GetPlayerDealershipRole(source, dealershipId)
     return role == "owner" or role == "manager"
 end
 
 function CanPlayerSell(source, dealershipId)
+    if IsPlayerAdmin(source) then return true end
     local role = GetPlayerDealershipRole(source, dealershipId)
     return role == "owner" or role == "manager" or role == "salesperson"
 end

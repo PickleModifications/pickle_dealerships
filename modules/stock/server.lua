@@ -227,8 +227,8 @@ end)
 ---@param wholesalePrice number
 lib.callback.register('pickle_dealerships:orderVehicle', function(source, locationKey, model, wholesalePrice)
     -- Verify player role
-    local citizenid = GetIdentifier(source)
-    if not citizenid then return false, 'Unable to identify player.' end
+    local identifier = GetIdentifier(source)
+    if not identifier then return false, 'Unable to identify player.' end
 
     local dealership = MySQL.single.await(
         'SELECT * FROM dealerships WHERE location = ?',
@@ -237,12 +237,12 @@ lib.callback.register('pickle_dealerships:orderVehicle', function(source, locati
     if not dealership then return false, 'Dealership not found.' end
 
     -- Check role
-    local isOwner = dealership.owner_citizenid == citizenid
+    local isOwner = dealership.owner_identifier == identifier
     local employee = nil
     if not isOwner then
         employee = MySQL.single.await(
-            'SELECT role FROM dealership_employees WHERE dealership_id = ? AND citizenid = ?',
-            { dealership.id, citizenid }
+            'SELECT role FROM dealership_employees WHERE dealership_id = ? AND identifier = ?',
+            { dealership.id, identifier }
         )
         if not employee or (employee.role ~= 'manager' and not IsPlayerAdmin(source)) then
             return false, 'You do not have permission to order vehicles.'
@@ -341,8 +341,8 @@ lib.callback.register('pickle_dealerships:orderVehicle', function(source, locati
 
     -- Create ledger entry
     MySQL.insert.await(
-        'INSERT INTO dealership_ledger (dealership_id, type, amount, description, citizenid, created_at) VALUES (?, ?, ?, ?, ?, NOW())',
-        { dealership.id, 'expense', totalCost, 'Vehicle order: ' .. model, citizenid }
+        'INSERT INTO dealership_ledger (dealership_id, type, amount, description, identifier, created_at) VALUES (?, ?, ?, ?, ?, NOW())',
+        { dealership.id, 'expense', totalCost, 'Vehicle order: ' .. model, identifier }
     )
 
     ShowNotification(source, 'Vehicle ordered: ' .. model .. ' for $' .. totalCost .. '.', 'success')
@@ -359,8 +359,8 @@ end)
 ---@param stockId number
 ---@param retailPrice number
 lib.callback.register('pickle_dealerships:setRetailPrice', function(source, locationKey, stockId, retailPrice)
-    local citizenid = GetIdentifier(source)
-    if not citizenid then return false, 'Unable to identify player.' end
+    local identifier = GetIdentifier(source)
+    if not identifier then return false, 'Unable to identify player.' end
 
     local dealership = MySQL.single.await(
         'SELECT * FROM dealerships WHERE location = ?',
@@ -369,11 +369,11 @@ lib.callback.register('pickle_dealerships:setRetailPrice', function(source, loca
     if not dealership then return false, 'Dealership not found.' end
 
     -- Verify permission
-    local isOwner = dealership.owner_citizenid == citizenid
+    local isOwner = dealership.owner_identifier == identifier
     if not isOwner then
         local employee = MySQL.single.await(
-            'SELECT role FROM dealership_employees WHERE dealership_id = ? AND citizenid = ?',
-            { dealership.id, citizenid }
+            'SELECT role FROM dealership_employees WHERE dealership_id = ? AND identifier = ?',
+            { dealership.id, identifier }
         )
         if not employee or (employee.role ~= 'manager' and not IsPlayerAdmin(source)) then
             return false, 'You do not have permission.'
@@ -406,8 +406,8 @@ end)
 ---@param stockId number
 ---@param spot number|nil
 lib.callback.register('pickle_dealerships:setDisplaySpot', function(source, locationKey, stockId, spot)
-    local citizenid = GetIdentifier(source)
-    if not citizenid then return false, 'Unable to identify player.' end
+    local identifier = GetIdentifier(source)
+    if not identifier then return false, 'Unable to identify player.' end
 
     local dealership = MySQL.single.await(
         'SELECT * FROM dealerships WHERE location = ?',
@@ -416,11 +416,11 @@ lib.callback.register('pickle_dealerships:setDisplaySpot', function(source, loca
     if not dealership then return false, 'Dealership not found.' end
 
     -- Verify permission
-    local isOwner = dealership.owner_citizenid == citizenid
+    local isOwner = dealership.owner_identifier == identifier
     if not isOwner then
         local employee = MySQL.single.await(
-            'SELECT role FROM dealership_employees WHERE dealership_id = ? AND citizenid = ?',
-            { dealership.id, citizenid }
+            'SELECT role FROM dealership_employees WHERE dealership_id = ? AND identifier = ?',
+            { dealership.id, identifier }
         )
         if not employee or (employee.role ~= 'manager' and not IsPlayerAdmin(source)) then
             return false, 'You do not have permission.'

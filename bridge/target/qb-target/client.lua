@@ -61,6 +61,26 @@ function GetOptionNames(options)
     return optionNames
 end
 
+function AddTargetPed(entity, options, defaultIcon)
+    for i = 1, #options do
+        if not options[i].icon and defaultIcon then
+            options[i].icon = defaultIcon
+        end
+        if options[i].onSelect then
+            local cb = options[i].onSelect
+            options[i].action = function(ent)
+                cb({entity = ent})
+            end
+            options[i].onSelect = nil
+        end
+    end
+    exports["qb-target"]:AddTargetEntity(entity, {options = options, distance = 2.5})
+end
+
+function RemoveTargetPed(entity, options)
+    exports["qb-target"]:RemoveTargetEntity(entity, GetOptionNames(options))
+end
+
 function AddTargetNetworkId(networkId, options)
     if not NetworkDoesNetworkIdExist(networkId) then return end
     local entity = NetworkGetEntityFromNetworkId(networkId)

@@ -38,7 +38,7 @@ local function ValidateCoupon(dealershipId, code, purchasePrice)
     return discount, coupon
 end
 
-local function MarkStockSold(stockId, citizenid, soldBy)
+local function MarkStockSold(stockId, identifier, soldBy)
     local stock = MySQL.single.await(
         "SELECT `quantity` FROM `dealership_stock` WHERE `id` = ?",
         { tonumber(stockId) }
@@ -51,7 +51,7 @@ local function MarkStockSold(stockId, citizenid, soldBy)
     else
         MySQL.update(
             "UPDATE `dealership_stock` SET `sold_at` = NOW(), `sold_to` = ?, `sold_by` = ? WHERE `id` = ?",
-            { citizenid, soldBy, tonumber(stockId) }
+            { identifier, soldBy, tonumber(stockId) }
         )
     end
 end
@@ -68,8 +68,8 @@ local function AddDealershipBalance(dealershipId, amount)
 end
 
 local function ProcessSale(source, dealershipId, stockItem, paymentMethod, couponCode, soldByCitizenid)
-    local citizenid = GetIdentifier(source)
-    if not citizenid then return false, "Could not identify player." end
+    local identifier = GetIdentifier(source)
+    if not identifier then return false, "Could not identify player." end
 
     local price = stockItem.retail_price
     local discount = 0
@@ -94,7 +94,7 @@ local function ProcessSale(source, dealershipId, stockItem, paymentMethod, coupo
     RemoveMoney(source, finalPrice, currency)
 
     -- Mark stock as sold
-    MarkStockSold(stockItem.id, citizenid, soldByCitizenid)
+    MarkStockSold(stockItem.id, identifier, soldByCitizenid)
 
     -- Calculate tax and net revenue
     local salesTax = math.floor(finalPrice * Config.SalesTax)
@@ -104,7 +104,7 @@ local function ProcessSale(source, dealershipId, stockItem, paymentMethod, coupo
     AddDealershipBalance(dealershipId, netRevenue)
 
     -- Ledger: sale
-    AddLedgerEntry(dealershipId, "sale", finalPrice, ("Vehicle sold: %s for %s"):format(stockItem.vehicle_label or stockItem.vehicle_model, GetCurrencyString(finalPrice)), citizenid)
+    AddLedgerEntry(dealershipId, "sale", finalPrice, ("Vehicle sold: %s for %s"):format(stockItem.vehicle_label or stockItem.vehicle_model, GetCurrencyString(finalPrice)), identifier)
 
     -- Ledger: tax
     if salesTax > 0 then
@@ -115,7 +115,7 @@ local function ProcessSale(source, dealershipId, stockItem, paymentMethod, coupo
     if soldByCitizenid then
         -- Look up employee role, then get role-based commission from dealership metadata
         local empRows = MySQL.query.await(
-            "SELECT `role`, `commission_rate` FROM `dealership_employees` WHERE `dealership_id` = ? AND `citizenid` = ? LIMIT 1",
+            "SELECT `role`, `commission_rate` FROM `dealership_employees` WHERE `dealership_id` = ? AND `identifier` = ? LIMIT 1",
             { tonumber(dealershipId), soldByCitizenid }
         )
         local commissionRate = Config.DefaultCommission or 0.08
@@ -151,7 +151,7 @@ local function ProcessSale(source, dealershipId, stockItem, paymentMethod, coupo
     -- Notify
     ShowNotification(source, ("You purchased a %s for %s!"):format(stockItem.vehicle_label or stockItem.vehicle_model, GetCurrencyString(finalPrice)))
 
-    debugPrint(("[Sales] Player %s purchased %s (stock #%d) for %s"):format(citizenid, stockItem.vehicle_model, stockItem.id, GetCurrencyString(finalPrice)))
+    debugPrint(("[Sales] Player %s purchased %s (stock #%d) for %s"):format(identifier, stockItem.vehicle_model, stockItem.id, GetCurrencyString(finalPrice)))
 
     return true, plate, finalPrice
 end

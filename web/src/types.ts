@@ -85,7 +85,7 @@ export interface Employee {
   id: number
   serverId?: number
   dealership_id: number
-  citizenid: string
+  identifier: string
   name?: string
   role: 'manager' | 'salesperson' | 'owner'
   gradeLabel?: string
@@ -103,7 +103,7 @@ export interface LedgerEntry {
   type: string
   amount: number
   description: string
-  citizenid: string
+  identifier: string
   created_at: string
 }
 
@@ -125,7 +125,7 @@ export interface Coupon {
 export interface FinancingAgreement {
   id: number
   dealership_id: number
-  citizenid: string
+  identifier: string
   vehicle_plate: string
   vehicle_label?: string
   total_amount: number
@@ -174,7 +174,7 @@ export interface AdminDealership {
   name: string
   mode: string
   type: string
-  owner_citizenid: string | null
+  owner_identifier: string | null
   owner_name?: string
   tier: number
   balance: number

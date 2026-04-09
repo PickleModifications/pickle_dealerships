@@ -42,6 +42,11 @@ export default function AdminPage({ data, onClose }: Props) {
   const [createMode, setCreateMode] = useState('player-owned')
   const [createType, setCreateType] = useState('car')
 
+  // Transfer ownership
+  const [onlinePlayers, setOnlinePlayers] = useState<{ source: number; name: string; identifier: string }[]>([])
+  const [playerSearch, setPlayerSearch] = useState('')
+  const [selectedPlayer, setSelectedPlayer] = useState<{ source: number; name: string; identifier: string } | null>(null)
+
   // Positions management
   const [positionsDealership, setPositionsDealership] = useState<AdminDealership | null>(null)
   const [positionsMeta, setPositionsMeta] = useState<DealershipMetadata>(data.metadata ?? {})
@@ -115,7 +120,7 @@ export default function AdminPage({ data, onClose }: Props) {
     if (!selected || !action) return
     const dealershipId = selected.id
     const callbacks: Record<string, () => Promise<void>> = {
-      transfer: () => fetchNui('adminTransferOwnership', { dealershipId, newOwnerId: inputValue }).then(() => loadDealerships()),
+      transfer: () => fetchNui('adminTransferOwnership', { dealershipId, newOwnerId: selectedPlayer?.identifier || inputValue }).then(() => loadDealerships()),
       balance: () => fetchNui('adminSetBalance', { dealershipId, amount: parseInt(inputValue) }).then(() => loadDealerships()),
       tier: () => fetchNui('adminSetTier', { dealershipId, tier: parseInt(inputValue) }).then(() => loadDealerships()),
       reset: () => fetchNui('adminResetDealership', { dealershipId }).then(() => loadDealerships()),
@@ -368,12 +373,21 @@ export default function AdminPage({ data, onClose }: Props) {
                           {d.job && <> &mdash; <span className="font-mono">{d.job}</span></>}
                         </p>
                         {d.owner_name && <p className="text-xs text-muted-foreground">Owner: {d.owner_name}</p>}
-                        {!d.owner_citizenid && d.mode === 'player-owned' && <p className="text-xs text-orange-400">Unowned</p>}
+                        {!d.owner_identifier && d.mode === 'player-owned' && <p className="text-xs text-orange-400">Unowned</p>}
                         {!d.job && <p className="text-xs text-orange-400">No job assigned</p>}
                       </div>
                       <div className="flex gap-1">
                         <Button variant="ghost" size="icon" className="h-7 w-7" title="Manage Positions" onClick={() => openPositions(d)}><MapPin className="h-3.5 w-3.5" /></Button>
-                        <Button variant="ghost" size="icon" className="h-7 w-7" title="Transfer" onClick={() => { setSelected(d); setAction('transfer'); setInputValue('') }}><UserRoundCog className="h-3.5 w-3.5" /></Button>
+                        <Button variant="ghost" size="icon" className="h-7 w-7" title="Transfer" onClick={() => {
+                          setSelected(d)
+                          setAction('transfer')
+                          setInputValue('')
+                          setSelectedPlayer(null)
+                          setPlayerSearch('')
+                          fetchNui<{ source: number; name: string; identifier: string }[]>('adminGetOnlinePlayers', {}).then((res) => {
+                            setOnlinePlayers(Array.isArray(res) ? res : [])
+                          })
+                        }}><UserRoundCog className="h-3.5 w-3.5" /></Button>
                         <Button variant="ghost" size="icon" className="h-7 w-7" title="Balance" onClick={() => { setSelected(d); setAction('balance'); setInputValue(String(d.balance)) }}><DollarSign className="h-3.5 w-3.5" /></Button>
                         <Button variant="ghost" size="icon" className="h-7 w-7" title="Tier" onClick={() => { setSelected(d); setAction('tier'); setInputValue(String(d.tier)) }}><ArrowUpCircle className="h-3.5 w-3.5" /></Button>
                         <Button variant="ghost" size="icon" className="h-7 w-7" title="Toggle Mode" onClick={() => { setSelected(d); setAction('toggle') }}><ToggleLeft className="h-3.5 w-3.5" /></Button>
@@ -402,7 +416,57 @@ export default function AdminPage({ data, onClose }: Props) {
             </DialogHeader>
             <div className="space-y-4 pt-2">
               {action === 'transfer' && (
-                <div><label className="text-sm font-medium">New Owner Citizen ID</label><Input value={inputValue} onChange={(e) => setInputValue(e.target.value)} placeholder="Enter citizen ID..." className="mt-1" /></div>
+                <div className="space-y-3">
+                  {/* Current owner display */}
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-1">Current Owner</p>
+                    {selected?.owner_identifier ? (
+                      <div className="bg-muted rounded-md px-3 py-2">
+                        <p className="text-sm font-medium">{selected.owner_name || 'Unknown'}</p>
+                        <p className="text-xs text-muted-foreground font-mono">{selected.owner_identifier}</p>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-orange-400">No owner assigned</p>
+                    )}
+                  </div>
+
+                  {/* Player search dropdown */}
+                  <div>
+                    <label className="text-sm font-medium">Transfer To</label>
+                    <div className="relative mt-1">
+                      <Input
+                        value={playerSearch}
+                        onChange={(e) => { setPlayerSearch(e.target.value); setSelectedPlayer(null) }}
+                        placeholder="Search online players..."
+                      />
+                      {playerSearch && !selectedPlayer && (
+                        <div className="absolute z-10 top-full mt-1 left-0 right-0 bg-popover border border-border rounded-md shadow-md max-h-40 overflow-auto">
+                          {onlinePlayers
+                            .filter((p) => p.name.toLowerCase().includes(playerSearch.toLowerCase()) || p.identifier.toLowerCase().includes(playerSearch.toLowerCase()))
+                            .map((p) => (
+                              <button
+                                key={p.source}
+                                onClick={() => { setSelectedPlayer(p); setPlayerSearch(p.name) }}
+                                className="w-full text-left px-3 py-2 hover:bg-muted text-sm flex justify-between"
+                              >
+                                <span>{p.name}</span>
+                                <span className="text-xs text-muted-foreground font-mono">{p.identifier.substring(0, 12)}...</span>
+                              </button>
+                            ))
+                          }
+                          {onlinePlayers.filter((p) => p.name.toLowerCase().includes(playerSearch.toLowerCase()) || p.identifier.toLowerCase().includes(playerSearch.toLowerCase())).length === 0 && (
+                            <p className="px-3 py-2 text-xs text-muted-foreground">No players found</p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    {selectedPlayer && (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Transferring to: <span className="font-medium text-foreground">{selectedPlayer.name}</span> <span className="font-mono">({selectedPlayer.identifier})</span>
+                      </p>
+                    )}
+                  </div>
+                </div>
               )}
               {action === 'balance' && (
                 <div><label className="text-sm font-medium">New Balance</label><Input type="number" value={inputValue} onChange={(e) => setInputValue(e.target.value)} className="mt-1" /></div>
@@ -417,7 +481,7 @@ export default function AdminPage({ data, onClose }: Props) {
               {action === 'toggle' && <p className="text-sm">Toggle between <strong>public</strong> and <strong>player-owned</strong>. Currently: <strong>{selected?.mode}</strong></p>}
               <div className="flex gap-2">
                 <Button variant="outline" className="flex-1" onClick={() => { setAction(null); setSelected(null) }}>Cancel</Button>
-                <Button className="flex-1" variant={action === 'reset' ? 'destructive' : 'default'} onClick={handleAction}>Confirm</Button>
+                <Button className="flex-1" variant={action === 'reset' ? 'destructive' : 'default'} onClick={handleAction} disabled={action === 'transfer' && !selectedPlayer}>Confirm</Button>
               </div>
             </div>
           </DialogContent>
