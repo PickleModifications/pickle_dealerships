@@ -251,6 +251,8 @@ lib.callback.register("pickle_dealerships:clockIn", function(source, data)
 
         TriggerClientEvent("pickle_dealerships:npc:startDuty", source, dealershipId, {
             npcSpawnPoints = npcSpawnPoints,
+            location = dealership.location,
+            dealershipName = dealership.name or 'Dealership',
         })
     end
 

@@ -16,6 +16,7 @@ import AdminPage from './pages/AdminPage'
 import ManagementPage from './pages/ManagementPage'
 import PhotoBoothPage from './pages/PhotoBoothPage'
 import ShowroomPage from './pages/ShowroomPage'
+import NpcShowroomPage from './pages/NpcShowroomPage'
 import InteractText from './components/InteractText'
 
 function App() {
@@ -59,6 +60,28 @@ function App() {
     setNpcProfile(null)
   })
 
+  useNuiEvent('openNPCShowroom', (payload: { profile: NPCProfile; greeting: string; dealershipId: number; location: string; dealershipName: string }) => {
+    setNpcProfile(payload.profile)
+    setNpcGreeting(payload.greeting)
+    setData({
+      dealershipId: payload.dealershipId,
+      dealershipName: payload.dealershipName,
+      location: payload.location,
+      role: 'salesperson',
+      tier: 1,
+    } as DealershipData)
+    setPage('npcShowroom')
+    setVisible(true)
+    setOpenKey((k) => k + 1)
+  })
+
+  useNuiEvent('closeNPCShowroom', () => {
+    setVisible(false)
+    setPage(null)
+    setNpcProfile(null)
+    setData(null)
+  })
+
   const handleClose = useCallback(() => {
     setVisible(false)
     setPage(null)
@@ -74,7 +97,7 @@ function App() {
           fetchNui('photoBoothCancel', {})
         } else if (page === 'showroom') {
           fetchNui('showroomClose', {})
-        } else if (page === 'negotiation') {
+        } else if (page === 'negotiation' || page === 'npcShowroom') {
           fetchNui('dismissNPC', {})
         } else {
           handleClose()
@@ -111,6 +134,8 @@ function App() {
         return <CouponsPage {...props} />
       case 'negotiation':
         return <NegotiationPage profile={npcProfile} greeting={npcGreeting} onClose={handleClose} />
+      case 'npcShowroom':
+        return <NpcShowroomPage data={data!} profile={npcProfile} greeting={npcGreeting} onClose={handleClose} />
       case 'management':
         return <ManagementPage {...props} />
       case 'admin':
@@ -128,7 +153,7 @@ function App() {
     <>
       <InteractText />
       {visible && page && (
-        page === 'photoBooth' || page === 'showroom' || page === 'negotiation' ? (
+        page === 'photoBooth' || page === 'showroom' || page === 'negotiation' || page === 'npcShowroom' ? (
           <div key={openKey} className="fixed inset-0 z-50">
             {renderPage()}
           </div>

@@ -8,7 +8,7 @@ local ShowroomCamThread = nil
 ---@return number|nil entity
 ---@return vector3|nil center
 ---@return number|nil radius
-local function SpawnShowroomVehicle(model, coords)
+function SpawnShowroomVehicle(model, coords)
     local modelHash = type(model) == "string" and joaat(model) or model
     RequestModel(modelHash)
     local timeout = GetGameTimer() + 10000

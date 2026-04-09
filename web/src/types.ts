@@ -197,6 +197,7 @@ export type PageType =
   | 'vehicleDetails'
   | 'photoBooth'
   | 'showroom'
+  | 'npcShowroom'
 
 export interface NuiMessage {
   type: string
