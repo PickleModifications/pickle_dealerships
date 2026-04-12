@@ -30,13 +30,18 @@ function SpawnPurchasedVehicle(model, spawnPoint, color, secondaryColor)
 
     local coords = spawnPoint
     local heading = coords.w or 0.0
-    local veh = CreateVeh(modelHash, coords.x, coords.y, coords.z, heading, true, false)
+    -- Spawn slightly above ground to avoid clipping
+    local veh = CreateVeh(modelHash, coords.x, coords.y, coords.z + 0.5, heading, true, false)
+
+    -- Immediately freeze and protect from damage until placed properly
+    FreezeEntityPosition(veh, true)
+    SetEntityInvincible(veh, true)
+    SetVehicleOnGroundProperly(veh)
 
     -- Apply color
     if color and type(color) == "table" then
         if color.r and color.g and color.b then
             SetVehicleCustomPrimaryColour(veh, color.r, color.g, color.b)
-            -- Use secondary color if provided, otherwise fall back to primary
             if secondaryColor and type(secondaryColor) == "table" and secondaryColor.r then
                 SetVehicleCustomSecondaryColour(veh, secondaryColor.r, secondaryColor.g, secondaryColor.b)
             else
@@ -47,11 +52,15 @@ function SpawnPurchasedVehicle(model, spawnPoint, color, secondaryColor)
         end
     end
 
-    -- Set player into vehicle
+    -- Warp player in, then unfreeze
     local ped = PlayerPedId()
     TaskWarpPedIntoVehicle(ped, veh, -1)
     SetVehicleEngineOn(veh, true, true, false)
-    SetVehicleOnGroundProperly(veh)
+
+    -- Small delay to let ground placement settle, then release
+    Wait(100)
+    FreezeEntityPosition(veh, false)
+    SetEntityInvincible(veh, false)
 
     return veh
 end

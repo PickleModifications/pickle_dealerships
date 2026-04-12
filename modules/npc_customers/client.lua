@@ -596,9 +596,11 @@ RegisterNUICallback("completeNPCSale", function(data, cb)
             SetModelAsNoLongerNeeded(modelHash)
         end
 
-        -- Position NPC near vehicle
+        -- Position NPC near vehicle and prepare for driving
         if npcPed and DoesEntityExist(npcPed) then
             FreezeEntityPosition(npcPed, false)
+            SetBlockingOfNonTemporaryEvents(npcPed, false)
+            ClearPedTasks(npcPed)
             if spawnPoint then
                 SetEntityCoords(npcPed, spawnPoint.x + 1.5, spawnPoint.y, spawnPoint.z, false, false, false, false)
             end
@@ -611,14 +613,36 @@ RegisterNUICallback("completeNPCSale", function(data, cb)
         DoScreenFadeIn(500)
         while not IsScreenFadedIn() do Wait(0) end
 
-        -- NPC enters vehicle and drives off
+        -- NPC enters vehicle and drives/flies off
         if driveVeh and npcPed and DoesEntityExist(npcPed) and DoesEntityExist(driveVeh) then
-            TaskEnterVehicle(npcPed, driveVeh, 5000, -1, 2.0, 1, 0)
-            Wait(6000)
-            TaskVehicleDriveWander(npcPed, driveVeh, 20.0, 786603)
+            local vehClass = GetVehicleClass(driveVeh)
+            -- Class 15 = helicopters, 16 = planes
+            local isAircraft = vehClass == 15 or vehClass == 16
 
-            -- Cleanup after NPC drives away
-            SetTimeout(30000, function()
+            if isAircraft then
+                -- Warp NPC directly into pilot seat for aircraft
+                TaskWarpPedIntoVehicle(npcPed, driveVeh, -1)
+                SetVehicleEngineOn(driveVeh, true, true, false)
+                Wait(500)
+
+                local vehCoords = GetEntityCoords(driveVeh)
+                if vehClass == 15 then
+                    -- Helicopter: use TaskHeliMission to fly to a distant point
+                    TaskHeliMission(npcPed, driveVeh, 0, 0, vehCoords.x + 300.0, vehCoords.y + 300.0, vehCoords.z + 100.0, 4, 40.0, 10.0, -1.0, 0, 0, -1.0, 0)
+                else
+                    -- Plane: set forward velocity and let it fly off
+                    local heading = GetEntityHeading(driveVeh)
+                    local rad = math.rad(heading)
+                    SetEntityVelocity(driveVeh, -math.sin(rad) * 50.0, math.cos(rad) * 50.0, 10.0)
+                end
+            else
+                TaskEnterVehicle(npcPed, driveVeh, 5000, -1, 2.0, 1, 0)
+                Wait(6000)
+                TaskVehicleDriveWander(npcPed, driveVeh, 20.0, 786603)
+            end
+
+            -- Cleanup after NPC leaves
+            SetTimeout(isAircraft and 20000 or 30000, function()
                 if DoesEntityExist(driveVeh) then DeleteEntity(driveVeh) end
                 if DoesEntityExist(npcPed) then DeleteEntity(npcPed) end
             end)

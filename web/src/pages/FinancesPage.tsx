@@ -7,7 +7,6 @@ import { ScrollArea } from '../components/ui/scroll-area'
 import { Separator } from '../components/ui/separator'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog'
 import { fetchNui, formatCurrency } from '../lib/utils'
-import { getCached, setCache, buildKey } from '../lib/cache'
 import { Skeleton, SkeletonList } from '../components/ui/skeleton'
 import { X, ArrowUpRight, ArrowDownLeft, DollarSign, Receipt } from 'lucide-react'
 import type { DealershipData, LedgerEntry } from '../types'
@@ -23,20 +22,18 @@ interface FinancesData {
 }
 
 export default function FinancesPage({ data, onClose }: Props) {
-  const cacheKey = buildKey(data.dealershipId, 'finances')
-  const cached = getCached<FinancesData>(cacheKey)
-  const [finances, setFinances] = useState<FinancesData | null>(cached)
-  const [loading, setLoading] = useState(!cached)
+  const [finances, setFinances] = useState<FinancesData | null>(null)
+  const [loading, setLoading] = useState(true)
   const [withdrawOpen, setWithdrawOpen] = useState(false)
   const [depositOpen, setDepositOpen] = useState(false)
   const [amount, setAmount] = useState('')
 
   const loadFinances = () => {
-    if (!getCached(cacheKey)) setLoading(true)
+    setLoading(true)
     fetchNui<{ success: boolean; data: FinancesData }>('getDealershipFinances', {
       dealershipId: data.dealershipId,
     }).then((res) => {
-      if (res.success && res.data) { setFinances(res.data); setCache(cacheKey, res.data) }
+      if (res.success && res.data) setFinances(res.data)
       setLoading(false)
     }).catch(() => setLoading(false))
   }

@@ -225,7 +225,7 @@ end)
 ---@param locationKey string
 ---@param model string
 ---@param wholesalePrice number
-lib.callback.register('pickle_dealerships:orderVehicle', function(source, locationKey, model, wholesalePrice)
+lib.callback.register('pickle_dealerships:orderVehicle', function(source, locationKey, model, wholesalePrice, orderQuantity)
     -- Verify player role
     local identifier = GetIdentifier(source)
     if not identifier then return false, 'Unable to identify player.' end
@@ -277,13 +277,16 @@ lib.callback.register('pickle_dealerships:orderVehicle', function(source, locati
         { dealership.id }
     )
 
-    if tonumber(currentCount or 0) >= stockCapacity then
+    local qty = math.max(1, math.min(100, tonumber(orderQuantity) or 1))
+
+    if tonumber(currentCount or 0) + qty > stockCapacity then
         return false, 'Stock capacity reached. Sell or remove vehicles first.'
     end
 
-    -- Calculate total cost with import tax
+    -- Calculate total cost with import tax (multiplied by quantity)
     local importTax = Config.ImportTax or 0
-    local totalCost = math.floor(wholesalePrice * (1 + importTax))
+    local unitCost = math.floor(wholesalePrice * (1 + importTax))
+    local totalCost = unitCost * qty
 
     -- Check dealership balance
     if dealership.balance < totalCost then
@@ -306,46 +309,51 @@ lib.callback.register('pickle_dealerships:orderVehicle', function(source, locati
     if deliveryMode == 'instant' then
         deliveredAt = os.date('%Y-%m-%d %H:%M:%S')
     elseif deliveryMode == 'timed' then
-        local deliveryMinutes = Config.DeliveryTime or 20
+        local deliveryMinutes = (Config.DeliveryTime or 20) * qty
         deliveredAt = os.date('%Y-%m-%d %H:%M:%S', os.time() + (deliveryMinutes * 60))
     end
     -- For 'trucking' mode, delivered_at stays NULL until delivery mission completes
 
-    -- Check if we can stack onto an existing already-delivered stock entry (same model, not on display, not sold, new condition)
     local retailPrice = math.floor(wholesalePrice * 1.3)
-    local existing = nil
+    local isInstant = deliveredAt and deliveredAt <= os.date('%Y-%m-%d %H:%M:%S')
 
-    -- Only stack if the new order is instant delivery, otherwise it needs its own in-transit row
-    if deliveredAt and deliveredAt <= os.date('%Y-%m-%d %H:%M:%S') then
+    local existing = nil
+    local stockId
+
+    if isInstant then
+        -- Instant delivery: stack onto existing delivered entry
         existing = MySQL.single.await(
             'SELECT id FROM dealership_stock WHERE dealership_id = ? AND vehicle_model = ? AND sold_at IS NULL AND display_spot IS NULL AND delivered_at IS NOT NULL AND delivered_at <= NOW() AND (`condition` = 100.00 OR `condition` IS NULL) LIMIT 1',
             { dealership.id, model }
         )
+    else
+        -- Timed delivery: stack onto existing in-transit entry of the same model
+        existing = MySQL.single.await(
+            'SELECT id FROM dealership_stock WHERE dealership_id = ? AND vehicle_model = ? AND sold_at IS NULL AND display_spot IS NULL AND delivered_at IS NOT NULL AND delivered_at > NOW() AND (`condition` = 100.00 OR `condition` IS NULL) LIMIT 1',
+            { dealership.id, model }
+        )
     end
 
-    local stockId
     if existing then
-        -- Increment quantity on existing delivered stack
         MySQL.update.await(
-            'UPDATE dealership_stock SET quantity = quantity + 1 WHERE id = ?',
-            { existing.id }
+            'UPDATE dealership_stock SET quantity = quantity + ? WHERE id = ?',
+            { qty, existing.id }
         )
         stockId = existing.id
     else
-        -- Create new stock entry (in-transit orders always get their own row until delivered)
         stockId = MySQL.insert.await(
-            'INSERT INTO dealership_stock (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, ordered_at, delivered_at) VALUES (?, ?, ?, ?, ?, NOW(), ?)',
-            { dealership.id, model, catalogEntry.label or model, wholesalePrice, retailPrice, deliveredAt }
+            'INSERT INTO dealership_stock (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, ordered_at, delivered_at, quantity) VALUES (?, ?, ?, ?, ?, NOW(), ?, ?)',
+            { dealership.id, model, catalogEntry.label or model, wholesalePrice, retailPrice, deliveredAt, qty }
         )
     end
 
     -- Create ledger entry
     MySQL.insert.await(
         'INSERT INTO dealership_ledger (dealership_id, type, amount, description, identifier, created_at) VALUES (?, ?, ?, ?, ?, NOW())',
-        { dealership.id, 'expense', totalCost, 'Vehicle order: ' .. model, identifier }
+        { dealership.id, 'expense', -totalCost, 'Vehicle order: ' .. model .. ' x' .. qty, identifier }
     )
 
-    ShowNotification(source, 'Vehicle ordered: ' .. model .. ' for $' .. totalCost .. '.', 'success')
+    ShowNotification(source, 'Ordered ' .. qty .. 'x ' .. model .. ' for $' .. totalCost .. '.')
 
     -- Notify clients to refresh display
     TriggerClientEvent('pickle_dealerships:refreshDisplay', -1, locationKey)

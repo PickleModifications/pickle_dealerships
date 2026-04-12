@@ -7,23 +7,29 @@ lib.callback.register("pickle_dealerships:getDealershipFinances", function(sourc
     local dealership = GetDealership(dealershipId)
     if not dealership then return nil end
 
+    -- Read fresh balance from DB
+    local freshBalance = MySQL.scalar.await("SELECT `balance` FROM `dealerships` WHERE `id` = ?", { dealershipId })
+    if freshBalance then
+        UpdateDealershipCache(dealershipId, { balance = tonumber(freshBalance) })
+    end
+
     -- Fetch last 50 ledger entries
     local ledger = MySQL.query.await("SELECT * FROM dealership_ledger WHERE dealership_id = ? ORDER BY created_at DESC LIMIT 50", { dealershipId })
 
-    -- Revenue stats
+    -- Revenue stats: positive amounts = income, negative = expenses
     local stats = MySQL.query.await([[
         SELECT
-            COALESCE(SUM(CASE WHEN type LIKE '%sale%' THEN amount ELSE 0 END), 0) AS total_sales,
-            COALESCE(SUM(CASE WHEN type LIKE '%expense%' OR type = 'withdrawal' OR type = 'stock_purchase' THEN amount ELSE 0 END), 0) AS total_expenses
+            COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) AS total_income,
+            COALESCE(SUM(CASE WHEN amount < 0 THEN amount ELSE 0 END), 0) AS total_expenses
         FROM dealership_ledger
         WHERE dealership_id = ?
     ]], { dealershipId })
 
-    local totalSales = stats[1] and stats[1].total_sales or 0
-    local totalExpenses = stats[1] and stats[1].total_expenses or 0
+    local totalSales = stats[1] and stats[1].total_income or 0
+    local totalExpenses = math.abs(stats[1] and stats[1].total_expenses or 0)
 
     return {
-        balance       = dealership.balance or 0,
+        balance       = tonumber(freshBalance) or dealership.balance or 0,
         ledger        = ledger or {},
         totalSales    = totalSales,
         totalExpenses = totalExpenses,
@@ -68,7 +74,7 @@ lib.callback.register("pickle_dealerships:withdrawFunds", function(source, data)
 
     local identifier = GetIdentifier(source)
     local playerName = GetPlayerCharacterName(source) or "Unknown"
-    AddLedgerEntry(dealershipId, "withdrawal", amount, "Withdrawal by " .. playerName, identifier)
+    AddLedgerEntry(dealershipId, "withdrawal", -amount, "Withdrawal by " .. playerName, identifier)
 
     -- Webhook for large withdrawals
     local webhookThreshold = Config.Management and Config.Management.largeWithdrawalThreshold or 100000
@@ -158,7 +164,7 @@ lib.callback.register("pickle_dealerships:upgradeTier", function(source, data)
 
     local identifier = GetIdentifier(source)
     local playerName = GetPlayerCharacterName(source) or "Unknown"
-    AddLedgerEntry(dealershipId, "expense", cost, "Tier upgrade to " .. newTier .. " by " .. playerName, identifier)
+    AddLedgerEntry(dealershipId, "expense", -cost, "Tier upgrade to " .. newTier .. " by " .. playerName, identifier)
 
     return { success = true, newTier = newTier, newBalance = newBalance, message = "Dealership upgraded to Tier " .. newTier .. "!" }
 end)

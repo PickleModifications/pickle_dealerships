@@ -57,13 +57,17 @@ local function MarkStockSold(stockId, identifier, soldBy)
 end
 
 local function AddDealershipBalance(dealershipId, amount)
-    MySQL.update(
+    MySQL.update.await(
         "UPDATE `dealerships` SET `balance` = `balance` + ? WHERE `id` = ?",
         { tonumber(amount), tonumber(dealershipId) }
     )
-    local dealership = GetDealership(dealershipId)
-    if dealership then
-        UpdateDealershipCache(dealershipId, { balance = dealership.balance + amount })
+    -- Read fresh balance from DB to keep cache accurate
+    local freshBalance = MySQL.scalar.await(
+        "SELECT `balance` FROM `dealerships` WHERE `id` = ?",
+        { tonumber(dealershipId) }
+    )
+    if freshBalance then
+        UpdateDealershipCache(dealershipId, { balance = tonumber(freshBalance) })
     end
 end
 

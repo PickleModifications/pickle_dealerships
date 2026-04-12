@@ -243,7 +243,7 @@ RegisterNUICallback("orderVehicle", function(data, cb)
         return
     end
 
-    local success, result = lib.callback.await('pickle_dealerships:orderVehicle', false, location, data.model, data.wholesale)
+    local success, result = lib.callback.await('pickle_dealerships:orderVehicle', false, location, data.model, data.wholesale, tonumber(data.quantity) or 1)
     if success then
         ShowNotification("Vehicle ordered successfully!")
         cb({ success = true, stockId = result })

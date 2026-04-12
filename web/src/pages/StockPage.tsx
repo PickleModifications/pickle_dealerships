@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { fetchNui, formatCurrency, getVehicleImage } from '../lib/utils'
 import { getCached, setCache, buildKey } from '../lib/cache'
 import { SkeletonCardGrid } from '../components/ui/skeleton'
-import { X, Search, Package, Truck, Clock, ParkingSquare, Car, Pencil, SlidersHorizontal } from 'lucide-react'
+import { X, Search, Package, Truck, Clock, Car, Pencil, SlidersHorizontal } from 'lucide-react'
 import VehicleImg from '../components/VehicleImg'
 import type { DealershipData, StockItem } from '../types'
 
@@ -29,10 +29,21 @@ function getDeliveryStatus(item: StockItem): 'available' | 'in_transit' | 'pendi
 
 function getTimeRemaining(deliveredAt: string): string {
   const diff = new Date(deliveredAt).getTime() - Date.now()
-  if (diff <= 0) return 'Arriving...'
-  const mins = Math.ceil(diff / 60000)
-  if (mins >= 60) return `${Math.floor(mins / 60)}h ${mins % 60}m`
-  return `${mins}m`
+  if (diff <= 0) return '0:00'
+  const totalSecs = Math.ceil(diff / 1000)
+  const mins = Math.floor(totalSecs / 60)
+  const secs = totalSecs % 60
+  return `${mins}:${secs.toString().padStart(2, '0')}`
+}
+
+function getDeliveryProgress(item: StockItem): number {
+  if (!item.delivered_at || !item.ordered_at) return 0
+  const start = new Date(item.ordered_at).getTime()
+  const end = new Date(item.delivered_at).getTime()
+  const now = Date.now()
+  if (now >= end) return 100
+  if (now <= start) return 0
+  return Math.min(100, ((now - start) / (end - start)) * 100)
 }
 
 export default function StockPage({ data, onClose }: Props) {
@@ -42,10 +53,8 @@ export default function StockPage({ data, onClose }: Props) {
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(!cached)
   const [, setTick] = useState(0)
-  const [spotList, setSpotList] = useState<{ id: number; index: number }[]>([])
   const [editingPrice, setEditingPrice] = useState<StockItem | null>(null)
   const [priceInput, setPriceInput] = useState('')
-  const [assigningSpot, setAssigningSpot] = useState<StockItem | null>(null)
   const [classFilter, setClassFilter] = useState('all')
   const [sortBy, setSortBy] = useState<'name_asc' | 'name_desc' | 'price_asc' | 'price_desc'>('name_asc')
   const [priceRange, setPriceRange] = useState<[number, number]>([0, 0])
@@ -73,28 +82,15 @@ export default function StockPage({ data, onClose }: Props) {
 
   useEffect(() => {
     loadStock()
-    fetchNui<{ spots: { id: number; index: number }[] }>('getDisplaySpots', {
-      location: data.location,
-    }).then((res) => {
-      if (res && res.spots) setSpotList(res.spots)
-    }).catch(() => {})
   }, [data.dealershipId])
 
   useEffect(() => {
     const hasInTransit = stock.some((s) => getDeliveryStatus(s) !== 'available')
     if (!hasInTransit) return
-    const interval = setInterval(() => setTick((t) => t + 1), 30000)
+    const interval = setInterval(() => setTick((t) => t + 1), 1000)
     return () => clearInterval(interval)
   }, [stock])
 
-  const handleSetSpot = (stockId: number, spot: number | null) => {
-    fetchNui('setDisplaySpot', {
-      dealershipId: data.dealershipId,
-      location: data.location,
-      stockId,
-      spot,
-    }).then(() => loadStock())
-  }
 
   const handleSetPrice = () => {
     if (!editingPrice) return
@@ -134,7 +130,6 @@ export default function StockPage({ data, onClose }: Props) {
   const available = filtered.filter((s) => getDeliveryStatus(s) === 'available')
   const inTransit = filtered.filter((s) => getDeliveryStatus(s) !== 'available')
 
-  const takenSpots = new Set(stock.filter((s) => s.display_spot).map((s) => Number(s.display_spot)))
   const canManage = data.role === 'owner' || data.role === 'manager' || data.role === 'admin'
 
   const rowCount = Math.ceil(available.length / COLUMNS)
@@ -231,29 +226,37 @@ export default function StockPage({ data, onClose }: Props) {
           </p>
           <div className="space-y-1.5">
             {inTransit.map((item) => (
-              <Card key={item.id} className="overflow-hidden border-dashed opacity-80">
-                <CardContent className="p-3 flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <VehicleImg image={item.image} model={item.vehicle_model} alt={item.vehicle_label} className="h-9 w-16 object-contain rounded-md bg-muted shrink-0" fallbackClassName="h-9 w-16 rounded-md bg-amber-500/10 flex items-center justify-center shrink-0" iconClassName="h-4 w-4 text-amber-400" />
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <p className="font-semibold text-sm">{item.vehicle_label || item.vehicle_model}</p>
-                        {(item.quantity || 1) > 1 && (
-                          <Badge variant="secondary" className="text-xs">x{item.quantity}</Badge>
-                        )}
+              <Card key={item.id} className="overflow-hidden border-dashed">
+                <CardContent className="p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-3">
+                      <VehicleImg image={item.image} model={item.vehicle_model} alt={item.vehicle_label} className="h-9 w-16 object-contain rounded-md bg-muted shrink-0" fallbackClassName="h-9 w-16 rounded-md bg-amber-500/10 flex items-center justify-center shrink-0" iconClassName="h-4 w-4 text-amber-400" />
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <p className="font-semibold text-sm">{item.vehicle_label || item.vehicle_model}</p>
+                          {(item.quantity || 1) > 1 && (
+                            <Badge variant="secondary" className="text-xs">x{item.quantity}</Badge>
+                          )}
+                        </div>
+                        <p className="text-xs text-muted-foreground capitalize">{item.class || 'Vehicle'}</p>
                       </div>
-                      <p className="text-xs text-muted-foreground capitalize">{item.class || 'Vehicle'}</p>
+                    </div>
+                    <div className="text-right">
+                      {item.delivered_at ? (
+                        <p className="text-sm font-mono font-semibold text-amber-400">{getTimeRemaining(item.delivered_at)}</p>
+                      ) : (
+                        <Badge variant="outline" className="text-muted-foreground">Awaiting Pickup</Badge>
+                      )}
                     </div>
                   </div>
-                  <div className="text-right">
-                    {item.delivered_at ? (
-                      <Badge variant="outline" className="gap-1 text-amber-400 border-amber-400/30">
-                        <Clock className="h-3 w-3" /> {getTimeRemaining(item.delivered_at)}
-                      </Badge>
-                    ) : (
-                      <Badge variant="outline" className="text-muted-foreground">Awaiting Pickup</Badge>
-                    )}
-                  </div>
+                  {item.delivered_at && (
+                    <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-amber-400 rounded-full transition-all duration-1000 ease-linear"
+                        style={{ width: `${getDeliveryProgress(item)}%` }}
+                      />
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             ))}
@@ -331,23 +334,6 @@ export default function StockPage({ data, onClose }: Props) {
                                   </p>
                                 </div>
                               </div>
-                              {canManage && (
-                                item.display_spot ? (
-                                  <button
-                                    className="text-[11px] h-7 px-2 rounded border border-border hover:bg-muted flex items-center gap-1"
-                                    onClick={() => handleSetSpot(item.id, null)}
-                                  >
-                                    Spot #{item.display_spot} &times;
-                                  </button>
-                                ) : (
-                                  <button
-                                    className="text-[11px] h-7 px-2 rounded border border-border hover:bg-muted flex items-center gap-1 text-muted-foreground"
-                                    onClick={() => setAssigningSpot(item)}
-                                  >
-                                    <ParkingSquare className="h-3 w-3" /> Display...
-                                  </button>
-                                )
-                              )}
                             </div>
                           </div>
                         ))}
@@ -395,37 +381,6 @@ export default function StockPage({ data, onClose }: Props) {
         </DialogContent>
       </Dialog>
 
-      {/* Assign display spot dialog */}
-      <Dialog open={!!assigningSpot} onOpenChange={(open) => { if (!open) setAssigningSpot(null) }}>
-        <DialogContent onClose={() => setAssigningSpot(null)}>
-          <DialogHeader>
-            <DialogTitle>Assign Display Spot</DialogTitle>
-            <DialogDescription>{assigningSpot?.vehicle_label || assigningSpot?.vehicle_model}</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2 pt-2">
-            {spotList.map((spot) => (
-              <button
-                key={spot.id}
-                disabled={takenSpots.has(spot.id)}
-                onClick={() => {
-                  if (assigningSpot) {
-                    handleSetSpot(assigningSpot.id, spot.id)
-                    setAssigningSpot(null)
-                  }
-                }}
-                className={`w-full text-left px-3 py-2 rounded-md text-sm transition-colors ${
-                  takenSpots.has(spot.id)
-                    ? 'opacity-40 cursor-not-allowed bg-muted'
-                    : 'hover:bg-accent hover:text-accent-foreground bg-muted'
-                }`}
-              >
-                Spot #{spot.index} {takenSpots.has(spot.id) ? '(taken)' : ''}
-              </button>
-            ))}
-            <Button variant="outline" className="w-full mt-2" onClick={() => setAssigningSpot(null)}>Cancel</Button>
-          </div>
-        </DialogContent>
-      </Dialog>
     </>
   )
 }

@@ -68,7 +68,7 @@ export default function ManagementPage({ data, onClose }: Props) {
   const [purchasing, setPurchasing] = useState(false)
   const [isClockedIn, setIsClockedIn] = useState(false)
 
-  useEffect(() => {
+  const refreshBalance = () => {
     if (data.isOwned !== false) {
       fetchNui<{ success: boolean; data: { balance: number } }>('getDealershipFinances', {
         dealershipId: data.dealershipId,
@@ -76,13 +76,21 @@ export default function ManagementPage({ data, onClose }: Props) {
         if (res.success && res.data) setBalance(res.data.balance)
       }).catch(() => {})
     }
-    // Check clock-in status
+  }
+
+  useEffect(() => {
+    refreshBalance()
     fetchNui<{ clockedIn: boolean }>('getClockStatus', {
       dealershipId: data.dealershipId,
     }).then((res) => {
       if (res) setIsClockedIn(res.clockedIn)
     }).catch(() => {})
   }, [data.dealershipId, data.isOwned])
+
+  // Refresh balance whenever the active tab changes
+  useEffect(() => {
+    refreshBalance()
+  }, [activeTab])
 
   // Unowned dealership — show purchase screen
   if (data.isOwned === false && data.role === 'customer') {
