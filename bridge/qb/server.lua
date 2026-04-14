@@ -133,10 +133,13 @@ function GetMoney(source, currency)
 end
 
 function GetOwnedVehicleFromPlate(plate)
-    local data = MySQL.Sync.fetchAll("SELECT * FROM player_vehicles WHERE plate=@plate;", {
-        ['@plate'] = plate,
+    if not plate then return nil end
+    -- Normalize: strip ALL whitespace and uppercase; compare the same way in SQL
+    local normalized = string.upper(tostring(plate):gsub('%s+', ''))
+    local data = MySQL.Sync.fetchAll("SELECT * FROM player_vehicles WHERE REPLACE(UPPER(plate), ' ', '')=@plate LIMIT 1;", {
+        ['@plate'] = normalized,
     })[1]
-    return data and {owner = data.citizenid} or nil
+    return data and {owner = data.citizenid, model = data.vehicle} or nil
 end
 
 function AddOwnedVehicle(source, model)
@@ -161,6 +164,34 @@ function AddOwnedVehicle(source, model)
         ['@garage'] = "pillboxgarage",
         ['@state'] = 0
     })
+end
+
+function AddOwnedVehicleWithProps(source, model, plate, properties)
+    local xPlayer = QBCore.Functions.GetPlayer(tonumber(source))
+    if not xPlayer or not plate then return false end
+    local mods = type(properties) == "table" and json.encode(properties) or (properties or "{}")
+    MySQL.Async.execute('INSERT INTO player_vehicles (license, citizenid, vehicle, hash, mods, plate, garage, state) VALUES (@license, @citizenid, @vehicle, @hash, @mods, @plate, @garage, @state)',
+    {
+        ['@license'] = xPlayer.PlayerData.license,
+        ['@citizenid'] = xPlayer.PlayerData.citizenid,
+        ['@vehicle'] = model,
+        ['@hash'] = joaat(model),
+        ['@mods'] = mods,
+        ['@plate'] = string.upper(plate),
+        ['@garage'] = "pillboxgarage",
+        ['@state'] = 0
+    })
+    return true
+end
+
+function RemoveOwnedVehicle(identifier, plate)
+    if not identifier or not plate then return false end
+    MySQL.Async.execute('DELETE FROM player_vehicles WHERE plate = @plate AND citizenid = @citizenid',
+    {
+        ['@plate'] = plate,
+        ['@citizenid'] = identifier,
+    })
+    return true
 end
 
 function UpdateVehiclePlate(source, plate, newPlate)

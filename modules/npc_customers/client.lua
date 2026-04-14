@@ -123,11 +123,14 @@ local function CleanupNPCShowroom(skipFadeIn)
     FreezeEntityPosition(ped, false)
     SetEntityVisible(ped, true, false)
 
-    -- Restore NPC position
+    -- Restore NPC position and start them walking away so they're moving when screen fades in
     local npcPed = NPCShowroomState.npcEntity
     if npcPed and DoesEntityExist(npcPed) then
         FreezeEntityPosition(npcPed, false)
+        SetBlockingOfNonTemporaryEvents(npcPed, false)
         SetEntityCoords(npcPed, NPCShowroomState.savedNPCCoords.x, NPCShowroomState.savedNPCCoords.y, NPCShowroomState.savedNPCCoords.z, false, false, false, false)
+        ClearPedTasks(npcPed)
+        TaskWanderStandard(npcPed, 10.0, 10)
     end
 
     DisplayRadar(true)
@@ -383,8 +386,10 @@ RegisterNUICallback("npcStartShowroom", function(_, cb)
 
     -- Save positions
     local savedPlayerCoords = GetEntityCoords(playerPed)
+    savedPlayerCoords = vector3(savedPlayerCoords.x, savedPlayerCoords.y, savedPlayerCoords.z - 1.0)
     local savedPlayerHeading = GetEntityHeading(playerPed)
     local savedNPCCoords = GetEntityCoords(npcPed)
+    savedNPCCoords = vector3(savedNPCCoords.x, savedNPCCoords.y, savedNPCCoords.z - 1.0)
 
     -- Fade out
     DoScreenFadeOut(500)
@@ -609,58 +614,75 @@ RegisterNUICallback("completeNPCSale", function(data, cb)
         DisplayRadar(true)
         DisplayHud(true)
 
-        -- Fade in
+        -- Start NPC walking/driving task BEFORE fade-in so they're already moving when screen appears
+        local vehClass = driveVeh and GetVehicleClass(driveVeh) or -1
+        local isAircraft = vehClass == 15 or vehClass == 16
+
+        if driveVeh and npcPed and DoesEntityExist(npcPed) and DoesEntityExist(driveVeh) then
+            if isAircraft then
+                -- Aircraft: warp directly into pilot seat
+                TaskWarpPedIntoVehicle(npcPed, driveVeh, -1)
+                SetVehicleEngineOn(driveVeh, true, true, false)
+            else
+                -- Ground vehicle: start walking toward the vehicle now
+                TaskEnterVehicle(npcPed, driveVeh, 5000, -1, 2.0, 1, 0)
+            end
+        end
+
+        -- Fade in — NPC is already walking/in pilot seat
         DoScreenFadeIn(500)
         while not IsScreenFadedIn() do Wait(0) end
 
-        -- NPC enters vehicle and drives/flies off
-        if driveVeh and npcPed and DoesEntityExist(npcPed) and DoesEntityExist(driveVeh) then
-            local vehClass = GetVehicleClass(driveVeh)
-            -- Class 15 = helicopters, 16 = planes
-            local isAircraft = vehClass == 15 or vehClass == 16
-
-            if isAircraft then
-                -- Warp NPC directly into pilot seat for aircraft
-                TaskWarpPedIntoVehicle(npcPed, driveVeh, -1)
-                SetVehicleEngineOn(driveVeh, true, true, false)
-                Wait(500)
-
-                local vehCoords = GetEntityCoords(driveVeh)
-                if vehClass == 15 then
-                    -- Helicopter: use TaskHeliMission to fly to a distant point
-                    TaskHeliMission(npcPed, driveVeh, 0, 0, vehCoords.x + 300.0, vehCoords.y + 300.0, vehCoords.z + 100.0, 4, 40.0, 10.0, -1.0, 0, 0, -1.0, 0)
-                else
-                    -- Plane: set forward velocity and let it fly off
-                    local heading = GetEntityHeading(driveVeh)
-                    local rad = math.rad(heading)
-                    SetEntityVelocity(driveVeh, -math.sin(rad) * 50.0, math.cos(rad) * 50.0, 10.0)
-                end
-            else
-                TaskEnterVehicle(npcPed, driveVeh, 5000, -1, 2.0, 1, 0)
-                Wait(6000)
-                TaskVehicleDriveWander(npcPed, driveVeh, 20.0, 786603)
+        -- Remove NPC's interaction target and mark as leaving (keeps spawn point blocked)
+        if currentNPCInteraction and currentNPCInteraction.npcData then
+            if currentNPCInteraction.npcData.interaction then
+                DeleteInteraction(currentNPCInteraction.npcData.interaction)
+                currentNPCInteraction.npcData.interaction = nil
             end
+            currentNPCInteraction.npcData.leaving = true
+        end
 
-            -- Cleanup after NPC leaves
+        -- Capture npcData reference and clear interaction state NOW so player can assist others
+        local leavingNpcData = currentNPCInteraction and currentNPCInteraction.npcData
+        currentNPCInteraction = nil
+        cb({ success = true, saleAmount = result.saleAmount, commission = result.commission })
+
+        -- Continue drive-off sequence in a separate thread (non-blocking)
+        if driveVeh and npcPed and DoesEntityExist(npcPed) and DoesEntityExist(driveVeh) then
+            CreateThread(function()
+                if isAircraft then
+                    Wait(500)
+                    if not DoesEntityExist(driveVeh) or not DoesEntityExist(npcPed) then return end
+                    local vehCoords = GetEntityCoords(driveVeh)
+                    if vehClass == 15 then
+                        TaskHeliMission(npcPed, driveVeh, 0, 0, vehCoords.x + 300.0, vehCoords.y + 300.0, vehCoords.z + 100.0, 4, 40.0, 10.0, -1.0, 0, 0, -1.0, 0)
+                    else
+                        local heading = GetEntityHeading(driveVeh)
+                        local rad = math.rad(heading)
+                        SetEntityVelocity(driveVeh, -math.sin(rad) * 50.0, math.cos(rad) * 50.0, 10.0)
+                    end
+                else
+                    Wait(6000)
+                    if DoesEntityExist(driveVeh) and DoesEntityExist(npcPed) then
+                        TaskVehicleDriveWander(npcPed, driveVeh, 20.0, 786603)
+                    end
+                end
+            end)
+
+            -- Cleanup after NPC leaves — removes from activeNPCs to free up spawn point
             SetTimeout(isAircraft and 20000 or 30000, function()
                 if DoesEntityExist(driveVeh) then DeleteEntity(driveVeh) end
                 if DoesEntityExist(npcPed) then DeleteEntity(npcPed) end
+                if leavingNpcData then
+                    for i = #activeNPCs, 1, -1 do
+                        if activeNPCs[i] == leavingNpcData then
+                            table.remove(activeNPCs, i)
+                            break
+                        end
+                    end
+                end
             end)
         end
-
-        -- Remove from active NPCs
-        if currentNPCInteraction and currentNPCInteraction.npcData then
-            for i = #activeNPCs, 1, -1 do
-                if activeNPCs[i].entity == currentNPCInteraction.npcData.entity then
-                    if activeNPCs[i].interaction then DeleteInteraction(activeNPCs[i].interaction) end
-                    table.remove(activeNPCs, i)
-                    break
-                end
-            end
-        end
-
-        currentNPCInteraction = nil
-        cb({ success = true, saleAmount = result.saleAmount, commission = result.commission })
     else
         cb({ success = false, message = result and result.message or "Sale failed." })
     end

@@ -278,6 +278,15 @@ function OpenManagementMenu(locationKey)
         return
     end
 
+    -- Fetch fresh finances to supply the initial balance
+    local initialBalance = data.balance or 0
+    if role == 'owner' or role == 'manager' or role == 'admin' then
+        local finances = lib.callback.await('pickle_dealerships:getDealershipFinances', false, data.id)
+        if finances and finances.balance then
+            initialBalance = finances.balance
+        end
+    end
+
     OpenNui('management', {
         dealershipId = data.id,
         dealershipName = data.name or "Dealership",
@@ -288,6 +297,7 @@ function OpenManagementMenu(locationKey)
         isOwned = data.owner_identifier ~= nil,
         purchasePrice = data.purchasePrice or 0,
         mode = data.mode,
+        initialBalance = initialBalance,
     })
 end
 

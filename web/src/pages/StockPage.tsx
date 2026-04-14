@@ -127,8 +127,44 @@ export default function StockPage({ data, onClose }: Props) {
     }
   })
 
-  const available = filtered.filter((s) => getDeliveryStatus(s) === 'available')
-  const inTransit = filtered.filter((s) => getDeliveryStatus(s) !== 'available')
+  const availableRaw = filtered.filter((s) => getDeliveryStatus(s) === 'available')
+  const allInTransit = filtered.filter((s) => getDeliveryStatus(s) !== 'available' && !s.is_used)
+
+  // UI-level consolidation for NEW stock: merge rows with same model+retail into one card.
+  // Pre-owned units are kept as individual cards (each carries unique properties).
+  const availableGroups = new Map<string, StockItem>()
+  const preOwned: StockItem[] = []
+  for (const item of availableRaw) {
+    if (item.is_used) {
+      preOwned.push(item)
+      continue
+    }
+    const key = `${item.vehicle_model}|${item.retail_price}`
+    const existing = availableGroups.get(key)
+    if (existing) {
+      existing.quantity = (existing.quantity || 1) + (item.quantity || 1)
+    } else {
+      availableGroups.set(key, { ...item, quantity: item.quantity || 1 })
+    }
+  }
+  const available = [...Array.from(availableGroups.values()), ...preOwned]
+
+  // Sum in-transit quantities per model so the +X badge reflects all pending orders.
+  const inTransitByModel = new Map<string, StockItem>()
+  for (const item of allInTransit) {
+    const existing = inTransitByModel.get(item.vehicle_model)
+    if (existing) {
+      existing.quantity = (existing.quantity || 1) + (item.quantity || 1)
+      // Keep the soonest delivery time for the badge
+      if (item.delivered_at && existing.delivered_at && new Date(item.delivered_at) < new Date(existing.delivered_at)) {
+        existing.delivered_at = item.delivered_at
+        existing.ordered_at = item.ordered_at
+      }
+    } else {
+      inTransitByModel.set(item.vehicle_model, { ...item, quantity: item.quantity || 1 })
+    }
+  }
+  const inTransit = Array.from(inTransitByModel.values())
 
   const canManage = data.role === 'owner' || data.role === 'manager' || data.role === 'admin'
 
@@ -296,7 +332,9 @@ export default function StockPage({ data, onClose }: Props) {
                           transform: `translateY(${virtualRow.start}px)`,
                         }}
                       >
-                        {rowItems.map((item) => (
+                        {rowItems.map((item) => {
+                          const incoming = inTransitByModel.get(item.vehicle_model)
+                          return (
                           <div key={item.id} className="rounded-lg border border-border hover:border-accent/50 transition-colors h-full p-3 flex flex-col overflow-hidden">
                             <div className="flex items-start justify-between">
                               <div className="flex items-start gap-2 flex-1 min-w-0">
@@ -304,8 +342,19 @@ export default function StockPage({ data, onClose }: Props) {
                                 <div className="flex-1 min-w-0">
                                   <div className="flex items-center gap-1.5">
                                     <span className="font-semibold text-sm truncate">{item.vehicle_label || item.vehicle_model}</span>
-                                    {(item.quantity || 1) > 1 && (
-                                      <span className="text-[10px] bg-muted px-1 rounded shrink-0">x{item.quantity}</span>
+                                    {item.is_used ? (
+                                      <span className="text-[10px] bg-violet-500/20 text-violet-300 px-1 rounded shrink-0" title={`Plate: ${item.plate || '?'} • Condition: ${Math.round(Number(item.condition) || 0)}%`}>
+                                        Pre-owned
+                                      </span>
+                                    ) : (
+                                      (item.quantity || 1) > 1 && (
+                                        <span className="text-[10px] bg-muted px-1 rounded shrink-0">x{item.quantity}</span>
+                                      )
+                                    )}
+                                    {incoming && (
+                                      <span className="text-[10px] bg-amber-500/20 text-amber-400 px-1 rounded shrink-0 flex items-center gap-0.5" title={`${incoming.quantity} arriving in ${getTimeRemaining(incoming.delivered_at!)}`}>
+                                        <Truck className="h-2.5 w-2.5" /> +{incoming.quantity}
+                                      </span>
                                     )}
                                   </div>
                                   <p className="text-[11px] text-muted-foreground capitalize">{item.class || 'Vehicle'}</p>
@@ -336,7 +385,8 @@ export default function StockPage({ data, onClose }: Props) {
                               </div>
                             </div>
                           </div>
-                        ))}
+                          )
+                        })}
                       </div>
                     )
                   })}

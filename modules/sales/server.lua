@@ -148,9 +148,21 @@ local function ProcessSale(source, dealershipId, stockItem, paymentMethod, coupo
         end
     end
 
-    -- Generate plate and register vehicle
-    local plate = GeneratePlate()
-    AddOwnedVehicle(source, stockItem.vehicle_model)
+    -- Register vehicle with a single, authoritative plate
+    local isUsed = stockItem.is_used == true or tonumber(stockItem.is_used) == 1
+    local plate
+    local props
+    if isUsed and stockItem.plate and stockItem.plate ~= '' then
+        plate = stockItem.plate
+        props = stockItem.metadata
+        if type(props) == 'string' then props = json.decode(props) or {} end
+        if type(props) ~= 'table' then props = {} end
+        props.plate = plate
+    else
+        plate = GeneratePlate()
+        props = { plate = plate }
+    end
+    AddOwnedVehicleWithProps(source, stockItem.vehicle_model, plate, props)
 
     -- Notify
     ShowNotification(source, ("You purchased a %s for %s!"):format(stockItem.vehicle_label or stockItem.vehicle_model, GetCurrencyString(finalPrice)))
@@ -319,6 +331,16 @@ lib.callback.register("pickle_dealerships:getVehicleDetails", function(source, d
         color = json.decode(color)
     end
 
+    -- Pre-owned units store the full vehicle property blob in `metadata`
+    local isUsed = stockItem.is_used == true or tonumber(stockItem.is_used) == 1
+    local properties = nil
+    if isUsed then
+        properties = stockItem.metadata
+        if properties and type(properties) == "string" then
+            properties = json.decode(properties)
+        end
+    end
+
     return {
         id = stockItem.id,
         dealershipId = stockItem.dealership_id,
@@ -336,5 +358,8 @@ lib.callback.register("pickle_dealerships:getVehicleDetails", function(source, d
         orderedAt = stockItem.ordered_at,
         deliveredAt = stockItem.delivered_at,
         soldAt = stockItem.sold_at,
+        isUsed = isUsed,
+        plate = stockItem.plate,
+        properties = properties,
     }
 end)

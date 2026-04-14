@@ -122,7 +122,16 @@ function GetOwnedVehicleFromPlate(plate)
     local data = MySQL.Sync.fetchAll("SELECT * FROM owned_vehicles WHERE plate=@plate;", {
         ['@plate'] = plate,
     })[1]
-    return data and {owner = data.owner} or nil 
+    if not data then return nil end
+    local model = nil
+    if data.vehicle then
+        local props = json.decode(data.vehicle)
+        if type(props) == 'table' then
+            -- ESX stores model as a hash; we may not be able to reverse it here.
+            model = props.modelName or props.model_name or nil
+        end
+    end
+    return { owner = data.owner, model = model }
 end
 
 function AddOwnedVehicle(source, plate, model)
@@ -135,6 +144,29 @@ function AddOwnedVehicle(source, plate, model)
             model = joaat(model),
         }),
     })
+end
+
+function AddOwnedVehicleWithProps(source, model, plate, properties)
+    local xPlayer = ESX.GetPlayerFromId(source)
+    if not xPlayer or not plate then return false end
+    local props = type(properties) == "table" and properties or (type(properties) == "string" and json.decode(properties) or {})
+    props.plate = string.upper(plate)
+    props.model = joaat(model)
+    MySQL.Async.execute("INSERT INTO owned_vehicles (owner, plate, vehicle) VALUES (@owner, @plate, @vehicle);", {
+        ['@owner'] = xPlayer.identifier,
+        ['@plate'] = string.upper(plate),
+        ['@vehicle'] = json.encode(props),
+    })
+    return true
+end
+
+function RemoveOwnedVehicle(identifier, plate)
+    if not identifier or not plate then return false end
+    MySQL.Async.execute("DELETE FROM owned_vehicles WHERE owner=@owner AND plate=@plate;", {
+        ['@owner'] = identifier,
+        ['@plate'] = plate,
+    })
+    return true
 end
 
 function UpdateVehiclePlate(source, plate, newPlate)

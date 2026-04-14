@@ -75,10 +75,33 @@ local function GenerateNPCProfile(dealershipId)
         classMaxMSRP = maxMSRP
     end
 
-    -- Budget = random within the class MSRP range + 5% profit margin
-    local budgetMin = math.floor(classMinMSRP * 1.05)
-    local budgetMax = math.floor(classMaxMSRP * 1.05)
-    local budget = math.random(budgetMin, math.max(budgetMin, budgetMax))
+    -- Pick a random vehicle from this class as the budget target
+    local classMSRPs = {}
+    for _, item in ipairs(availableStock) do
+        local cls = item.class and string.lower(item.class) or ''
+        if cls == typePreference then
+            local msrp = tonumber(item.wholesale_cost) or 0
+            if msrp > 0 then
+                classMSRPs[#classMSRPs + 1] = msrp
+            end
+        end
+    end
+
+    local targetMSRP
+    if #classMSRPs > 0 then
+        targetMSRP = classMSRPs[math.random(#classMSRPs)]
+    else
+        -- Fallback: pick a random MSRP from all stock
+        local allMSRPs = {}
+        for _, item in ipairs(availableStock) do
+            local msrp = tonumber(item.wholesale_cost) or 0
+            if msrp > 0 then allMSRPs[#allMSRPs + 1] = msrp end
+        end
+        targetMSRP = allMSRPs[math.random(#allMSRPs)]
+    end
+
+    -- Budget = target vehicle MSRP + 5-15% random margin so they can afford it
+    local budget = math.floor(targetMSRP * (1.05 + math.random() * 0.10))
 
     local personality = WeightedRandom(Config.NPCCustomers.personalityWeights)
 

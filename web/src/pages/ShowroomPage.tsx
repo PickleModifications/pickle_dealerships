@@ -5,7 +5,7 @@ import { Badge } from '../components/ui/badge'
 import { Input } from '../components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { fetchNui, formatCurrency, getVehicleImage } from '../lib/utils'
-import { Search, X, CreditCard, Banknote, Car, Loader2, Palette, SlidersHorizontal } from 'lucide-react'
+import { Search, X, CreditCard, Banknote, Car, Loader2, Palette, SlidersHorizontal, ChevronRight } from 'lucide-react'
 import VehicleImg from '../components/VehicleImg'
 import type { DealershipData, StockItem, VehicleColor } from '../types'
 
@@ -41,6 +41,8 @@ export default function ShowroomPage({ data }: Props) {
   const [maxRetailPrice, setMaxRetailPrice] = useState(0)
   const [showFilters, setShowFilters] = useState(false)
   const [sortBy, setSortBy] = useState<'name_asc' | 'name_desc' | 'price_asc' | 'price_desc'>('name_asc')
+  const [tab, setTab] = useState<'new' | 'preowned'>('new')
+  const [expandedModel, setExpandedModel] = useState<string | null>(null)
   const [selected, setSelected] = useState<StockItem | null>(null)
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'bank'>('bank')
   const [purchasing, setPurchasing] = useState(false)
@@ -65,8 +67,9 @@ export default function ShowroomPage({ data }: Props) {
       setMaxRetailPrice(highest)
       setPriceRange([0, highest])
       if (available.length > 0) {
-        setSelected(available[0])
-        fetchNui('showroomSwapVehicle', { model: available[0].vehicle_model })
+        const first = available[0]
+        setSelected(first)
+        fetchNui('showroomSwapVehicle', { model: first.vehicle_model, stockId: first.is_used ? first.id : undefined })
       }
       setLoading(false)
     }).catch(() => setLoading(false))
@@ -99,7 +102,37 @@ export default function ShowroomPage({ data }: Props) {
     }
   })
 
-  const rowCount = Math.ceil(filtered.length / COLUMNS)
+  // Split into new vs pre-owned views
+  const newStock = filtered.filter((s) => !s.is_used)
+  const preOwnedStock = filtered.filter((s) => !!s.is_used)
+
+  // Group pre-owned by vehicle_model so each model shows a single card with a sub-list
+  const preOwnedGroups = (() => {
+    const map = new Map<string, { model: string; label: string; image?: string | null; class?: string; minPrice: number; maxPrice: number; units: StockItem[] }>()
+    for (const item of preOwnedStock) {
+      const g = map.get(item.vehicle_model)
+      if (g) {
+        g.units.push(item)
+        g.minPrice = Math.min(g.minPrice, item.retail_price)
+        g.maxPrice = Math.max(g.maxPrice, item.retail_price)
+      } else {
+        map.set(item.vehicle_model, {
+          model: item.vehicle_model,
+          label: item.vehicle_label || item.vehicle_model,
+          image: item.image,
+          class: item.class,
+          minPrice: item.retail_price,
+          maxPrice: item.retail_price,
+          units: [item],
+        })
+      }
+    }
+    return Array.from(map.values())
+  })()
+
+  // Active list driven by tab — pre-owned uses grouped cards, expanded view shows units
+  const visibleItems: StockItem[] = tab === 'new' ? newStock : preOwnedStock
+  const rowCount = tab === 'new' ? Math.ceil(newStock.length / COLUMNS) : Math.ceil(preOwnedGroups.length / COLUMNS)
 
   const virtualizer = useVirtualizer({
     count: rowCount,
@@ -113,7 +146,7 @@ export default function ShowroomPage({ data }: Props) {
     if (swapping || (selected && selected.id === item.id)) return
     setSelected(item)
     setSwapping(true)
-    fetchNui('showroomSwapVehicle', { model: item.vehicle_model }).finally(() => setSwapping(false))
+    fetchNui('showroomSwapVehicle', { model: item.vehicle_model, stockId: item.is_used ? item.id : undefined }).finally(() => setSwapping(false))
   }, [selected, swapping])
 
   const handlePurchase = useCallback(() => {
@@ -195,7 +228,7 @@ export default function ShowroomPage({ data }: Props) {
           <div className="flex items-center justify-between mb-2">
             <div>
               <h1 className="text-white text-base font-bold">{data.dealershipName}</h1>
-              <p className="text-white/40 text-xs">{filtered.length} vehicles available</p>
+              <p className="text-white/40 text-xs">{visibleItems.length} {tab === 'preowned' ? 'pre-owned' : 'new'} available</p>
             </div>
             <Button
               variant="ghost"
@@ -205,6 +238,22 @@ export default function ShowroomPage({ data }: Props) {
             >
               <X className="h-4 w-4" />
             </Button>
+          </div>
+
+          {/* New / Pre-owned tabs */}
+          <div className="flex gap-1 mb-2">
+            <button
+              onClick={() => { setTab('new'); setExpandedModel(null) }}
+              className={`flex-1 h-7 rounded-md text-xs font-medium transition-colors ${tab === 'new' ? 'bg-accent text-accent-foreground' : 'bg-white/5 text-white/50 hover:bg-white/10 hover:text-white/70'}`}
+            >
+              New ({newStock.length})
+            </button>
+            <button
+              onClick={() => { setTab('preowned'); setExpandedModel(null) }}
+              className={`flex-1 h-7 rounded-md text-xs font-medium transition-colors ${tab === 'preowned' ? 'bg-accent text-accent-foreground' : 'bg-white/5 text-white/50 hover:bg-white/10 hover:text-white/70'}`}
+            >
+              Pre-owned ({preOwnedStock.length})
+            </button>
           </div>
 
           {/* Search + Filter button */}
@@ -335,16 +384,16 @@ export default function ShowroomPage({ data }: Props) {
               <div className="flex items-center justify-center py-12">
                 <Loader2 className="h-5 w-5 animate-spin text-white/30" />
               </div>
-            ) : filtered.length === 0 ? (
+            ) : visibleItems.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-12 text-white/30">
                 <Car className="h-8 w-8 mb-2" />
-                <p className="text-xs">No vehicles found</p>
+                <p className="text-xs">{tab === 'preowned' ? 'No pre-owned vehicles' : 'No vehicles found'}</p>
               </div>
-            ) : (
+            ) : tab === 'new' ? (
               <div className="relative w-full" style={{ height: `${virtualizer.getTotalSize()}px` }}>
                 {virtualizer.getVirtualItems().map((virtualRow) => {
                   const startIdx = virtualRow.index * COLUMNS
-                  const rowItems = filtered.slice(startIdx, startIdx + COLUMNS)
+                  const rowItems = newStock.slice(startIdx, startIdx + COLUMNS)
 
                   return (
                     <div
@@ -389,6 +438,52 @@ export default function ShowroomPage({ data }: Props) {
                   )
                 })}
               </div>
+            ) : (
+              // Pre-owned tab: grouped by model, expanded model shows individual units
+              <div className="space-y-2">
+                {preOwnedGroups.filter((g) => !expandedModel || g.model === expandedModel).map((g) => {
+                  const isExpanded = expandedModel === g.model
+                  const priceLabel = g.minPrice === g.maxPrice
+                    ? formatCurrency(g.minPrice)
+                    : `${formatCurrency(g.minPrice)} — ${formatCurrency(g.maxPrice)}`
+                  return (
+                    <div key={g.model} className="rounded-md bg-white/5 overflow-hidden">
+                      <button
+                        onClick={() => setExpandedModel(isExpanded ? null : g.model)}
+                        className="w-full flex items-center gap-2 p-2 hover:bg-white/8 text-left"
+                      >
+                        <VehicleImg image={g.image} model={g.model} alt={g.label} className="w-20 aspect-[16/9] object-contain rounded bg-black/50" fallbackClassName="w-20 aspect-[16/9] bg-white/5 flex items-center justify-center rounded" iconClassName="h-4 w-4 text-white/10" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-white text-[11px] font-semibold truncate leading-tight">{g.label}</p>
+                          <p className="text-accent font-bold text-xs mt-0.5">{priceLabel}</p>
+                          <p className="text-white/40 text-[10px] mt-0.5">{g.units.length} available · Pre-owned</p>
+                        </div>
+                        <ChevronRight className={`h-4 w-4 text-white/40 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
+                      </button>
+                      {isExpanded && (
+                        <div className="border-t border-white/10 divide-y divide-white/5">
+                          {g.units.map((unit) => {
+                            const isSelected = selected?.id === unit.id
+                            return (
+                              <button
+                                key={unit.id}
+                                onClick={() => handleSelect(unit)}
+                                className={`w-full text-left px-3 py-2 flex items-center justify-between gap-3 transition-colors ${isSelected ? 'bg-accent/10' : 'hover:bg-white/5'}`}
+                              >
+                                <div className="min-w-0">
+                                  <p className="text-white text-[11px] font-mono">{unit.plate || '— No Plate —'}</p>
+                                  <p className="text-white/40 text-[10px]">Condition: {Math.round(Number(unit.condition) || 0)}%</p>
+                                </div>
+                                <p className="text-accent font-bold text-xs shrink-0">{formatCurrency(unit.retail_price)}</p>
+                              </button>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
             )}
           </div>
         </div>
@@ -422,6 +517,7 @@ export default function ShowroomPage({ data }: Props) {
 
             <p className="text-accent font-bold text-lg shrink-0">{formatCurrency(selected.retail_price)}</p>
 
+            {!selected.is_used && (
             <div className="flex items-center gap-1.5 shrink-0">
               <ColorSwatch
                 label="Primary"
@@ -452,6 +548,7 @@ export default function ShowroomPage({ data }: Props) {
                 }}
               />
             </div>
+            )}
 
             <Tabs
               defaultValue="bank"

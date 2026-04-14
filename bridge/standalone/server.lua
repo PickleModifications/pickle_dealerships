@@ -5,4 +5,12 @@ function AddAlcohol(source, amount)
     -- No-op when no framework; implement in custom bridge if needed.
 end
 
+function AddOwnedVehicleWithProps(source, model, plate, properties)
+    return false
+end
+
+function RemoveOwnedVehicle(identifier, plate)
+    return false
+end
+
 print("STANDALONE IS NOT SUPPORTED, PLEASE CODE YOUR OWN BRIDGE.")

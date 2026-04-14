@@ -51,7 +51,7 @@ Config.DefaultCommission = 0.08
 Config.SellbackRate = 0.60
 
 -- Delivery Settings
-Config.DeliveryTime = 1 -- Minutes for timed delivery mode
+Config.DeliveryTime = 0.1 -- Minutes for timed delivery mode
 
 -- Test Drive Settings
 Config.TestDriveTime = 120 -- Seconds

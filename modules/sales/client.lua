@@ -15,7 +15,7 @@ local testDriveOrigin = nil
 
 -- ─── Vehicle Spawn Helper ───────────────────────────────────────────────────
 
-function SpawnPurchasedVehicle(model, spawnPoint, color, secondaryColor)
+function SpawnPurchasedVehicle(model, spawnPoint, color, secondaryColor, properties, plate)
     local modelHash = type(model) == "number" and model or joaat(model)
     RequestModel(modelHash)
     local timeout = 0
@@ -38,8 +38,13 @@ function SpawnPurchasedVehicle(model, spawnPoint, color, secondaryColor)
     SetEntityInvincible(veh, true)
     SetVehicleOnGroundProperly(veh)
 
-    -- Apply color
-    if color and type(color) == "table" then
+    -- Pre-owned: apply full captured properties (overrides color-only path)
+    if properties then
+        if type(properties) == "string" then properties = json.decode(properties) end
+        if type(properties) == "table" then
+            lib.setVehicleProperties(veh, properties)
+        end
+    elseif color and type(color) == "table" then
         if color.r and color.g and color.b then
             SetVehicleCustomPrimaryColour(veh, color.r, color.g, color.b)
             if secondaryColor and type(secondaryColor) == "table" and secondaryColor.r then
@@ -50,6 +55,11 @@ function SpawnPurchasedVehicle(model, spawnPoint, color, secondaryColor)
         elseif color.colorId then
             SetVehicleColours(veh, color.colorId, color.colorId)
         end
+    end
+
+    -- Apply the DB-assigned plate so the in-world vehicle matches ownership records
+    if plate and plate ~= '' then
+        SetVehicleNumberPlateText(veh, plate)
     end
 
     -- Warp player in, then unfreeze
@@ -83,6 +93,9 @@ end
 -- ─── NUI Callbacks ──────────────────────────────────────────────────────────
 
 RegisterNUICallback("purchaseVehicle", function(data, cb)
+    -- Fetch stock details first so we know whether this is a pre-owned unit
+    local details = lib.callback.await("pickle_dealerships:getVehicleDetails", false, { stockId = data.stockId })
+
     local result = lib.callback.await("pickle_dealerships:purchaseVehicle", false, {
         dealershipId = data.dealershipId,
         stockId = data.stockId,
@@ -115,7 +128,14 @@ RegisterNUICallback("purchaseVehicle", function(data, cb)
             if secColor and type(secColor) == "string" then
                 secColor = json.decode(secColor)
             end
-            SpawnPurchasedVehicle(result.model, spawnPoint, color, secColor)
+            local props = nil
+            if details and details.isUsed then
+                props = details.properties
+                if result.plate and type(props) == "table" then
+                    props.plate = result.plate
+                end
+            end
+            SpawnPurchasedVehicle(result.model, spawnPoint, color, secColor, props, result.plate)
         end
 
         ShowNotification(("Congratulations! You purchased a %s."):format(result.label or result.model))

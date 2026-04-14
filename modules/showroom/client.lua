@@ -8,7 +8,7 @@ local ShowroomCamThread = nil
 ---@return number|nil entity
 ---@return vector3|nil center
 ---@return number|nil radius
-function SpawnShowroomVehicle(model, coords)
+function SpawnShowroomVehicle(model, coords, properties)
     local modelHash = type(model) == "string" and joaat(model) or model
     RequestModel(modelHash)
     local timeout = GetGameTimer() + 10000
@@ -24,6 +24,16 @@ function SpawnShowroomVehicle(model, coords)
     SetVehicleOnGroundProperly(veh)
     SetModelAsNoLongerNeeded(modelHash)
 
+    -- Pre-owned units: apply captured properties so the showroom shows the actual unit
+    if properties then
+        if type(properties) == "string" then properties = json.decode(properties) end
+        if type(properties) == "table" then
+            properties.plate = nil
+            local ok, err = pcall(lib.setVehicleProperties, veh, properties)
+            print(('[pickle_dealerships] Showroom applied props ok=%s err=%s keys=%d'):format(tostring(ok), tostring(err), (function() local n=0 for _ in pairs(properties) do n=n+1 end return n end)()))
+        end
+    end
+
     -- Calculate camera orbit parameters from vehicle dimensions
     local dimMin, dimMax = GetModelDimensions(modelHash)
     local vehPos = GetEntityCoords(veh)
@@ -38,9 +48,9 @@ end
 
 --- Swap the currently displayed showroom vehicle
 ---@param model string
-local function SwapShowroomVehicle(model)
+---@param properties table|nil
+local function SwapShowroomVehicle(model, properties)
     if not ShowroomState then return false end
-    if model == ShowroomState.currentModel then return true end
 
     -- Load new model before deleting old one for a clean swap
     local modelHash = type(model) == "string" and joaat(model) or model
@@ -55,7 +65,7 @@ local function SwapShowroomVehicle(model)
     end
 
     -- Spawn new one
-    local veh, center, radius = SpawnShowroomVehicle(model, ShowroomState.spawnCoords)
+    local veh, center, radius = SpawnShowroomVehicle(model, ShowroomState.spawnCoords, properties)
     if not veh then return false end
 
     ShowroomState.vehicle = veh
@@ -259,7 +269,18 @@ end
 
 RegisterNUICallback("showroomSwapVehicle", function(data, cb)
     if not ShowroomState then cb({ success = false }) return end
-    local ok = SwapShowroomVehicle(data.model)
+    print(('[pickle_dealerships] showroomSwapVehicle model=%s stockId=%s'):format(tostring(data.model), tostring(data.stockId)))
+    -- Pre-owned units pass their stockId so we can fetch captured properties
+    local properties = nil
+    if data.stockId then
+        local details = lib.callback.await("pickle_dealerships:getVehicleDetails", false, { stockId = data.stockId })
+        print(('[pickle_dealerships] details isUsed=%s props_type=%s'):format(
+            tostring(details and details.isUsed),
+            type(details and details.properties)
+        ))
+        if details and details.isUsed then properties = details.properties end
+    end
+    local ok = SwapShowroomVehicle(data.model, properties)
     cb({ success = ok })
 end)
 
@@ -297,6 +318,9 @@ RegisterNUICallback("showroomPurchase", function(data, cb)
     if color and type(color) == "string" then color = json.decode(color) end
     if secColor and type(secColor) == "string" then secColor = json.decode(secColor) end
 
+    -- Fetch details so we know if pre-owned (carries captured properties)
+    local details = lib.callback.await("pickle_dealerships:getVehicleDetails", false, { stockId = data.stockId })
+
     -- Run the server-side purchase
     local result = lib.callback.await("pickle_dealerships:purchaseVehicle", false, {
         dealershipId = data.dealershipId,
@@ -319,7 +343,12 @@ RegisterNUICallback("showroomPurchase", function(data, cb)
     local cfg = DealershipConfigs[location]
     local spawnPoint = cfg and cfg.spawnPoint
     if spawnPoint then
-        SpawnPurchasedVehicle(result.model, spawnPoint, color, secColor)
+        local props = nil
+        if details and details.isUsed then
+            props = details.properties
+            if result.plate and type(props) == "table" then props.plate = result.plate end
+        end
+        SpawnPurchasedVehicle(result.model, spawnPoint, color, secColor, props, result.plate)
     end
 
     -- Now fade in with player already in the vehicle

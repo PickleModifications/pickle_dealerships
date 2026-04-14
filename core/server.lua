@@ -86,30 +86,44 @@ CreateThread(function()
             ALTER TABLE `dealership_stock` ADD COLUMN IF NOT EXISTS `quantity` INT UNSIGNED NOT NULL DEFAULT 1 AFTER `sold_by`;
         ]])
 
-        -- Migration: consolidate duplicate unsold, already-delivered, new-condition stock rows into stacked entries
+        -- Migration: pre-owned vehicle support (metadata reused for captured vehicle properties)
+        MySQL.Async.execute([[ ALTER TABLE `dealership_stock` ADD COLUMN IF NOT EXISTS `is_used` TINYINT(1) NOT NULL DEFAULT 0 AFTER `quantity` ]])
+        MySQL.Async.execute([[ ALTER TABLE `dealership_stock` ADD COLUMN IF NOT EXISTS `plate` VARCHAR(20) DEFAULT NULL AFTER `metadata` ]])
+        MySQL.Async.execute([[ ALTER TABLE `dealership_stock` ADD COLUMN IF NOT EXISTS `acquired_from` VARCHAR(50) DEFAULT NULL AFTER `plate` ]])
+
+        -- dealership_orders — pending/in-transit orders (separate from available stock)
         MySQL.Async.execute([[
-            UPDATE dealership_stock dst
-            INNER JOIN (
-                SELECT MIN(id) AS keep_id, dealership_id, vehicle_model, SUM(quantity) AS total_qty, COUNT(*) AS cnt
-                FROM dealership_stock
-                WHERE sold_at IS NULL AND display_spot IS NULL AND delivered_at IS NOT NULL AND delivered_at <= NOW() AND (`condition` = 100.00 OR `condition` IS NULL)
-                GROUP BY dealership_id, vehicle_model
-                HAVING cnt > 1
-            ) dup ON dst.id = dup.keep_id
-            SET dst.quantity = dup.total_qty;
+            CREATE TABLE IF NOT EXISTS `dealership_orders` (
+                `id`              INT UNSIGNED   NOT NULL AUTO_INCREMENT,
+                `dealership_id`   INT UNSIGNED   NOT NULL,
+                `vehicle_model`   VARCHAR(100)   NOT NULL,
+                `vehicle_label`   VARCHAR(150)   DEFAULT NULL,
+                `retail_price`    BIGINT         NOT NULL DEFAULT 0,
+                `wholesale_cost`  BIGINT         NOT NULL DEFAULT 0,
+                `quantity`        INT UNSIGNED   NOT NULL DEFAULT 1,
+                `ordered_at`      TIMESTAMP      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                `delivered_at`    TIMESTAMP      NULL DEFAULT NULL,
+                PRIMARY KEY (`id`),
+                KEY `idx_dealership` (`dealership_id`),
+                KEY `idx_model`      (`vehicle_model`),
+                KEY `idx_delivered`  (`delivered_at`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ]])
+
+        -- One-time migration: move any existing in-transit entries from dealership_stock to dealership_orders
+        MySQL.Async.execute([[
+            INSERT INTO dealership_orders (dealership_id, vehicle_model, vehicle_label, retail_price, wholesale_cost, quantity, ordered_at, delivered_at)
+            SELECT dealership_id, vehicle_model, vehicle_label, retail_price, wholesale_cost, quantity, COALESCE(ordered_at, NOW()), delivered_at
+            FROM dealership_stock
+            WHERE sold_at IS NULL AND display_spot IS NULL AND delivered_at IS NOT NULL AND delivered_at > NOW()
         ]])
         MySQL.Async.execute([[
-            DELETE dst FROM dealership_stock dst
-            INNER JOIN (
-                SELECT MIN(id) AS keep_id, dealership_id, vehicle_model
-                FROM dealership_stock
-                WHERE sold_at IS NULL AND display_spot IS NULL AND delivered_at IS NOT NULL AND delivered_at <= NOW() AND (`condition` = 100.00 OR `condition` IS NULL)
-                GROUP BY dealership_id, vehicle_model
-                HAVING COUNT(*) > 1
-            ) dup ON dst.dealership_id = dup.dealership_id AND dst.vehicle_model = dup.vehicle_model
-                AND dst.sold_at IS NULL AND dst.display_spot IS NULL AND dst.delivered_at IS NOT NULL AND dst.delivered_at <= NOW() AND (dst.`condition` = 100.00 OR dst.`condition` IS NULL)
-                AND dst.id != dup.keep_id;
+            DELETE FROM dealership_stock
+            WHERE sold_at IS NULL AND display_spot IS NULL AND delivered_at IS NOT NULL AND delivered_at > NOW()
         ]])
+
+        -- Migration: consolidation of duplicate stock entries is handled by the background thread
+        -- in modules/stock/server.lua (runs every 30s with safe per-row updates/deletes)
 
         -- dealership_ledger
         MySQL.Async.execute([[

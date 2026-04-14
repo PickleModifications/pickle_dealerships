@@ -14,6 +14,7 @@ export interface DealershipData {
   initialTab?: string
   isOwned?: boolean
   purchasePrice?: number
+  initialBalance?: number
   mode?: string
   catalogId?: number
   model?: string
@@ -62,6 +63,11 @@ export interface StockItem {
   quantity: number
   image?: string | null
   class?: string
+  is_used?: number | boolean
+  is_order?: boolean
+  metadata?: Record<string, unknown> | string | null
+  plate?: string | null
+  acquired_from?: string | null
 }
 
 export interface VehicleColor {

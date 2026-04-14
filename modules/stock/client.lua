@@ -101,6 +101,19 @@ local function SpawnDisplayVehicles(locationKey)
                         FreezeEntityPosition(veh, true)
                         SetVehicleDoorsLocked(veh, 2)
                         SetEntityInvincible(veh, true)
+
+                        -- For pre-owned units, apply captured vehicle properties so the
+                        -- lot displays the exact unit a buyer would receive
+                        local isUsed = item.is_used == true or tonumber(item.is_used) == 1
+                        local props = item.metadata
+                        if isUsed and props then
+                            if type(props) == 'string' then props = json.decode(props) or {} end
+                            if type(props) == 'table' then
+                                props.plate = nil -- keep DISPLAY plate cosmetically
+                                lib.setVehicleProperties(veh, props)
+                            end
+                        end
+
                         SetVehicleNumberPlateText(veh, 'DISPLAY')
 
                         displayVehicles[#displayVehicles + 1] = {
@@ -331,6 +344,114 @@ RegisterNUICallback("getDisplaySpots", function(data, cb)
         end
     end
     cb({ spots = spots })
+end)
+
+-- ─── Pre-owned trade-in flow ────────────────────────────────────────────────
+
+--- Vehicle owner confirms / declines a pending trade-in
+lib.callback.register('pickle_dealerships:confirmTradeIn', function(data)
+    if type(data) ~= 'table' then return false end
+    local header = ('%s Trade-In Offer'):format(data.dealershipName or 'Dealership')
+    local content = ('**%s** is offering **$%s** for your **%s** (plate %s).\n\nAccept the trade-in?'):format(
+        data.dealershipName or 'A dealership',
+        data.buyPrice or 0,
+        data.label or 'vehicle',
+        data.plate or '?'
+    )
+    local answer = lib.alertDialog({
+        header = header,
+        content = content,
+        centered = true,
+        cancel = true,
+        labels = { confirm = 'Accept', cancel = 'Decline' },
+    })
+    return answer == 'confirm'
+end)
+
+
+--- Open the trade-in dialog for a targeted vehicle
+local function StartTradeIn(vehicle)
+    if not currentDealership then
+        ShowNotification('You must be inside a dealership to trade in a vehicle.')
+        return
+    end
+    if not vehicle or not DoesEntityExist(vehicle) or GetEntityType(vehicle) ~= 2 then return end
+
+    local rawPlate = GetVehicleNumberPlateText(vehicle)
+    if not rawPlate then return end
+    local plate = rawPlate:gsub('^%s*(.-)%s*$', '%1')
+    if plate == '' then
+        ShowNotification('This vehicle has no plate.')
+        return
+    end
+
+    local properties = lib.getVehicleProperties(vehicle)
+    if not properties then
+        ShowNotification('Could not read vehicle properties.')
+        return
+    end
+
+    -- Ask the server to resolve the model (and any catalog suggestion) from the plate's framework record
+    local suggestion = lib.callback.await('pickle_dealerships:getTradeInSuggestion', false, currentDealership, plate)
+    if not suggestion or suggestion.ownerless then
+        ShowNotification('This vehicle is not registered to a player.')
+        return
+    end
+    local suggestedBuy = suggestion.wholesale
+    local label = suggestion.label or 'Vehicle'
+
+    local input = lib.inputDialog('Trade-In: ' .. tostring(label), {
+        { type = 'number', label = 'Buy Price', description = suggestedBuy and ('Suggested MSRP: $' .. suggestedBuy) or 'No catalog reference for this model.', default = suggestedBuy, required = true, min = 1 },
+        { type = 'number', label = 'Retail Price (lot)', description = 'Price the dealership will sell it for.', required = true, min = 1 },
+    })
+    if not input then return end
+
+    local buyPrice = tonumber(input[1])
+    local retailPrice = tonumber(input[2])
+    if not buyPrice or not retailPrice then return end
+
+    local ok, err = lib.callback.await('pickle_dealerships:tradeInVehicle', false, currentDealership, {
+        plate = plate,
+        properties = properties,
+        buyPrice = buyPrice,
+        retailPrice = retailPrice,
+    })
+    if not ok then
+        ShowNotification(err or 'Trade-in failed.')
+        return
+    end
+
+    -- Despawn the world vehicle now that it's in the lot
+    if DoesEntityExist(vehicle) then
+        SetEntityAsMissionEntity(vehicle, true, true)
+        DeleteEntity(vehicle)
+    end
+end
+
+CreateThread(function()
+    if not Config.UseTarget then return end
+    Wait(2000) -- wait for target bridge
+
+    AddTargetGlobalVehicle({
+        {
+            name = 'pickle_dealerships:tradeIn',
+            label = 'Trade In to Dealership',
+            icon = 'fa-solid fa-handshake-simple',
+            distance = 2.5,
+            canInteract = function(entity)
+                if not currentDealership then return false end
+                local role = lib.callback.await('pickle_dealerships:getPlayerRole', false, currentDealership)
+                return role == 'owner' or role == 'manager' or role == 'admin'
+            end,
+            onSelect = function(data)
+                StartTradeIn(data.entity)
+            end,
+            -- qb-target compatibility
+            action = function(entity)
+                StartTradeIn(entity)
+            end,
+        },
+    })
 end)
 
 --- Cleanup on resource stop

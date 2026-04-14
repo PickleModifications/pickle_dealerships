@@ -64,7 +64,7 @@ const tierFeatures: Record<string, number> = {
 
 export default function ManagementPage({ data, onClose }: Props) {
   const [activeTab, setActiveTab] = useState<ManagementTab>(data.initialTab as ManagementTab || 'dashboard')
-  const [balance, setBalance] = useState<number | null>(null)
+  const [balance, setBalance] = useState<number | null>(data.initialBalance ?? null)
   const [purchasing, setPurchasing] = useState(false)
   const [isClockedIn, setIsClockedIn] = useState(false)
 

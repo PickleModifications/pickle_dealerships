@@ -113,12 +113,33 @@ lib.callback.register('pickle_dealerships:getStock', function(source, locationKe
     )
     if not dealership then return {} end
 
+    -- Process any orders that have arrived
+    ProcessDeliveredOrders(dealership.id)
+
     local stock = MySQL.query.await(
         'SELECT ds.*, wc.image, wc.class FROM dealership_stock ds LEFT JOIN wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL ORDER BY ds.ordered_at DESC',
         { dealership.id }
-    )
+    ) or {}
 
-    return stock or {}
+    -- Also include pending orders, formatted like stock items so the UI can render them as in-transit cards
+    local orders = MySQL.query.await(
+        'SELECT dor.*, wc.image, wc.class FROM dealership_orders dor LEFT JOIN wholesale_catalog wc ON wc.model = dor.vehicle_model WHERE dor.dealership_id = ? ORDER BY dor.ordered_at DESC',
+        { dealership.id }
+    ) or {}
+
+    -- Tag orders with a prefix ID so the UI can distinguish them (negative IDs to avoid collision)
+    for _, o in ipairs(orders) do
+        o.is_order = true
+        o.is_used = 0
+        o.id = -o.id -- negative ID so UI keys don't collide with real stock IDs
+        o.sold_at = nil
+        o.sold_to = nil
+        o.sold_by = nil
+        o.display_spot = nil
+        stock[#stock + 1] = o
+    end
+
+    return stock
 end)
 
 --- Returns paginated available stock for the showroom
@@ -133,6 +154,9 @@ lib.callback.register('pickle_dealerships:getShowroomStock', function(source, da
         { locationKey }
     )
     if not dealership then return { items = {}, total = 0, page = 1, pageSize = 20 } end
+
+    -- Process any orders that have arrived
+    ProcessDeliveredOrders(dealership.id)
 
     local page = tonumber(data.page) or 1
     local pageSize = tonumber(data.pageSize) or 20
@@ -269,13 +293,21 @@ lib.callback.register('pickle_dealerships:orderVehicle', function(source, locati
         return false, 'Price mismatch. Please refresh the catalog.'
     end
 
+    -- Finalize any delivered orders first so stock counts are accurate
+    ProcessDeliveredOrders(dealership.id)
+
     -- Check stock capacity
     local tierCfg = Config.Tiers[dealership.tier or 1]
     local stockCapacity = (tierCfg and tierCfg.stockCap) or 20
-    local currentCount = MySQL.scalar.await(
+    local stockCount = MySQL.scalar.await(
         'SELECT COALESCE(SUM(quantity), 0) FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NULL',
         { dealership.id }
-    )
+    ) or 0
+    local pendingCount = MySQL.scalar.await(
+        'SELECT COALESCE(SUM(quantity), 0) FROM dealership_orders WHERE dealership_id = ?',
+        { dealership.id }
+    ) or 0
+    local currentCount = tonumber(stockCount) + tonumber(pendingCount)
 
     local qty = math.max(1, math.min(100, tonumber(orderQuantity) or 1))
 
@@ -317,34 +349,40 @@ lib.callback.register('pickle_dealerships:orderVehicle', function(source, locati
     local retailPrice = math.floor(wholesalePrice * 1.3)
     local isInstant = deliveredAt and deliveredAt <= os.date('%Y-%m-%d %H:%M:%S')
 
-    local existing = nil
     local stockId
-
     if isInstant then
-        -- Instant delivery: stack onto existing delivered entry
-        existing = MySQL.single.await(
-            'SELECT id FROM dealership_stock WHERE dealership_id = ? AND vehicle_model = ? AND sold_at IS NULL AND display_spot IS NULL AND delivered_at IS NOT NULL AND delivered_at <= NOW() AND (`condition` = 100.00 OR `condition` IS NULL) LIMIT 1',
+        -- Instant delivery: stack onto existing available stock of this model, or create new stock entry
+        local existing = MySQL.single.await(
+            'SELECT id FROM dealership_stock WHERE dealership_id = ? AND vehicle_model = ? AND sold_at IS NULL AND display_spot IS NULL AND is_used = 0 AND (`condition` = 100.00 OR `condition` IS NULL) ORDER BY id ASC LIMIT 1',
             { dealership.id, model }
         )
+        if existing then
+            MySQL.update.await('UPDATE dealership_stock SET quantity = quantity + ? WHERE id = ?', { qty, existing.id })
+            stockId = existing.id
+        else
+            stockId = MySQL.insert.await(
+                'INSERT INTO dealership_stock (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, ordered_at, delivered_at, quantity) VALUES (?, ?, ?, ?, ?, NOW(), NOW(), ?)',
+                { dealership.id, model, catalogEntry.label or model, wholesalePrice, retailPrice, qty }
+            )
+        end
     else
-        -- Timed delivery: stack onto existing in-transit entry of the same model
-        existing = MySQL.single.await(
-            'SELECT id FROM dealership_stock WHERE dealership_id = ? AND vehicle_model = ? AND sold_at IS NULL AND display_spot IS NULL AND delivered_at IS NOT NULL AND delivered_at > NOW() AND (`condition` = 100.00 OR `condition` IS NULL) LIMIT 1',
+        -- Timed delivery: stack onto an existing pending order or create a new one in dealership_orders
+        local existingOrder = MySQL.single.await(
+            'SELECT id FROM dealership_orders WHERE dealership_id = ? AND vehicle_model = ? AND (delivered_at IS NULL OR delivered_at > NOW()) ORDER BY id ASC LIMIT 1',
             { dealership.id, model }
         )
-    end
-
-    if existing then
-        MySQL.update.await(
-            'UPDATE dealership_stock SET quantity = quantity + ? WHERE id = ?',
-            { qty, existing.id }
-        )
-        stockId = existing.id
-    else
-        stockId = MySQL.insert.await(
-            'INSERT INTO dealership_stock (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, ordered_at, delivered_at, quantity) VALUES (?, ?, ?, ?, ?, NOW(), ?, ?)',
-            { dealership.id, model, catalogEntry.label or model, wholesalePrice, retailPrice, deliveredAt, qty }
-        )
+        if existingOrder then
+            MySQL.update.await(
+                'UPDATE dealership_orders SET quantity = quantity + ?, delivered_at = GREATEST(COALESCE(delivered_at, ?), ?) WHERE id = ?',
+                { qty, deliveredAt, deliveredAt, existingOrder.id }
+            )
+            stockId = existingOrder.id
+        else
+            stockId = MySQL.insert.await(
+                'INSERT INTO dealership_orders (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, quantity, ordered_at, delivered_at) VALUES (?, ?, ?, ?, ?, ?, NOW(), ?)',
+                { dealership.id, model, catalogEntry.label or model, wholesalePrice, retailPrice, qty, deliveredAt }
+            )
+        end
     end
 
     -- Create ledger entry
@@ -494,40 +532,173 @@ lib.callback.register('pickle_dealerships:checkDeliveries', function(source, loc
     return delivered or {}
 end)
 
---- Background thread: check timed deliveries every 60 seconds
---- Only triggers refresh when a vehicle actually transitions from in-transit to delivered
-CreateThread(function()
-    while true do
-        Wait(60000)
+--- Returns a wholesale MSRP suggestion + resolved model name for a vehicle by plate
+lib.callback.register('pickle_dealerships:getTradeInSuggestion', function(source, locationKey, plate)
+    if not plate then return nil end
+    plate = string.upper(tostring(plate):gsub('^%s*(.-)%s*$', '%1'))
 
-        -- Find vehicles that were delivered in the last 65 seconds (with small overlap margin)
-        local newlyDelivered = MySQL.query.await(
-            'SELECT DISTINCT ds.dealership_id, d.location FROM dealership_stock ds JOIN dealerships d ON d.id = ds.dealership_id WHERE ds.sold_at IS NULL AND ds.delivered_at IS NOT NULL AND ds.delivered_at <= NOW() AND ds.delivered_at >= DATE_SUB(NOW(), INTERVAL 65 SECOND)',
-            {}
-        )
+    local dealership = MySQL.single.await('SELECT id FROM dealerships WHERE location = ?', { locationKey })
+    if not dealership then return nil end
+    if not CanPlayerManage(source, dealership.id) then return nil end
 
-        if newlyDelivered then
-            -- Consolidate newly delivered vehicles into existing stacks
-            local toConsolidate = MySQL.query.await(
-                'SELECT * FROM dealership_stock WHERE sold_at IS NULL AND display_spot IS NULL AND delivered_at IS NOT NULL AND delivered_at <= NOW() AND delivered_at >= DATE_SUB(NOW(), INTERVAL 65 SECOND) AND (`condition` = 100.00 OR `condition` IS NULL)',
-                {}
-            )
-            if toConsolidate then
-                for _, item in ipairs(toConsolidate) do
-                    local target = MySQL.single.await(
-                        'SELECT id FROM dealership_stock WHERE dealership_id = ? AND vehicle_model = ? AND sold_at IS NULL AND display_spot IS NULL AND delivered_at IS NOT NULL AND delivered_at <= NOW() AND (`condition` = 100.00 OR `condition` IS NULL) AND id != ? LIMIT 1',
-                        { item.dealership_id, item.vehicle_model, item.id }
-                    )
-                    if target then
-                        MySQL.update.await('UPDATE dealership_stock SET quantity = quantity + ? WHERE id = ?', { item.quantity or 1, target.id })
-                        MySQL.update.await('DELETE FROM dealership_stock WHERE id = ?', { item.id })
-                    end
-                end
-            end
+    local owned = GetOwnedVehicleFromPlate(plate)
+    if not owned then return { ownerless = true } end
 
-            for _, row in ipairs(newlyDelivered) do
-                TriggerClientEvent('pickle_dealerships:refreshDisplay', -1, row.location)
-            end
-        end
+    local model = owned.model
+    if not model then
+        return { model = nil, label = nil, wholesale = nil, owner = owned.owner }
     end
+
+    local entry = MySQL.single.await('SELECT label, wholesale FROM wholesale_catalog WHERE model = ?', { model })
+    return {
+        model = model,
+        label = (entry and entry.label) or model,
+        wholesale = entry and tonumber(entry.wholesale) or nil,
+        owner = owned.owner,
+    }
 end)
+
+--- Manager trades in a player vehicle as pre-owned stock
+lib.callback.register('pickle_dealerships:tradeInVehicle', function(source, locationKey, payload)
+    local identifier = GetIdentifier(source)
+    if not identifier then return false, 'Unable to identify player.' end
+    if type(payload) ~= 'table' then return false, 'Invalid payload.' end
+
+    local plate = payload.plate and string.upper(tostring(payload.plate):gsub('^%s*(.-)%s*$', '%1')) or nil
+    local properties = payload.properties
+    local buyPrice = math.max(0, math.floor(tonumber(payload.buyPrice) or 0))
+    local retailPrice = math.max(0, math.floor(tonumber(payload.retailPrice) or 0))
+
+    if not plate or not properties then return false, 'Missing vehicle data.' end
+    if buyPrice <= 0 or retailPrice <= 0 then return false, 'Buy and retail prices must be set.' end
+
+    local dealership = MySQL.single.await('SELECT * FROM dealerships WHERE location = ?', { locationKey })
+    if not dealership then return false, 'Dealership not found.' end
+    if not CanPlayerManage(source, dealership.id) then return false, 'You do not have permission.' end
+
+    -- Look up owner + model of the plate from the framework record (server-trusted)
+    local owned = GetOwnedVehicleFromPlate(plate)
+    if not owned or not owned.owner then return false, 'This vehicle is not registered to anyone.' end
+    local sellerIdentifier = owned.owner
+    local model = owned.model
+    if not model then return false, 'Could not resolve vehicle model.' end
+
+    -- Require consent from the online owner before taking their vehicle
+    local sellerSource = GetSourceFromIdentifier(sellerIdentifier)
+    if not sellerSource then
+        return false, 'The vehicle owner is not online.'
+    end
+
+    local catalogLookup = MySQL.single.await('SELECT label FROM wholesale_catalog WHERE model = ?', { model })
+    local displayLabel = (catalogLookup and catalogLookup.label) or model
+
+    local consented = lib.callback.await('pickle_dealerships:confirmTradeIn', sellerSource, {
+        dealershipName = dealership.name,
+        label = displayLabel,
+        plate = plate,
+        buyPrice = buyPrice,
+    })
+    if not consented then
+        return false, 'The owner declined the trade-in.'
+    end
+
+    -- Re-verify ownership after consent in case something changed during the prompt
+    local recheck = GetOwnedVehicleFromPlate(plate)
+    if not recheck or recheck.owner ~= sellerIdentifier then
+        return false, 'Ownership changed before the trade-in completed.'
+    end
+
+    -- Capacity check
+    ProcessDeliveredOrders(dealership.id)
+    local tierCfg = Config.Tiers[dealership.tier or 1]
+    local stockCapacity = (tierCfg and tierCfg.stockCap) or 20
+    local stockCount = MySQL.scalar.await(
+        'SELECT COALESCE(SUM(quantity), 0) FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NULL',
+        { dealership.id }
+    ) or 0
+    local pendingCount = MySQL.scalar.await(
+        'SELECT COALESCE(SUM(quantity), 0) FROM dealership_orders WHERE dealership_id = ?',
+        { dealership.id }
+    ) or 0
+    if (tonumber(stockCount) + tonumber(pendingCount) + 1) > stockCapacity then
+        return false, 'Stock capacity reached.'
+    end
+
+    -- Balance check
+    if dealership.balance < buyPrice then
+        return false, 'Insufficient dealership funds.'
+    end
+
+    -- Derive condition from health (0-1000 in props.bodyHealth/engineHealth → percent)
+    local props = properties
+    if type(props) == 'string' then props = json.decode(props) or {} end
+    local body = tonumber(props.bodyHealth) or 1000
+    local engine = tonumber(props.engineHealth) or 1000
+    local condition = math.max(0, math.min(100, ((body + engine) / 2) / 10))
+
+    local catalog = MySQL.single.await('SELECT label FROM wholesale_catalog WHERE model = ?', { model })
+    local label = (catalog and catalog.label) or model
+
+    -- Deduct from dealership balance
+    MySQL.update.await('UPDATE dealerships SET balance = balance - ? WHERE id = ?', { buyPrice, dealership.id })
+
+    -- Pay the seller (consent already confirmed above)
+    AddMoney(sellerSource, buyPrice, 'bank')
+    ShowNotification(sellerSource, ('Your %s was traded in for $%s.'):format(label, buyPrice))
+
+    -- Remove ownership from the seller's framework records
+    RemoveOwnedVehicle(sellerIdentifier, plate)
+
+    -- Insert pre-owned stock row (captured vehicle properties stored in metadata)
+    local stockId = MySQL.insert.await(
+        'INSERT INTO dealership_stock (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, ordered_at, delivered_at, quantity, is_used, metadata, plate, acquired_from, `condition`) VALUES (?, ?, ?, ?, ?, NOW(), NOW(), 1, 1, ?, ?, ?, ?)',
+        {
+            dealership.id, model, label, buyPrice, retailPrice,
+            json.encode(props), plate, sellerIdentifier, condition,
+        }
+    )
+
+    AddLedgerEntry(dealership.id, 'expense', -buyPrice, 'Trade-in: ' .. label .. ' (' .. plate .. ')', identifier)
+
+    ShowNotification(source, ('Traded in %s for $%s.'):format(label, buyPrice))
+    TriggerClientEvent('pickle_dealerships:refreshDisplay', -1, locationKey)
+
+    return true, stockId
+end)
+
+--- On-demand: process any delivered orders for a dealership
+--- Moves delivered orders from dealership_orders into dealership_stock (stacking onto existing stock)
+function ProcessDeliveredOrders(dealershipId)
+    local completed = MySQL.query.await(
+        'SELECT * FROM dealership_orders WHERE dealership_id = ? AND delivered_at IS NOT NULL AND delivered_at <= NOW()',
+        { dealershipId }
+    )
+    if not completed or #completed == 0 then return false end
+
+    for _, order in ipairs(completed) do
+        -- Try to stack onto existing stock of the same model
+        local existing = MySQL.single.await(
+            'SELECT id FROM dealership_stock WHERE dealership_id = ? AND vehicle_model = ? AND sold_at IS NULL AND display_spot IS NULL AND is_used = 0 AND (`condition` = 100.00 OR `condition` IS NULL) ORDER BY id ASC LIMIT 1',
+            { dealershipId, order.vehicle_model }
+        )
+        if existing then
+            MySQL.update.await('UPDATE dealership_stock SET quantity = quantity + ? WHERE id = ?', { order.quantity, existing.id })
+        else
+            local orderedAtSql
+            if type(order.ordered_at) == 'number' then
+                orderedAtSql = os.date('%Y-%m-%d %H:%M:%S', math.floor(order.ordered_at / 1000))
+            elseif type(order.ordered_at) == 'string' and order.ordered_at ~= '' then
+                orderedAtSql = order.ordered_at
+            else
+                orderedAtSql = os.date('%Y-%m-%d %H:%M:%S')
+            end
+            MySQL.insert.await(
+                'INSERT INTO dealership_stock (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, ordered_at, delivered_at, quantity) VALUES (?, ?, ?, ?, ?, ?, NOW(), ?)',
+                { dealershipId, order.vehicle_model, order.vehicle_label, order.wholesale_cost, order.retail_price, orderedAtSql, order.quantity }
+            )
+        end
+        MySQL.update.await('DELETE FROM dealership_orders WHERE id = ?', { order.id })
+    end
+
+    return true
+end

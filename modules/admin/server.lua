@@ -153,6 +153,7 @@ lib.callback.register("pickle_dealerships:adminResetDealership", function(source
     MySQL.update.await("UPDATE dealerships SET owner_id = NULL, balance = 0, tier = 1, reputation = 0 WHERE id = ?", { dealershipId })
     MySQL.update.await("DELETE FROM dealership_employees WHERE dealership_id = ?", { dealershipId })
     MySQL.update.await("DELETE FROM dealership_stock WHERE dealership_id = ?", { dealershipId })
+    MySQL.update.await("DELETE FROM dealership_orders WHERE dealership_id = ?", { dealershipId })
     MySQL.update.await("DELETE FROM dealership_coupons WHERE dealership_id = ?", { dealershipId })
 
     UpdateDealershipCache(dealershipId, {
