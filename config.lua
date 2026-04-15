@@ -367,3 +367,14 @@ Config.PhotoBooth = {
         },
     },
 }
+
+-- Auction system — all durations in minutes. Escrow on bid, anti-snipe on late bids.
+Config.Auction = {
+    durations = { 3, 5, 10, 15, 30 },  -- minute presets shown in the list-for-auction dialog
+    defaultDuration = 10,               -- minutes
+    antiSnipeSeconds = 30,              -- bids within this window of end push end_at forward by same amount
+    minIncrementFloor = 50,             -- seller-chosen min_increment may not be below this
+    houseCutPct = 0.0,                  -- 0.0 = all net to dealership balance; e.g. 0.05 = 5% platform fee
+    viewerBucketBase = 5000,            -- per-viewer routing bucket = base + source id (keeps showcases private)
+    finalizerTickMs = 1000,             -- how often the server scans for expired auctions
+}

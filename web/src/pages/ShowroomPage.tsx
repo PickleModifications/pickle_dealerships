@@ -5,8 +5,9 @@ import { Badge } from '../components/ui/badge'
 import { Input } from '../components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { fetchNui, formatCurrency, getVehicleImage } from '../lib/utils'
-import { Search, X, CreditCard, Banknote, Car, Loader2, Palette, SlidersHorizontal, ChevronRight } from 'lucide-react'
+import { Search, X, CreditCard, Banknote, Car, Loader2, Palette, SlidersHorizontal, ChevronRight, FileText, Gavel } from 'lucide-react'
 import VehicleImg from '../components/VehicleImg'
+import { PickleFaxDialog } from '../components/PickleFax'
 import type { DealershipData, StockItem, VehicleColor } from '../types'
 
 interface Props {
@@ -50,6 +51,16 @@ export default function ShowroomPage({ data }: Props) {
   const [primaryColor, setPrimaryColor] = useState<VehicleColor | null>(null)
   const [secondaryColor, setSecondaryColor] = useState<VehicleColor | null>(null)
   const [colorPicker, setColorPicker] = useState<'primary' | 'secondary' | null>(null)
+  const [pickleFaxId, setPickleFaxId] = useState<number | null>(null)
+  const pickleFaxOpenRef = useRef(false)
+  useEffect(() => {
+    pickleFaxOpenRef.current = pickleFaxId !== null
+    if (pickleFaxId !== null && draggingRef.current) {
+      draggingRef.current = false
+      lastMouseRef.current = null
+      fetchNui('showroomOrbitInput', { dragging: false })
+    }
+  }, [pickleFaxId])
   const parentRef = useRef<HTMLDivElement>(null)
   const draggingRef = useRef(false)
   const lastMouseRef = useRef<{ x: number; y: number } | null>(null)
@@ -171,6 +182,7 @@ export default function ShowroomPage({ data }: Props) {
   // Mouse drag for orbit camera
   useEffect(() => {
     const handleMouseDown = (e: MouseEvent) => {
+      if (pickleFaxOpenRef.current) return
       if (e.button !== 0) return
       if (e.clientX < 320) return
       draggingRef.current = true
@@ -186,6 +198,7 @@ export default function ShowroomPage({ data }: Props) {
     }
 
     const handleMouseMove = (e: MouseEvent) => {
+      if (pickleFaxOpenRef.current) return
       if (!draggingRef.current || !lastMouseRef.current) return
       const dx = e.clientX - lastMouseRef.current.x
       const dy = e.clientY - lastMouseRef.current.y
@@ -195,6 +208,7 @@ export default function ShowroomPage({ data }: Props) {
     }
 
     const handleWheel = (e: WheelEvent) => {
+      if (pickleFaxOpenRef.current) return
       if (e.clientX < 320) return
       const delta = e.deltaY > 0 ? -1 : 1
       fetchNui('showroomOrbitInput', { zoom: delta })
@@ -230,14 +244,23 @@ export default function ShowroomPage({ data }: Props) {
               <h1 className="text-white text-base font-bold">{data.dealershipName}</h1>
               <p className="text-white/40 text-xs">{visibleItems.length} {tab === 'preowned' ? 'pre-owned' : 'new'} available</p>
             </div>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 text-white/40 hover:text-white hover:bg-white/10"
-              onClick={handleClose}
-            >
-              <X className="h-4 w-4" />
-            </Button>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => fetchNui('showroomToAuction', { location: data.location })}
+                className="h-7 px-2 rounded-md bg-amber-500/15 border border-amber-500/40 text-amber-400 hover:bg-amber-500/25 text-[11px] font-semibold flex items-center gap-1 transition-colors"
+                title="Browse live auctions"
+              >
+                <Gavel className="h-3 w-3" /> Auctions
+              </button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-white/40 hover:text-white hover:bg-white/10"
+                onClick={handleClose}
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
 
           {/* New / Pre-owned tabs */}
@@ -465,17 +488,25 @@ export default function ShowroomPage({ data }: Props) {
                           {g.units.map((unit) => {
                             const isSelected = selected?.id === unit.id
                             return (
-                              <button
+                              <div
                                 key={unit.id}
-                                onClick={() => handleSelect(unit)}
-                                className={`w-full text-left px-3 py-2 flex items-center justify-between gap-3 transition-colors ${isSelected ? 'bg-accent/10' : 'hover:bg-white/5'}`}
+                                className={`w-full px-3 py-2 flex items-center justify-between gap-3 transition-colors ${isSelected ? 'bg-accent/10' : 'hover:bg-white/5'}`}
                               >
-                                <div className="min-w-0">
+                                <button onClick={() => handleSelect(unit)} className="flex-1 min-w-0 text-left">
                                   <p className="text-white text-[11px] font-mono">{unit.plate || '— No Plate —'}</p>
                                   <p className="text-white/40 text-[10px]">Condition: {Math.round(Number(unit.condition) || 0)}%</p>
-                                </div>
-                                <p className="text-accent font-bold text-xs shrink-0">{formatCurrency(unit.retail_price)}</p>
-                              </button>
+                                </button>
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); setPickleFaxId(unit.id) }}
+                                  className="h-7 w-7 shrink-0 flex items-center justify-center rounded bg-white/5 hover:bg-white/10 text-white/60 hover:text-white transition-colors"
+                                  title="View PickleFAX"
+                                >
+                                  <FileText className="h-3.5 w-3.5" />
+                                </button>
+                                <button onClick={() => handleSelect(unit)} className="text-accent font-bold text-xs shrink-0">
+                                  {formatCurrency(unit.retail_price)}
+                                </button>
+                              </div>
                             )
                           })}
                         </div>
@@ -578,6 +609,10 @@ export default function ShowroomPage({ data }: Props) {
             </Button>
           </div>
         </div>
+      )}
+
+      {pickleFaxId !== null && (
+        <PickleFaxDialog stockId={pickleFaxId} mode="customer" onClose={() => setPickleFaxId(null)} />
       )}
     </div>
   )

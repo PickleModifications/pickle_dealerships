@@ -242,7 +242,11 @@ function OnExitDealership(locationKey)
         TriggerEvent('pickle_dealerships:exitedDealership', locationKey)
         currentDealership = nil
         dealershipData = nil
-        CloseNui()
+        -- Showcase UIs (auction, photo booth) teleport the player far from the dealership zone
+        -- intentionally and manage their own NUI close. Don't tear their UI down on zone exit.
+        if not ImmersiveShowcaseActive then
+            CloseNui()
+        end
         debugPrint("[Dealerships] Exited zone: " .. locationKey)
     end
 end

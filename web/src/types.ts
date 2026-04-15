@@ -20,6 +20,7 @@ export interface DealershipData {
   model?: string
   label?: string
   vehicleClass?: string
+  stockId?: number
   uploadConfig?: {
     url: string
     field: string
@@ -68,6 +69,7 @@ export interface StockItem {
   metadata?: Record<string, unknown> | string | null
   plate?: string | null
   acquired_from?: string | null
+  auction_id?: number | null
 }
 
 export interface VehicleColor {
@@ -204,6 +206,75 @@ export type PageType =
   | 'photoBooth'
   | 'showroom'
   | 'npcShowroom'
+  | 'pickleFax'
+  | 'auction'
+
+export type AuctionStatus = 'active' | 'won' | 'cancelled' | 'no_sale'
+
+export interface Auction {
+  id: number
+  stock_id: number
+  dealership_id: number
+  dealership_name?: string
+  seller_identifier: string | null
+  starting_bid: number
+  min_increment: number
+  reserve_price: number | null
+  buyout_price: number | null
+  current_bid: number | null
+  current_bidder: string | null
+  reserve_met: boolean
+  started_at: string
+  ends_at: string | null
+  ended_at: string | null
+  duration_minutes: number
+  status: AuctionStatus
+  winner_identifier: string | null
+  winning_bid: number | null
+  claimed_at: string | null
+  vehicle_model: string
+  vehicle_label: string
+  class?: string | null
+  image?: string | null
+  plate?: string | null
+  condition?: number | null
+  bid_count?: number
+}
+
+export interface AuctionBid {
+  id: number
+  auction_id: number
+  bidder_identifier: string
+  amount: number
+  placed_at: string
+  refunded: boolean
+}
+
+export interface AuctionCreateParams {
+  stockId: number
+  startingBid: number
+  minIncrement: number
+  reservePrice?: number | null
+  buyoutPrice?: number | null
+  durationMinutes: number
+}
+
+export interface PickleFaxDetails {
+  id: number
+  model: string
+  label: string
+  isUsed: boolean
+  condition: number
+  plate: string | null
+  acquiredFrom: string | null
+  orderedAt: string | null
+  deliveredAt: string | null
+  retailPrice: number
+  wholesaleCost: number
+  image?: string | null
+  class?: string | null
+  properties: Record<string, unknown> | null
+}
 
 export interface NuiMessage {
   type: string

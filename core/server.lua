@@ -232,6 +232,57 @@ CreateThread(function()
             ALTER TABLE `wholesale_catalog` ADD COLUMN IF NOT EXISTS `image` MEDIUMTEXT DEFAULT NULL AFTER `vehicle_type`;
         ]])
 
+        -- Auctions
+        MySQL.Async.execute([[
+            CREATE TABLE IF NOT EXISTS `dealership_auctions` (
+                `id`                  INT AUTO_INCREMENT PRIMARY KEY,
+                `stock_id`            INT NOT NULL,
+                `dealership_id`       INT NOT NULL,
+                `seller_identifier`   VARCHAR(50) DEFAULT NULL,
+                `starting_bid`        BIGINT NOT NULL,
+                `min_increment`       INT NOT NULL DEFAULT 100,
+                `reserve_price`       BIGINT DEFAULT NULL,
+                `buyout_price`        BIGINT DEFAULT NULL,
+                `current_bid`         BIGINT DEFAULT NULL,
+                `current_bidder`      VARCHAR(50) DEFAULT NULL,
+                `started_at`          DATETIME DEFAULT CURRENT_TIMESTAMP,
+                `ends_at`             DATETIME NOT NULL,
+                `ended_at`            DATETIME DEFAULT NULL,
+                `status`              ENUM('active','won','cancelled','no_sale') NOT NULL DEFAULT 'active',
+                `winner_identifier`   VARCHAR(50) DEFAULT NULL,
+                `winning_bid`         BIGINT DEFAULT NULL,
+                `claimed_at`          DATETIME DEFAULT NULL,
+                KEY `idx_status`  (`status`),
+                KEY `idx_ends_at` (`ends_at`),
+                KEY `idx_winner`  (`winner_identifier`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ]])
+
+        MySQL.Async.execute([[
+            CREATE TABLE IF NOT EXISTS `dealership_auction_bids` (
+                `id`                  INT AUTO_INCREMENT PRIMARY KEY,
+                `auction_id`          INT NOT NULL,
+                `bidder_identifier`   VARCHAR(50) NOT NULL,
+                `amount`              BIGINT NOT NULL,
+                `placed_at`           DATETIME DEFAULT CURRENT_TIMESTAMP,
+                `refunded`            TINYINT(1) NOT NULL DEFAULT 0,
+                KEY `idx_auction` (`auction_id`),
+                KEY `idx_bidder`  (`bidder_identifier`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ]])
+
+        MySQL.Async.execute([[
+            ALTER TABLE `dealership_stock` ADD COLUMN IF NOT EXISTS `auction_id` INT DEFAULT NULL AFTER `acquired_from`;
+        ]])
+
+        -- Deferred-timer model: ends_at becomes nullable (starts on first bid), duration stored upfront
+        MySQL.Async.execute([[
+            ALTER TABLE `dealership_auctions` ADD COLUMN IF NOT EXISTS `duration_minutes` INT NOT NULL DEFAULT 10 AFTER `buyout_price`;
+        ]])
+        MySQL.Async.execute([[
+            ALTER TABLE `dealership_auctions` MODIFY COLUMN `ends_at` DATETIME DEFAULT NULL;
+        ]])
+
         -- Seed default wholesale catalog (INSERT IGNORE skips existing entries)
         local seedSQL = LoadResourceFile(GetCurrentResourceName(), "catalog_seed.sql")
         if seedSQL then

@@ -68,7 +68,7 @@ export default function DashboardPage({ data, onClose }: Props) {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               <StatCard icon={<ShoppingCart className="h-4 w-4" />} label="Total Sales" value={stats.totalSales.toString()} />
               <StatCard icon={<DollarSign className="h-4 w-4" />} label="Revenue" value={formatCurrency(stats.totalRevenue)} />
-              <StatCard icon={<TrendingUp className="h-4 w-4" />} label="Profit" value={formatCurrency(stats.totalProfit)} />
+              <StatCard icon={<TrendingUp className="h-4 w-4" />} label="Profit" value={formatCurrency(stats.totalProfit)} valueClassName={stats.totalProfit < 0 ? 'text-rose-400' : undefined} />
               <StatCard icon={<Award className="h-4 w-4" />} label="Commission" value={formatCurrency(stats.totalCommission)} />
             </div>
 
@@ -142,7 +142,7 @@ export default function DashboardPage({ data, onClose }: Props) {
   )
 }
 
-function StatCard({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+function StatCard({ icon, label, value, valueClassName }: { icon: React.ReactNode; label: string; value: string; valueClassName?: string }) {
   return (
     <Card>
       <CardContent className="p-4">
@@ -150,7 +150,7 @@ function StatCard({ icon, label, value }: { icon: React.ReactNode; label: string
           {icon}
           <span className="text-xs font-medium">{label}</span>
         </div>
-        <p className="text-xl font-bold">{value}</p>
+        <p className={`text-xl font-bold ${valueClassName ?? ''}`}>{value}</p>
       </CardContent>
     </Card>
   )

@@ -123,7 +123,26 @@ local function SpawnDisplayVehicles(locationKey)
                             retailPrice = item.retail_price,
                             wholesalePrice = item.wholesale_cost,
                             displaySpot = spotId,
+                            isUsed = isUsed,
                         }
+
+                        if isUsed and Config.UseTarget then
+                            local capturedStockId = item.id
+                            AddTargetPed(veh, {
+                                {
+                                    name = 'pickle_dealerships:pickleFax',
+                                    label = 'View PickleFAX',
+                                    icon = 'fa-solid fa-file-invoice',
+                                    distance = 3.0,
+                                    onSelect = function()
+                                        OpenNui('pickleFax', { stockId = capturedStockId })
+                                    end,
+                                    action = function()
+                                        OpenNui('pickleFax', { stockId = capturedStockId })
+                                    end,
+                                },
+                            })
+                        end
 
                         occupiedSpots[spotId] = true
                     end
@@ -264,6 +283,11 @@ RegisterNUICallback("orderVehicle", function(data, cb)
         ShowNotification(result or "Failed to order vehicle.")
         cb({ success = false, message = result or "Order failed." })
     end
+end)
+
+RegisterNUICallback("getPickleFax", function(data, cb)
+    local result = lib.callback.await('pickle_dealerships:getPickleFax', false, { stockId = tonumber(data.stockId) })
+    cb(result)
 end)
 
 RegisterNUICallback("getStock", function(data, cb)

@@ -10,8 +10,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { fetchNui, formatCurrency, getVehicleImage } from '../lib/utils'
 import { getCached, setCache, buildKey } from '../lib/cache'
 import { SkeletonCardGrid } from '../components/ui/skeleton'
-import { X, Search, CreditCard, Car, Tag, Banknote } from 'lucide-react'
+import { X, Search, CreditCard, Car, Tag, Banknote, FileText, Gavel } from 'lucide-react'
 import VehicleImg from '../components/VehicleImg'
+import { PickleFaxDialog } from '../components/PickleFax'
 import type { DealershipData, StockItem } from '../types'
 
 interface Props {
@@ -28,6 +29,7 @@ export default function SalesPage({ data, onClose }: Props) {
   const [selected, setSelected] = useState<StockItem | null>(null)
   const [couponCode, setCouponCode] = useState('')
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'bank'>('bank')
+  const [pickleFaxId, setPickleFaxId] = useState<number | null>(null)
 
   useEffect(() => {
     fetchNui<StockItem[] | { stock: StockItem[] }>('getStock', {
@@ -81,9 +83,14 @@ export default function SalesPage({ data, onClose }: Props) {
               <h1 className="text-xl font-bold">{data.selfService ? 'Vehicle Showroom' : 'Sales Tablet'}</h1>
               <p className="text-sm text-muted-foreground">{data.dealershipName} &mdash; {available.length} available</p>
             </div>
-            <Button variant="ghost" size="icon" onClick={onClose}>
-              <X className="h-5 w-5" />
-            </Button>
+            <div className="flex items-center gap-1">
+              <Button variant="outline" size="sm" className="gap-1.5" onClick={() => fetchNui('openAuctionShowcase', { location: data.location })}>
+                <Gavel className="h-3.5 w-3.5" /> Auctions
+              </Button>
+              <Button variant="ghost" size="icon" onClick={onClose}>
+                <X className="h-5 w-5" />
+              </Button>
+            </div>
           </div>
 
           <div className="px-5 pt-3">
@@ -121,10 +128,19 @@ export default function SalesPage({ data, onClose }: Props) {
                       <h3 className="font-semibold">{item.vehicle_label || item.vehicle_model}</h3>
                       <p className="text-xs text-muted-foreground capitalize">{item.class || 'Vehicle'}</p>
                     </div>
-                    <div className="flex gap-1">
+                    <div className="flex gap-1 items-center">
                       {(item.quantity || 1) > 1 && <Badge variant="secondary">x{item.quantity}</Badge>}
-                      {item.condition === 'used' && <Badge variant="secondary">Used</Badge>}
+                      {item.is_used && <Badge variant="secondary">Pre-owned</Badge>}
                       {item.display_spot && <Badge variant="outline">On Display</Badge>}
+                      {item.is_used && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setPickleFaxId(item.id) }}
+                          className="h-6 w-6 flex items-center justify-center rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+                          title="View PickleFAX"
+                        >
+                          <FileText className="h-3.5 w-3.5" />
+                        </button>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center justify-between mt-3 pt-3 border-t border-border">
@@ -197,6 +213,10 @@ export default function SalesPage({ data, onClose }: Props) {
           )}
         </DialogContent>
       </Dialog>
+
+      {pickleFaxId !== null && (
+        <PickleFaxDialog stockId={pickleFaxId} mode={isEmployee ? 'employee' : 'customer'} onClose={() => setPickleFaxId(null)} />
+      )}
       </div>
     </>
   )

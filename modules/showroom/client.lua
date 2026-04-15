@@ -363,6 +363,24 @@ RegisterNUICallback("showroomClose", function(_, cb)
     cb({})
 end)
 
+-- Handoff from showroom → auction showcase without double fade
+RegisterNUICallback("showroomToAuction", function(data, cb)
+    if not ShowroomState then
+        OpenAuctionShowcase(data and data.location)
+        cb({})
+        return
+    end
+    local savedCoords = ShowroomState.savedCoords
+    local savedHeading = ShowroomState.savedHeading
+    CleanupShowroom(true)  -- keeps screen faded out
+    OpenAuctionShowcase(data and data.location, {
+        skipFadeOut = true,
+        savedCoords = savedCoords,
+        savedHeading = savedHeading,
+    })
+    cb({})
+end)
+
 -- Cleanup on resource stop
 AddEventHandler('onResourceStop', function(resourceName)
     if resourceName ~= GetCurrentResourceName() then return end

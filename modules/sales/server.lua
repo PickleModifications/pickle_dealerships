@@ -360,6 +360,38 @@ lib.callback.register("pickle_dealerships:getVehicleDetails", function(source, d
         soldAt = stockItem.sold_at,
         isUsed = isUsed,
         plate = stockItem.plate,
+        acquiredFrom = stockItem.acquired_from,
+        properties = properties,
+    }
+end)
+
+lib.callback.register("pickle_dealerships:getPickleFax", function(_, data)
+    local stockId = tonumber(data and data.stockId)
+    if not stockId then return nil end
+
+    local stockItem = GetStockItem(stockId)
+    if not stockItem then return nil end
+
+    local isUsed = stockItem.is_used == true or tonumber(stockItem.is_used) == 1
+    if not isUsed then return nil end
+
+    local properties = stockItem.metadata
+    if properties and type(properties) == "string" then
+        properties = json.decode(properties)
+    end
+
+    return {
+        id = stockItem.id,
+        model = stockItem.vehicle_model,
+        label = stockItem.vehicle_label or stockItem.vehicle_model,
+        isUsed = true,
+        condition = tonumber(stockItem.condition) or 0,
+        plate = stockItem.plate,
+        acquiredFrom = stockItem.acquired_from,
+        orderedAt = stockItem.ordered_at,
+        deliveredAt = stockItem.delivered_at,
+        retailPrice = stockItem.retail_price,
+        wholesaleCost = stockItem.wholesale_cost,
         properties = properties,
     }
 end)

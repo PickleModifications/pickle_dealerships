@@ -5,12 +5,15 @@ import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { Separator } from '../components/ui/separator'
+import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog'
 import { fetchNui, formatCurrency, getVehicleImage } from '../lib/utils'
 import { getCached, setCache, buildKey } from '../lib/cache'
 import { SkeletonCardGrid } from '../components/ui/skeleton'
-import { X, Search, Package, Truck, Clock, Car, Pencil, SlidersHorizontal } from 'lucide-react'
+import { X, Search, Package, Truck, Clock, Car, Pencil, SlidersHorizontal, FileText, Gavel } from 'lucide-react'
 import VehicleImg from '../components/VehicleImg'
+import { PickleFaxDialog } from '../components/PickleFax'
+import AuctionListDialog from '../components/AuctionListDialog'
 import type { DealershipData, StockItem } from '../types'
 
 interface Props {
@@ -60,6 +63,9 @@ export default function StockPage({ data, onClose }: Props) {
   const [priceRange, setPriceRange] = useState<[number, number]>([0, 0])
   const [maxRetailPrice, setMaxRetailPrice] = useState(0)
   const [showFilters, setShowFilters] = useState(false)
+  const [stockTab, setStockTab] = useState<'new' | 'used'>('new')
+  const [pickleFaxId, setPickleFaxId] = useState<number | null>(null)
+  const [auctionListingItem, setAuctionListingItem] = useState<StockItem | null>(null)
   const parentRef = useRef<HTMLDivElement>(null)
 
   const loadStock = () => {
@@ -147,7 +153,8 @@ export default function StockPage({ data, onClose }: Props) {
       availableGroups.set(key, { ...item, quantity: item.quantity || 1 })
     }
   }
-  const available = [...Array.from(availableGroups.values()), ...preOwned]
+  const availableNew = Array.from(availableGroups.values())
+  const available = stockTab === 'used' ? preOwned : availableNew
 
   // Sum in-transit quantities per model so the +X badge reflects all pending orders.
   const inTransitByModel = new Map<string, StockItem>()
@@ -254,8 +261,21 @@ export default function StockPage({ data, onClose }: Props) {
 
       <Separator className="mt-3" />
 
+      <div className="px-5 pt-3">
+        <Tabs value={stockTab} onValueChange={(v) => setStockTab(v as 'new' | 'used')}>
+          <TabsList className="h-8 w-full grid grid-cols-2">
+            <TabsTrigger value="new" className="text-xs gap-1.5">
+              New <span className="text-[10px] text-muted-foreground">({availableNew.length})</span>
+            </TabsTrigger>
+            <TabsTrigger value="used" className="text-xs gap-1.5">
+              Pre-owned <span className="text-[10px] text-muted-foreground">({preOwned.length})</span>
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
+      </div>
+
       {/* In-transit — not virtualized (usually small count) */}
-      {!loading && inTransit.length > 0 && (
+      {!loading && stockTab === 'new' && inTransit.length > 0 && (
         <div className="px-5 pt-3">
           <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1.5">
             <Truck className="h-3.5 w-3.5" /> In Transit ({inTransit.length})
@@ -310,7 +330,12 @@ export default function StockPage({ data, onClose }: Props) {
               <Package className="h-10 w-10 mb-2 opacity-50" />
               <p>{search ? 'No matching vehicles found' : 'No vehicles in stock'}</p>
             </div>
-          ) : available.length > 0 ? (
+          ) : available.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
+              <Package className="h-10 w-10 mb-2 opacity-50" />
+              <p>{stockTab === 'used' ? 'No pre-owned vehicles in stock' : 'No new vehicles in stock'}</p>
+            </div>
+          ) : (
             <div>
               {inTransit.length > 0 && (
                 <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1.5">
@@ -343,9 +368,18 @@ export default function StockPage({ data, onClose }: Props) {
                                   <div className="flex items-center gap-1.5">
                                     <span className="font-semibold text-sm truncate">{item.vehicle_label || item.vehicle_model}</span>
                                     {item.is_used ? (
-                                      <span className="text-[10px] bg-violet-500/20 text-violet-300 px-1 rounded shrink-0" title={`Plate: ${item.plate || '?'} • Condition: ${Math.round(Number(item.condition) || 0)}%`}>
-                                        Pre-owned
-                                      </span>
+                                      <>
+                                        {item.plate && (
+                                          <span className="text-[10px] bg-violet-500/20 text-violet-300 px-1 rounded shrink-0 font-mono" title={`Plate: ${item.plate}`}>
+                                            {item.plate}
+                                          </span>
+                                        )}
+                                        {item.auction_id && (
+                                          <span className="text-[10px] bg-amber-500/20 text-amber-300 px-1 rounded shrink-0 flex items-center gap-0.5" title="Currently at auction">
+                                            <Gavel className="h-2.5 w-2.5" /> At Auction
+                                          </span>
+                                        )}
+                                      </>
                                     ) : (
                                       (item.quantity || 1) > 1 && (
                                         <span className="text-[10px] bg-muted px-1 rounded shrink-0">x{item.quantity}</span>
@@ -360,15 +394,35 @@ export default function StockPage({ data, onClose }: Props) {
                                   <p className="text-[11px] text-muted-foreground capitalize">{item.class || 'Vehicle'}</p>
                                 </div>
                               </div>
-                              {canManage && (
-                                <button
-                                  className="h-6 w-6 shrink-0 flex items-center justify-center rounded hover:bg-muted text-muted-foreground hover:text-foreground"
-                                  title="Edit retail price"
-                                  onClick={() => { setEditingPrice(item); setPriceInput(String(item.retail_price)) }}
-                                >
-                                  <Pencil className="h-3 w-3" />
-                                </button>
-                              )}
+                              <div className="flex items-center gap-0.5 shrink-0">
+                                {item.is_used && (
+                                  <button
+                                    className="h-6 w-6 flex items-center justify-center rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+                                    title="View PickleFAX report"
+                                    onClick={() => setPickleFaxId(item.id)}
+                                  >
+                                    <FileText className="h-3 w-3" />
+                                  </button>
+                                )}
+                                {canManage && item.is_used && !item.auction_id && (
+                                  <button
+                                    className="h-6 w-6 flex items-center justify-center rounded hover:bg-amber-500/20 text-muted-foreground hover:text-amber-400"
+                                    title="List for auction"
+                                    onClick={() => setAuctionListingItem(item)}
+                                  >
+                                    <Gavel className="h-3 w-3" />
+                                  </button>
+                                )}
+                                {canManage && !item.auction_id && (
+                                  <button
+                                    className="h-6 w-6 flex items-center justify-center rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+                                    title="Edit retail price"
+                                    onClick={() => { setEditingPrice(item); setPriceInput(String(item.retail_price)) }}
+                                  >
+                                    <Pencil className="h-3 w-3" />
+                                  </button>
+                                )}
+                              </div>
                             </div>
                             <div className="flex items-center justify-between mt-auto pt-2 border-t border-border">
                               <div className="flex gap-3">
@@ -378,10 +432,20 @@ export default function StockPage({ data, onClose }: Props) {
                                 </div>
                                 <div>
                                   <p className="text-[10px] text-muted-foreground">Profit</p>
-                                  <p className="text-sm font-medium text-emerald-400">
+                                  <p className={`text-sm font-medium ${item.retail_price - item.wholesale_cost < 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
                                     {formatCurrency(item.retail_price - item.wholesale_cost)}
                                   </p>
                                 </div>
+                                {item.is_used && (() => {
+                                  const cond = Math.round(Number(item.condition) || 0)
+                                  const color = cond >= 80 ? 'text-emerald-400' : cond >= 50 ? 'text-amber-400' : 'text-rose-400'
+                                  return (
+                                    <div>
+                                      <p className="text-[10px] text-muted-foreground">Condition</p>
+                                      <p className={`text-sm font-medium ${color}`}>{cond}%</p>
+                                    </div>
+                                  )
+                                })()}
                               </div>
                             </div>
                           </div>
@@ -392,9 +456,21 @@ export default function StockPage({ data, onClose }: Props) {
                   })}
                 </div>
             </div>
-          ) : null}
+          )}
         </div>
       </div>
+
+      {pickleFaxId !== null && (
+        <PickleFaxDialog stockId={pickleFaxId} mode="employee" onClose={() => setPickleFaxId(null)} />
+      )}
+
+      {auctionListingItem && (
+        <AuctionListDialog
+          item={auctionListingItem}
+          onClose={() => setAuctionListingItem(null)}
+          onListed={() => loadStock()}
+        />
+      )}
 
       {/* Edit retail price dialog */}
       <Dialog open={!!editingPrice} onOpenChange={(open) => { if (!open) setEditingPrice(null) }}>
@@ -417,11 +493,14 @@ export default function StockPage({ data, onClose }: Props) {
                 placeholder="Set retail price..."
                 className="mt-1"
               />
-              {priceInput && editingPrice && (
-                <p className="text-xs text-muted-foreground mt-1">
-                  Profit: {formatCurrency(parseInt(priceInput) - editingPrice.wholesale_cost)} ({Math.round(((parseInt(priceInput) - editingPrice.wholesale_cost) / editingPrice.wholesale_cost) * 100)}%)
-                </p>
-              )}
+              {priceInput && editingPrice && (() => {
+                const profit = parseInt(priceInput) - editingPrice.wholesale_cost
+                return (
+                  <p className={`text-xs mt-1 ${profit < 0 ? 'text-rose-400' : 'text-muted-foreground'}`}>
+                    Profit: {formatCurrency(profit)} ({Math.round((profit / editingPrice.wholesale_cost) * 100)}%)
+                  </p>
+                )
+              })()}
             </div>
             <div className="flex gap-2">
               <Button variant="outline" className="flex-1" onClick={() => setEditingPrice(null)}>Cancel</Button>
