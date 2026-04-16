@@ -14,7 +14,7 @@ RegisterNUICallback("createFinancing", function(data, cb)
     })
 
     if result and result.success then
-        ShowNotification(("Financing approved for %s! Down: %s, %d payments of %s."):format(
+        ShowNotification(_L("financing_approved_detail",
             result.label or result.model,
             GetCurrencyString(result.downPayment),
             result.totalInstallments,
@@ -51,7 +51,7 @@ RegisterNUICallback("createFinancing", function(data, cb)
             end
         end
     else
-        ShowNotification(result and result.message or "Financing request failed.")
+        ShowNotification(result and result.message or _L("financing_request_failed"))
     end
 
     cb(result or { success = false })
@@ -64,15 +64,15 @@ RegisterNUICallback("makePayment", function(data, cb)
 
     if result and result.success then
         if result.fullyPaid then
-            ShowNotification("Vehicle fully paid off! Congratulations!")
+            ShowNotification(_L("financing_fully_paid"))
         else
-            ShowNotification(("Payment of %s received. Remaining balance: %s"):format(
+            ShowNotification(_L("financing_payment_received",
                 GetCurrencyString(result.amountPaid),
                 GetCurrencyString(result.remaining)
             ))
         end
     else
-        ShowNotification(result and result.message or "Payment failed.")
+        ShowNotification(result and result.message or _L("financing_payment_failed"))
     end
 
     cb(result or { success = false })
@@ -81,6 +81,38 @@ end)
 RegisterNUICallback("getMyFinancing", function(data, cb)
     local result = lib.callback.await("pickle_dealerships:getMyFinancing", false, {})
     cb(result or {})
+end)
+
+RegisterNUICallback("getFinancingSettings", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:getFinancingSettings", false, {
+        dealershipId = data and data.dealershipId or nil,
+    })
+    cb(result)
+end)
+
+RegisterNUICallback("updateFinancingSettings", function(data, cb)
+    local ok, msg = lib.callback.await("pickle_dealerships:updateFinancingSettings", false, {
+        dealershipId = data.dealershipId,
+        settings = data.settings,
+    })
+    if not ok then ShowNotification(msg or _L("financing_settings_failed")) end
+    cb({ success = ok })
+end)
+
+RegisterNUICallback("getDealershipFinancingAgreements", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:getDealershipFinancingAgreements", false, {
+        dealershipId = data and data.dealershipId or nil,
+    })
+    cb(result or {})
+end)
+
+RegisterNUICallback("forgiveLoan", function(data, cb)
+    local ok, msg = lib.callback.await("pickle_dealerships:forgiveLoan", false, {
+        financingId = data.financingId,
+        dealershipId = data.dealershipId,
+    })
+    if not ok then ShowNotification(msg or _L("financing_forgive_failed")) end
+    cb({ success = ok })
 end)
 
 -- ─── Server Events ──────────────────────────────────────────────────────────
@@ -92,8 +124,8 @@ RegisterNetEvent("pickle_dealerships:financingReminder", function(data)
     end
 
     lib.notify({
-        title = "Financing Reminder",
-        description = ("Payment of %s is overdue for vehicle %s.%s Remaining: %s"):format(
+        title = _L("financing_reminder_title"),
+        description = _L("financing_reminder_desc",
             GetCurrencyString(data.installmentAmount),
             data.plate,
             missedStr,
@@ -106,8 +138,8 @@ end)
 
 RegisterNetEvent("pickle_dealerships:vehicleRepossessed", function(data)
     lib.notify({
-        title = "Vehicle Repossessed",
-        description = ("Your vehicle (%s) has been repossessed due to %d missed payments."):format(
+        title = _L("financing_repossessed_title"),
+        description = _L("financing_repossessed_desc",
             data.plate,
             data.missedPayments
         ),

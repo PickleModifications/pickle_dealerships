@@ -98,7 +98,7 @@ lib.callback.register('pickle_dealerships:startDelivery', function(source, locat
         dealershipCoords = meta.coords and vector3(meta.coords.x, meta.coords.y, meta.coords.z) or nil,
     })
 
-    ShowNotification(source, 'Delivery mission started! Pick up ' .. #pendingStock .. ' vehicle(s).', 'success')
+    ShowNotification(source, _L('delivery_mission_started_server', #pendingStock), 'success')
     return true, deliveryId
 end)
 
@@ -137,7 +137,7 @@ lib.callback.register('pickle_dealerships:completeDelivery', function(source, de
     -- Notify clients to refresh display
     TriggerClientEvent('pickle_dealerships:refreshDisplay', -1, delivery.locationKey)
 
-    ShowNotification(source, 'Delivery completed! ' .. #delivery.stockIds .. ' vehicle(s) delivered.', 'success')
+    ShowNotification(source, _L('delivery_completed_server', #delivery.stockIds), 'success')
     return true
 end)
 
@@ -190,7 +190,7 @@ lib.callback.register('pickle_dealerships:failDelivery', function(source, delive
     -- Clean up
     activeDeliveries[source] = nil
 
-    ShowNotification(source, 'Delivery failed. $' .. totalRefund .. ' refunded to dealership.', 'error')
+    ShowNotification(source, _L('delivery_failed_server', GetCurrencyString(totalRefund)), 'error')
     return true
 end)
 

@@ -269,15 +269,13 @@ end
 
 RegisterNUICallback("showroomSwapVehicle", function(data, cb)
     if not ShowroomState then cb({ success = false }) return end
-    print(('[pickle_dealerships] showroomSwapVehicle model=%s stockId=%s'):format(tostring(data.model), tostring(data.stockId)))
-    -- Pre-owned units pass their stockId so we can fetch captured properties
+    -- Properties can be passed directly (auctions) or fetched via stockId (pre-owned stock)
     local properties = nil
-    if data.stockId then
+    if data.properties then
+        properties = data.properties
+        if type(properties) == "string" then properties = json.decode(properties) end
+    elseif data.stockId then
         local details = lib.callback.await("pickle_dealerships:getVehicleDetails", false, { stockId = data.stockId })
-        print(('[pickle_dealerships] details isUsed=%s props_type=%s'):format(
-            tostring(details and details.isUsed),
-            type(details and details.properties)
-        ))
         if details and details.isUsed then properties = details.properties end
     end
     local ok = SwapShowroomVehicle(data.model, properties)
@@ -290,6 +288,15 @@ RegisterNUICallback("showroomOrbitInput", function(data, cb)
         if data.lookY then ShowroomInput.lookY = ShowroomInput.lookY + (tonumber(data.lookY) or 0.0) end
         if data.dragging ~= nil then ShowroomInput.dragging = data.dragging end
         if data.zoom then ShowroomInput.zoom = ShowroomInput.zoom + (tonumber(data.zoom) or 0.0) end
+    end
+    cb({})
+end)
+
+RegisterNUICallback("showroomClearVehicle", function(_, cb)
+    if ShowroomState and ShowroomState.vehicle and DoesEntityExist(ShowroomState.vehicle) then
+        DeleteEntity(ShowroomState.vehicle)
+        ShowroomState.vehicle = nil
+        ShowroomState.currentModel = nil
     end
     cb({})
 end)
@@ -330,7 +337,7 @@ RegisterNUICallback("showroomPurchase", function(data, cb)
     })
 
     if not result or not result.success then
-        ShowNotification(result and result.message or "Purchase failed.")
+        ShowNotification(result and result.message or _L("showroom_purchase_failed"))
         cb(result or { success = false })
         return
     end
@@ -358,28 +365,95 @@ RegisterNUICallback("showroomPurchase", function(data, cb)
     cb(result)
 end)
 
+-- Finance a vehicle: create loan, exit showroom, spawn vehicle
+RegisterNUICallback("showroomFinance", function(data, cb)
+    if not ShowroomState then cb({ success = false }) return end
+
+    local result = lib.callback.await("pickle_dealerships:createFinancing", false, {
+        dealershipId = data.dealershipId,
+        stockId = data.stockId,
+        downPayment = data.downPayment,
+        installments = data.installments,
+    })
+
+    if not result or not result.success then
+        ShowNotification(result and result.message or _L("showroom_financing_failed"))
+        cb(result or { success = false })
+        return
+    end
+
+    local location = data.location
+    CleanupShowroom(true)
+
+    local cfg = DealershipConfigs[location]
+    local spawnPoint = cfg and cfg.spawnPoint
+    if spawnPoint then
+        local props = nil
+        if result.isUsed and result.properties then
+            props = result.properties
+            if type(props) == "string" then props = json.decode(props) end
+            if type(props) == "table" and result.plate then props.plate = result.plate end
+        end
+        SpawnPurchasedVehicle(result.model, spawnPoint, nil, nil, props, result.plate)
+    end
+
+    DoScreenFadeIn(500)
+    ShowNotification(_L("showroom_financed",
+        result.label, GetCurrencyString(result.downPayment),
+        result.totalInstallments, GetCurrencyString(result.installmentAmount)
+    ))
+    cb(result)
+end)
+
 RegisterNUICallback("showroomClose", function(_, cb)
     CleanupShowroom()
     cb({})
 end)
 
--- Handoff from showroom → auction showcase without double fade
-RegisterNUICallback("showroomToAuction", function(data, cb)
-    if not ShowroomState then
-        OpenAuctionShowcase(data and data.location)
-        cb({})
+-- Claim an auction vehicle: close showroom, teleport to dealership spawn, spawn vehicle, warp in
+RegisterNUICallback("showroomClaimAuction", function(data, cb)
+    local ok, result = lib.callback.await("pickle_dealerships:claimAuctionVehicle", false, {
+        auctionId = tonumber(data.auctionId),
+        toGarage = data.toGarage == true,
+    })
+    if not ok then
+        ShowNotification(result or _L("auction_claim_failed"))
+        cb({ success = false })
         return
     end
-    local savedCoords = ShowroomState.savedCoords
-    local savedHeading = ShowroomState.savedHeading
-    CleanupShowroom(true)  -- keeps screen faded out
-    OpenAuctionShowcase(data and data.location, {
-        skipFadeOut = true,
-        savedCoords = savedCoords,
-        savedHeading = savedHeading,
-    })
-    cb({})
+
+    -- Send to garage — no spawn needed, stay in showroom
+    if data.toGarage then
+        ShowNotification(_L("showroom_sent_to_garage", result.label or "vehicle"))
+        cb({ success = true, toGarage = true })
+        return
+    end
+
+    -- Claim vehicle — exit showroom, spawn at dealership
+    local locationKey = result.dealershipLocation
+    local targetCfg = locationKey and DealershipConfigs[locationKey] or nil
+
+    CleanupShowroom(true) -- keep screen faded out
+
+    if targetCfg and targetCfg.spawnPoint then
+        local sp = targetCfg.spawnPoint
+        local ped = PlayerPedId()
+        SetEntityCoords(ped, sp.x, sp.y, sp.z, false, false, false, true)
+        RequestCollisionAtCoord(sp.x, sp.y, sp.z)
+        Wait(500)
+
+        local props = result.properties
+        if type(props) == "string" then props = json.decode(props) end
+        SpawnPurchasedVehicle(result.model, sp, nil, nil, props, result.plate)
+        ShowNotification(_L("showroom_claimed", result.label or result.model))
+    else
+        ShowNotification(_L("showroom_claimed_no_spawn"))
+    end
+
+    DoScreenFadeIn(500)
+    cb({ success = true })
 end)
+
 
 -- Cleanup on resource stop
 AddEventHandler('onResourceStop', function(resourceName)

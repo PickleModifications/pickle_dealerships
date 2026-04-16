@@ -8,6 +8,7 @@ import { Separator } from '../components/ui/separator'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog'
 import { fetchNui, formatCurrency } from '../lib/utils'
 import { Skeleton, SkeletonList } from '../components/ui/skeleton'
+import { t } from '../lib/locale'
 import { X, ArrowUpRight, ArrowDownLeft, DollarSign, Receipt } from 'lucide-react'
 import type { DealershipData, LedgerEntry } from '../types'
 
@@ -90,7 +91,7 @@ export default function FinancesPage({ data, onClose }: Props) {
         <>
           <div className="flex items-center justify-between p-5 pb-0">
             <div>
-              <h1 className="text-xl font-bold">Finances</h1>
+              <h1 className="text-xl font-bold">{t('tab_finances')}</h1>
               <p className="text-sm text-muted-foreground">{data.dealershipName}</p>
             </div>
             <Button variant="ghost" size="icon" onClick={onClose}>
@@ -107,7 +108,7 @@ export default function FinancesPage({ data, onClose }: Props) {
         {loading ? (
           <div className="space-y-5"><div className="rounded-lg border border-border bg-card p-5"><Skeleton className="h-4 w-32 mb-2" /><Skeleton className="h-8 w-48" /></div><SkeletonList count={5} /></div>
         ) : !finances ? (
-          <div className="flex items-center justify-center h-48 text-muted-foreground">Failed to load finances</div>
+          <div className="flex items-center justify-center h-48 text-muted-foreground">{t('finances_failed_to_load')}</div>
         ) : (
           <div className="space-y-5">
             <Card className="border-accent/30">
@@ -115,18 +116,18 @@ export default function FinancesPage({ data, onClose }: Props) {
                 <div className="flex items-center justify-between">
                   <div>
                     <p className="text-sm text-muted-foreground flex items-center gap-1">
-                      <DollarSign className="h-4 w-4" /> Dealership Balance
+                      <DollarSign className="h-4 w-4" /> {t('finances_dealership_balance')}
                     </p>
                     <p className="text-3xl font-bold mt-1">{formatCurrency(finances.balance)}</p>
                   </div>
                   <div className="flex gap-2">
                     {canWithdraw && (
                       <Button variant="outline" size="sm" className="gap-1" onClick={() => { setWithdrawOpen(true); setAmount('') }}>
-                        <ArrowUpRight className="h-4 w-4" /> Withdraw
+                        <ArrowUpRight className="h-4 w-4" /> {t('finances_withdraw')}
                       </Button>
                     )}
                     <Button variant="outline" size="sm" className="gap-1" onClick={() => { setDepositOpen(true); setAmount('') }}>
-                      <ArrowDownLeft className="h-4 w-4" /> Deposit
+                      <ArrowDownLeft className="h-4 w-4" /> {t('finances_deposit')}
                     </Button>
                   </div>
                 </div>
@@ -136,12 +137,12 @@ export default function FinancesPage({ data, onClose }: Props) {
             <Card>
               <CardHeader>
                 <CardTitle className="text-sm font-medium flex items-center gap-2">
-                  <Receipt className="h-4 w-4" /> Transaction History
+                  <Receipt className="h-4 w-4" /> {t('finances_transaction_history')}
                 </CardTitle>
               </CardHeader>
               <CardContent>
                 {finances.ledger.length === 0 ? (
-                  <p className="text-sm text-muted-foreground text-center py-4">No transactions yet</p>
+                  <p className="text-sm text-muted-foreground text-center py-4">{t('finances_no_transactions')}</p>
                 ) : (
                   <div className="space-y-2">
                     {finances.ledger.slice(0, 50).map((entry) => (
@@ -169,19 +170,19 @@ export default function FinancesPage({ data, onClose }: Props) {
       <Dialog open={withdrawOpen} onOpenChange={setWithdrawOpen}>
         <DialogContent onClose={() => setWithdrawOpen(false)}>
           <DialogHeader>
-            <DialogTitle>Withdraw Funds</DialogTitle>
-            <DialogDescription>Transfer money from the dealership to your bank account.</DialogDescription>
+            <DialogTitle>{t('finances_withdraw_funds')}</DialogTitle>
+            <DialogDescription>{t('finances_withdraw_desc')}</DialogDescription>
           </DialogHeader>
           <div className="space-y-4 pt-2">
             <div>
-              <p className="text-sm text-muted-foreground mb-1">Available Balance</p>
+              <p className="text-sm text-muted-foreground mb-1">{t('finances_available_balance')}</p>
               <p className="text-lg font-bold">{formatCurrency(finances?.balance || 0)}</p>
             </div>
             <div>
-              <label className="text-sm font-medium">Amount</label>
-              <Input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="Enter amount..." className="mt-1" />
+              <label className="text-sm font-medium">{t('finances_amount')}</label>
+              <Input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder={t('finances_enter_amount')} className="mt-1" />
             </div>
-            <Button className="w-full" onClick={handleWithdraw}>Withdraw</Button>
+            <Button className="w-full" onClick={handleWithdraw}>{t('finances_withdraw')}</Button>
           </div>
         </DialogContent>
       </Dialog>
@@ -189,15 +190,15 @@ export default function FinancesPage({ data, onClose }: Props) {
       <Dialog open={depositOpen} onOpenChange={setDepositOpen}>
         <DialogContent onClose={() => setDepositOpen(false)}>
           <DialogHeader>
-            <DialogTitle>Deposit Funds</DialogTitle>
-            <DialogDescription>Add money to the dealership balance from your bank.</DialogDescription>
+            <DialogTitle>{t('finances_deposit_funds')}</DialogTitle>
+            <DialogDescription>{t('finances_deposit_desc')}</DialogDescription>
           </DialogHeader>
           <div className="space-y-4 pt-2">
             <div>
-              <label className="text-sm font-medium">Amount</label>
-              <Input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="Enter amount..." className="mt-1" />
+              <label className="text-sm font-medium">{t('finances_amount')}</label>
+              <Input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder={t('finances_enter_amount')} className="mt-1" />
             </div>
-            <Button className="w-full" onClick={handleDeposit}>Deposit</Button>
+            <Button className="w-full" onClick={handleDeposit}>{t('finances_deposit')}</Button>
           </div>
         </DialogContent>
       </Dialog>

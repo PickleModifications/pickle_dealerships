@@ -283,6 +283,11 @@ CreateThread(function()
             ALTER TABLE `dealership_auctions` MODIFY COLUMN `ends_at` DATETIME DEFAULT NULL;
         ]])
 
+        -- Per-dealership financing settings (JSON blob)
+        MySQL.Async.execute([[
+            ALTER TABLE `dealerships` ADD COLUMN IF NOT EXISTS `financing_settings` JSON DEFAULT NULL AFTER `metadata`;
+        ]])
+
         -- Seed default wholesale catalog (INSERT IGNORE skips existing entries)
         local seedSQL = LoadResourceFile(GetCurrentResourceName(), "catalog_seed.sql")
         if seedSQL then

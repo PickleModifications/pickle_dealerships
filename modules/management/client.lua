@@ -3,7 +3,7 @@ RegisterNUICallback("getDealershipFinances", function(data, cb)
     if result then
         cb({ success = true, data = result })
     else
-        cb({ success = false, message = "Failed to fetch finances." })
+        cb({ success = false, message = _L("management_finances_failed") })
     end
 end)
 
@@ -16,8 +16,8 @@ RegisterNUICallback("withdrawFunds", function(data, cb)
         ShowNotification(result.message)
         cb({ success = true, newBalance = result.newBalance })
     else
-        ShowNotification(result and result.message or "Withdrawal failed.")
-        cb({ success = false, message = result and result.message or "Withdrawal failed." })
+        ShowNotification(result and result.message or _L("management_withdrawal_failed"))
+        cb({ success = false, message = result and result.message or _L("management_withdrawal_failed") })
     end
 end)
 
@@ -30,8 +30,8 @@ RegisterNUICallback("depositFunds", function(data, cb)
         ShowNotification(result.message)
         cb({ success = true, newBalance = result.newBalance })
     else
-        ShowNotification(result and result.message or "Deposit failed.")
-        cb({ success = false, message = result and result.message or "Deposit failed." })
+        ShowNotification(result and result.message or _L("management_deposit_failed"))
+        cb({ success = false, message = result and result.message or _L("management_deposit_failed") })
     end
 end)
 
@@ -49,8 +49,8 @@ RegisterNUICallback("upgradeTier", function(data, cb)
         })
         cb({ success = true, newTier = result.newTier, newBalance = result.newBalance })
     else
-        ShowNotification(result and result.message or "Upgrade failed.")
-        cb({ success = false, message = result and result.message or "Upgrade failed." })
+        ShowNotification(result and result.message or _L("management_upgrade_failed"))
+        cb({ success = false, message = result and result.message or _L("management_upgrade_failed") })
     end
 end)
 
@@ -69,8 +69,8 @@ RegisterNUICallback("createCoupon", function(data, cb)
         ShowNotification(result.message)
         cb({ success = true })
     else
-        ShowNotification(result and result.message or "Failed to create coupon.")
-        cb({ success = false, message = result and result.message or "Failed to create coupon." })
+        ShowNotification(result and result.message or _L("management_coupon_create_failed"))
+        cb({ success = false, message = result and result.message or _L("management_coupon_create_failed") })
     end
 end)
 
@@ -83,8 +83,8 @@ RegisterNUICallback("deleteCoupon", function(data, cb)
         ShowNotification(result.message)
         cb({ success = true })
     else
-        ShowNotification(result and result.message or "Failed to delete coupon.")
-        cb({ success = false, message = result and result.message or "Failed to delete coupon." })
+        ShowNotification(result and result.message or _L("management_coupon_delete_failed"))
+        cb({ success = false, message = result and result.message or _L("management_coupon_delete_failed") })
     end
 end)
 
@@ -93,7 +93,7 @@ RegisterNUICallback("getCoupons", function(data, cb)
     if result then
         cb({ success = true, coupons = result })
     else
-        cb({ success = false, message = "Failed to fetch coupons." })
+        cb({ success = false, message = _L("management_coupons_fetch_failed") })
     end
 end)
 
@@ -102,7 +102,7 @@ RegisterNUICallback("getCommissionRates", function(data, cb)
     if result then
         cb({ success = true, rates = result })
     else
-        cb({ success = false, message = "Failed to fetch commission rates." })
+        cb({ success = false, message = _L("management_commission_fetch_failed") })
     end
 end)
 
@@ -116,8 +116,8 @@ RegisterNUICallback("setCommissionRates", function(data, cb)
         ShowNotification(result.message)
         cb({ success = true })
     else
-        ShowNotification(result and result.message or "Failed to update commission rates.")
-        cb({ success = false, message = result and result.message or "Failed." })
+        ShowNotification(result and result.message or _L("management_commission_update_failed"))
+        cb({ success = false, message = result and result.message or _L("management_commission_update_failed") })
     end
 end)
 
@@ -126,6 +126,6 @@ RegisterNUICallback("getDashboardStats", function(data, cb)
     if result then
         cb({ success = true, data = result })
     else
-        cb({ success = false, message = "Failed to fetch dashboard stats." })
+        cb({ success = false, message = _L("management_dashboard_failed") })
     end
 end)

@@ -1,14 +1,18 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { t } from '../lib/locale'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { Button } from '../components/ui/button'
 import { Badge } from '../components/ui/badge'
 import { Input } from '../components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { fetchNui, formatCurrency, getVehicleImage } from '../lib/utils'
-import { Search, X, CreditCard, Banknote, Car, Loader2, Palette, SlidersHorizontal, ChevronRight, FileText, Gavel } from 'lucide-react'
+import { Search, X, CreditCard, Banknote, Car, Loader2, Palette, SlidersHorizontal, ChevronRight, FileText, Gavel, Zap, Package, Warehouse, PenLine } from 'lucide-react'
 import VehicleImg from '../components/VehicleImg'
 import { PickleFaxDialog } from '../components/PickleFax'
-import type { DealershipData, StockItem, VehicleColor } from '../types'
+import FinancingContractDialog from '../components/FinancingContractDialog'
+import { useNuiEvent } from '../hooks/useNuiEvent'
+import { formatTimeRemaining, isEndingSoon, nextBidFloor, maskBidder } from '../lib/auction'
+import type { DealershipData, StockItem, VehicleColor, Auction, FinancingSettings } from '../types'
 
 interface Props {
   data: DealershipData
@@ -42,16 +46,37 @@ export default function ShowroomPage({ data }: Props) {
   const [maxRetailPrice, setMaxRetailPrice] = useState(0)
   const [showFilters, setShowFilters] = useState(false)
   const [sortBy, setSortBy] = useState<'name_asc' | 'name_desc' | 'price_asc' | 'price_desc'>('name_asc')
-  const [tab, setTab] = useState<'new' | 'preowned'>('new')
+  const [tab, setTab] = useState<'new' | 'preowned' | 'auctions'>('new')
   const [expandedModel, setExpandedModel] = useState<string | null>(null)
   const [selected, setSelected] = useState<StockItem | null>(null)
-  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'bank'>('bank')
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'bank' | 'financing'>('bank')
   const [purchasing, setPurchasing] = useState(false)
   const [swapping, setSwapping] = useState(false)
   const [primaryColor, setPrimaryColor] = useState<VehicleColor | null>(null)
   const [secondaryColor, setSecondaryColor] = useState<VehicleColor | null>(null)
   const [colorPicker, setColorPicker] = useState<'primary' | 'secondary' | null>(null)
   const [pickleFaxId, setPickleFaxId] = useState<number | null>(null)
+
+  // ── Auction state ──
+  const [auctions, setAuctions] = useState<Auction[]>([])
+  const [selectedAuction, setSelectedAuction] = useState<(Auction & { bids?: Array<{ id: number; bidder_identifier: string; amount: number; placed_at: string; refunded: number }> }) | null>(null)
+  const [bidInput, setBidInput] = useState('')
+  const [bidding, setBidding] = useState(false)
+  const [bidError, setBidError] = useState<string | null>(null)
+  const [myIdentifier, setMyIdentifier] = useState<string | null>(null)
+  const [, setAuctionTick] = useState(0)
+
+  // ── Financing state ──
+  const [financingSettings, setFinancingSettings] = useState<FinancingSettings | null>(null)
+  const [selectedInstallments, setSelectedInstallments] = useState<number | null>(null)
+  const [showContract, setShowContract] = useState(false)
+  const [financingSigning, setFinancingSigning] = useState(false)
+  const [myLoans, setMyLoans] = useState<Array<{ id: number; vehiclePlate: string; totalAmount: number; amountPaid: number; installmentAmount: number; remaining: number; missedPayments: number; dealershipName?: string }>>([])
+  const [showLoans, setShowLoans] = useState(false)
+  const [playerName, setPlayerName] = useState<string | null>(null)
+  const [pendingPickups, setPendingPickups] = useState<Array<{ id: number; vehicle_model: string; vehicle_label: string; winning_bid: number; dealership_name: string; plate?: string | null }>>([])
+  const [showPickups, setShowPickups] = useState(false)
+  const [claimingId, setClaimingId] = useState<number | null>(null)
   const pickleFaxOpenRef = useRef(false)
   useEffect(() => {
     pickleFaxOpenRef.current = pickleFaxId !== null
@@ -85,6 +110,131 @@ export default function ShowroomPage({ data }: Props) {
       setLoading(false)
     }).catch(() => setLoading(false))
   }, [data.dealershipId])
+
+  // ── Auction fetching ──
+  const loadAuctions = useCallback(() => {
+    fetchNui<Auction[]>('getActiveAuctions', { dealershipId: data.dealershipId }).then((rows) => {
+      setAuctions(Array.isArray(rows) ? rows : [])
+    }).catch(() => {})
+  }, [data.dealershipId])
+
+  const loadAuctionState = useCallback((id: number) => {
+    fetchNui<Auction & { bids?: [] }>('getAuctionState', { auctionId: id }).then((row) => {
+      if (row) setSelectedAuction(row)
+    }).catch(() => {})
+  }, [])
+
+  const loadPickups = useCallback(() => {
+    fetchNui<typeof pendingPickups>('getPendingPickups').then((rows) => {
+      setPendingPickups(Array.isArray(rows) ? rows : [])
+    }).catch(() => {})
+  }, [])
+
+  const loadMyLoans = useCallback(() => {
+    fetchNui<typeof myLoans>('getMyFinancing').then((rows) => {
+      setMyLoans(Array.isArray(rows) ? rows : [])
+    }).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    loadAuctions()
+    loadPickups()
+    loadMyLoans()
+    fetchNui<string | null>('getMyIdentifier').then((id) => setMyIdentifier(id ?? null)).catch(() => {})
+    fetchNui<string | null>('getMyCharacterName').then((n) => setPlayerName(n ?? null)).catch(() => {})
+    fetchNui<FinancingSettings | null>('getFinancingSettings', { dealershipId: data.dealershipId }).then((s) => {
+      if (s) setFinancingSettings(s)
+    }).catch(() => {})
+  }, [loadAuctions, loadPickups, loadMyLoans, data.dealershipId])
+
+  // Poll auctions + countdown tick when on auctions tab
+  useEffect(() => {
+    if (tab !== 'auctions') return
+    const poll = setInterval(() => {
+      loadAuctions()
+      if (selectedAuction) loadAuctionState(selectedAuction.id)
+    }, 2000)
+    const tick = setInterval(() => setAuctionTick((v) => v + 1), 1000)
+    return () => { clearInterval(poll); clearInterval(tick) }
+  }, [tab, selectedAuction?.id, loadAuctions, loadAuctionState])
+
+  useNuiEvent<{ auctionId: number }>('auctionUpdate', () => {
+    loadAuctions()
+    if (selectedAuction) loadAuctionState(selectedAuction.id)
+  })
+
+  const handleSelectAuction = useCallback((a: Auction) => {
+    if (swapping || (selectedAuction && selectedAuction.id === a.id)) return
+    setSelected(null)
+    setSelectedAuction(null)
+    setSwapping(true)
+    setBidInput('')
+    setBidError(null)
+    fetchNui<Auction & { stock_metadata?: string | null }>('getAuctionState', { auctionId: a.id }).then((row) => {
+      if (!row) return
+      setSelectedAuction(row)
+      return fetchNui('showroomSwapVehicle', {
+        model: row.vehicle_model,
+        properties: (row as unknown as { stock_metadata?: string }).stock_metadata ?? null,
+      })
+    }).finally(() => setSwapping(false))
+  }, [swapping, selectedAuction])
+
+  const handleBid = useCallback((overrideAmount?: number) => {
+    if (!selectedAuction) return
+    const amount = overrideAmount ?? parseInt(bidInput)
+    if (!amount || amount <= 0) return
+    setBidding(true)
+    setBidError(null)
+    fetchNui<{ success: boolean; message?: string }>('placeBid', { auctionId: selectedAuction.id, amount }).then((res) => {
+      if (!res?.success) {
+        setBidError(res?.message || t('error_bid_rejected'))
+      } else {
+        setBidInput('')
+        loadAuctions()
+        loadAuctionState(selectedAuction.id)
+      }
+    }).finally(() => setBidding(false))
+  }, [selectedAuction, bidInput, loadAuctions, loadAuctionState])
+
+  const handleSendToGarage = useCallback((auctionId: number) => {
+    setClaimingId(auctionId)
+    fetchNui<{ success: boolean; toGarage?: boolean }>('showroomClaimAuction', { auctionId, toGarage: true }).then((res) => {
+      if (res?.success) loadPickups()
+    }).finally(() => setClaimingId(null))
+  }, [loadPickups])
+
+  const handleClaimVehicle = useCallback((auctionId: number) => {
+    setClaimingId(auctionId)
+    setShowPickups(false)
+    fetchNui<{ success: boolean }>('showroomClaimAuction', { auctionId }).then((res) => {
+      if (res?.success) loadPickups()
+    }).finally(() => setClaimingId(null))
+  }, [loadPickups])
+
+  const handleFinanceSign = useCallback((installments: number) => {
+    if (!selected || !financingSettings) return
+    setFinancingSigning(true)
+    fetchNui('showroomFinance', {
+      dealershipId: data.dealershipId,
+      stockId: selected.id,
+      downPayment: Math.floor(selected.retail_price * Math.round(financingSettings.minDownPercent) / 100),
+      installments,
+      location: data.location,
+    }).finally(() => {
+      setFinancingSigning(false)
+      setShowContract(false)
+    })
+  }, [selected, financingSettings, data.dealershipId, data.location])
+
+  const handleLoanPayment = useCallback((financingId: number) => {
+    fetchNui('makePayment', { financingId }).then(() => loadMyLoans())
+  }, [loadMyLoans])
+
+  const bidderLabel = useCallback((id: string | null | undefined) => {
+    if (id && myIdentifier && id === myIdentifier) return t('label_you')
+    return maskBidder(id)
+  }, [myIdentifier])
 
   // Derive classes from cached stock
   const classes = Array.from(new Set(allStock.map((s) => s.class).filter(Boolean))).sort() as string[]
@@ -140,6 +290,24 @@ export default function ShowroomPage({ data }: Props) {
     }
     return Array.from(map.values())
   })()
+
+  // Deselect when the current selection is no longer in the rendered list
+  useEffect(() => {
+    if (tab === 'auctions') {
+      if (selectedAuction && !auctions.some((a) => a.id === selectedAuction.id)) {
+        setSelectedAuction(null)
+        fetchNui('showroomClearVehicle')
+      }
+    } else {
+      if (selected) {
+        const pool = tab === 'new' ? newStock : preOwnedStock
+        if (!pool.some((s) => s.id === selected.id)) {
+          setSelected(null)
+          fetchNui('showroomClearVehicle')
+        }
+      }
+    }
+  })
 
   // Active list driven by tab — pre-owned uses grouped cards, expanded view shows units
   const visibleItems: StockItem[] = tab === 'new' ? newStock : preOwnedStock
@@ -236,22 +404,33 @@ export default function ShowroomPage({ data }: Props) {
   return (
     <div className="fixed inset-0 flex">
       {/* Left sidebar — vehicle grid */}
-      <div className="w-80 shrink-0 bg-black/90 flex flex-col border-r border-white/10 pointer-events-auto">
+      <div className="w-[340px] shrink-0 bg-black/90 flex flex-col border-r border-white/10 pointer-events-auto">
         {/* Header */}
         <div className="p-3 pb-2">
           <div className="flex items-center justify-between mb-2">
             <div>
               <h1 className="text-white text-base font-bold">{data.dealershipName}</h1>
-              <p className="text-white/40 text-xs">{visibleItems.length} {tab === 'preowned' ? 'pre-owned' : 'new'} available</p>
+              <p className="text-white/40 text-xs">
+                {tab === 'auctions' ? t('label_active_auctions', String(auctions.length)) : tab === 'preowned' ? t('label_preowned_available', String(visibleItems.length)) : t('label_new_available', String(visibleItems.length))}
+              </p>
             </div>
             <div className="flex items-center gap-1">
-              <button
-                onClick={() => fetchNui('showroomToAuction', { location: data.location })}
-                className="h-7 px-2 rounded-md bg-amber-500/15 border border-amber-500/40 text-amber-400 hover:bg-amber-500/25 text-[11px] font-semibold flex items-center gap-1 transition-colors"
-                title="Browse live auctions"
-              >
-                <Gavel className="h-3 w-3" /> Auctions
-              </button>
+              {myLoans.length > 0 && (
+                <button
+                  onClick={() => setShowLoans(!showLoans)}
+                  className={`h-7 px-2 rounded-md text-[11px] font-semibold flex items-center gap-1 transition-colors ${showLoans ? 'bg-blue-500/30 text-blue-300' : 'bg-blue-500/15 border border-blue-500/40 text-blue-400 hover:bg-blue-500/25'}`}
+                >
+                  <CreditCard className="h-3 w-3" /> {myLoans.length} {t('label_my_loans')}
+                </button>
+              )}
+              {pendingPickups.length > 0 && (
+                <button
+                  onClick={() => setShowPickups(!showPickups)}
+                  className={`h-7 px-2 rounded-md text-[11px] font-semibold flex items-center gap-1 transition-colors ${showPickups ? 'bg-emerald-500/30 text-emerald-300' : 'bg-emerald-500/15 border border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/25'}`}
+                >
+                  <Package className="h-3 w-3" /> {pendingPickups.length} {t('status_won')}
+                </button>
+              )}
               <Button
                 variant="ghost"
                 size="icon"
@@ -263,19 +442,25 @@ export default function ShowroomPage({ data }: Props) {
             </div>
           </div>
 
-          {/* New / Pre-owned tabs */}
+          {/* New / Pre-owned / Auctions tabs */}
           <div className="flex gap-1 mb-2">
             <button
-              onClick={() => { setTab('new'); setExpandedModel(null) }}
+              onClick={() => { setTab('new'); setExpandedModel(null); setSelected(null); setSelectedAuction(null); fetchNui('showroomClearVehicle') }}
               className={`flex-1 h-7 rounded-md text-xs font-medium transition-colors ${tab === 'new' ? 'bg-accent text-accent-foreground' : 'bg-white/5 text-white/50 hover:bg-white/10 hover:text-white/70'}`}
             >
-              New ({newStock.length})
+              {t('tab_new')} ({newStock.length})
             </button>
             <button
-              onClick={() => { setTab('preowned'); setExpandedModel(null) }}
+              onClick={() => { setTab('preowned'); setExpandedModel(null); setSelected(null); setSelectedAuction(null); fetchNui('showroomClearVehicle') }}
               className={`flex-1 h-7 rounded-md text-xs font-medium transition-colors ${tab === 'preowned' ? 'bg-accent text-accent-foreground' : 'bg-white/5 text-white/50 hover:bg-white/10 hover:text-white/70'}`}
             >
-              Pre-owned ({preOwnedStock.length})
+              {t('tab_preowned')} ({preOwnedStock.length})
+            </button>
+            <button
+              onClick={() => { setTab('auctions'); setExpandedModel(null); setSelected(null); setSelectedAuction(null); fetchNui('showroomClearVehicle'); loadAuctions() }}
+              className={`flex-1 h-7 rounded-md text-xs font-medium transition-colors flex items-center justify-center gap-1 ${tab === 'auctions' ? 'bg-amber-500/80 text-white' : 'bg-white/5 text-white/50 hover:bg-white/10 hover:text-white/70'}`}
+            >
+              <Gavel className="h-3 w-3" /> {t('tab_auction')}{auctions.length > 0 ? ` (${auctions.length})` : ''}
             </button>
           </div>
 
@@ -284,7 +469,7 @@ export default function ShowroomPage({ data }: Props) {
             <div className="relative flex-1">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-white/30" />
               <Input
-                placeholder="Search vehicles..."
+                placeholder={t('label_search_vehicles')}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 className="pl-8 h-8 text-xs bg-white/5 border-white/10 text-white placeholder:text-white/30"
@@ -315,13 +500,13 @@ export default function ShowroomPage({ data }: Props) {
             {maxRetailPrice > 0 && (
               <div>
                 <div className="flex items-center justify-between mb-1.5">
-                  <p className="text-[10px] uppercase tracking-wider text-white/40">Price Range</p>
+                  <p className="text-[10px] uppercase tracking-wider text-white/40">{t('label_price_range')}</p>
                   {isPriceFiltered(priceRange) && (
                     <button
                       onClick={() => setPriceRange([0, maxRetailPrice])}
                       className="text-[9px] text-accent hover:text-accent/80"
                     >
-                      Reset
+                      {t('label_reset')}
                     </button>
                   )}
                 </div>
@@ -343,14 +528,14 @@ export default function ShowroomPage({ data }: Props) {
 
             {/* Sort */}
             <div>
-              <p className="text-[10px] uppercase tracking-wider text-white/40 mb-1.5">Sort By</p>
+              <p className="text-[10px] uppercase tracking-wider text-white/40 mb-1.5">{t('label_sort_by')}</p>
               <div className="flex flex-wrap gap-1">
                 {([
-                  ['name_asc', 'A — Z'],
-                  ['name_desc', 'Z — A'],
-                  ['price_asc', 'Price Low'],
-                  ['price_desc', 'Price High'],
-                ] as const).map(([value, label]) => (
+                  ['name_asc', t('label_sort_az')],
+                  ['name_desc', t('label_sort_za')],
+                  ['price_asc', t('label_sort_price_low')],
+                  ['price_desc', t('label_sort_price_high')],
+                ] as [typeof sortBy, string][]).map(([value, label]) => (
                   <button
                     key={value}
                     onClick={() => setSortBy(value)}
@@ -369,7 +554,7 @@ export default function ShowroomPage({ data }: Props) {
             {/* Class filter */}
             {classes.length > 0 && (
               <div>
-                <p className="text-[10px] uppercase tracking-wider text-white/40 mb-1.5">Class</p>
+                <p className="text-[10px] uppercase tracking-wider text-white/40 mb-1.5">{t('label_class')}</p>
                 <div className="flex flex-wrap gap-1">
                   <button
                     onClick={() => setClassFilter('all')}
@@ -379,7 +564,7 @@ export default function ShowroomPage({ data }: Props) {
                         : 'bg-white/5 text-white/40 hover:bg-white/10 hover:text-white/60'
                     }`}
                   >
-                    All
+                    {t('label_all')}
                   </button>
                   {classes.map((cls) => (
                     <button
@@ -407,10 +592,65 @@ export default function ShowroomPage({ data }: Props) {
               <div className="flex items-center justify-center py-12">
                 <Loader2 className="h-5 w-5 animate-spin text-white/30" />
               </div>
-            ) : visibleItems.length === 0 ? (
+            ) : tab === 'auctions' ? (() => {
+              const filteredAuctions = auctions.filter((a) => {
+                if (search) {
+                  const q = search.toLowerCase()
+                  if (!(a.vehicle_label || a.vehicle_model).toLowerCase().includes(q)) return false
+                }
+                if (classFilter !== 'all' && a.class !== classFilter) return false
+                const price = a.current_bid ?? a.starting_bid
+                if (isPriceFiltered(priceRange) && (price < priceRange[0] || price > priceRange[1])) return false
+                return true
+              })
+              return filteredAuctions.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 text-white/30">
+                  <Gavel className="h-8 w-8 mb-2" />
+                  <p className="text-xs">{t('empty_no_auctions')}</p>
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  {filteredAuctions.map((a) => {
+                    const isAuctionSelected = selectedAuction?.id === a.id
+                    const soon = isEndingSoon(a.ends_at, 30)
+                    return (
+                      <div
+                        key={a.id}
+                        className={`w-full flex items-center gap-2 p-2 rounded-md transition-colors ${isAuctionSelected ? 'bg-amber-500/15 ring-1 ring-amber-500/40' : 'bg-white/5 hover:bg-white/10'}`}
+                      >
+                        <button onClick={() => handleSelectAuction(a)} className="flex items-center gap-2 flex-1 min-w-0 text-left">
+                          <VehicleImg
+                            image={a.image}
+                            model={a.vehicle_model}
+                            alt={a.vehicle_label}
+                            className="w-16 aspect-[16/9] object-contain rounded bg-black/50"
+                            fallbackClassName="w-16 aspect-[16/9] bg-white/5 flex items-center justify-center rounded"
+                            iconClassName="h-3 w-3 text-white/20"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-white text-[11px] font-semibold truncate leading-tight">{a.vehicle_label || a.vehicle_model}</p>
+                            <p className="text-amber-400 text-[11px] font-bold mt-0.5">{formatCurrency(a.current_bid ?? a.starting_bid)}</p>
+                            <p className={`text-[10px] mt-0.5 ${soon ? 'text-rose-400 animate-pulse font-mono' : !a.ends_at ? 'text-amber-400/70' : 'text-white/50 font-mono'}`}>
+                              {a.ends_at ? formatTimeRemaining(a.ends_at) : `${a.duration_minutes}m · ${t('label_starts_first_offer')}`}
+                            </p>
+                          </div>
+                        </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setPickleFaxId(a.stock_id) }}
+                          className="h-7 w-7 shrink-0 flex items-center justify-center rounded bg-white/5 hover:bg-white/10 text-white/60 hover:text-white transition-colors"
+                          title={t('picklefax_title')}
+                        >
+                          <FileText className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    )
+                  })}
+                </div>
+              )
+            })() : visibleItems.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-12 text-white/30">
                 <Car className="h-8 w-8 mb-2" />
-                <p className="text-xs">{tab === 'preowned' ? 'No pre-owned vehicles' : 'No vehicles found'}</p>
+                <p className="text-xs">{tab === 'preowned' ? t('empty_no_preowned') : t('empty_no_matching')}</p>
               </div>
             ) : tab === 'new' ? (
               <div className="relative w-full" style={{ height: `${virtualizer.getTotalSize()}px` }}>
@@ -479,7 +719,7 @@ export default function ShowroomPage({ data }: Props) {
                         <div className="flex-1 min-w-0">
                           <p className="text-white text-[11px] font-semibold truncate leading-tight">{g.label}</p>
                           <p className="text-accent font-bold text-xs mt-0.5">{priceLabel}</p>
-                          <p className="text-white/40 text-[10px] mt-0.5">{g.units.length} available · Pre-owned</p>
+                          <p className="text-white/40 text-[10px] mt-0.5">{t('label_available', String(g.units.length))} · {t('label_pre_owned')}</p>
                         </div>
                         <ChevronRight className={`h-4 w-4 text-white/40 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
                       </button>
@@ -493,13 +733,13 @@ export default function ShowroomPage({ data }: Props) {
                                 className={`w-full px-3 py-2 flex items-center justify-between gap-3 transition-colors ${isSelected ? 'bg-accent/10' : 'hover:bg-white/5'}`}
                               >
                                 <button onClick={() => handleSelect(unit)} className="flex-1 min-w-0 text-left">
-                                  <p className="text-white text-[11px] font-mono">{unit.plate || '— No Plate —'}</p>
-                                  <p className="text-white/40 text-[10px]">Condition: {Math.round(Number(unit.condition) || 0)}%</p>
+                                  <p className="text-white text-[11px] font-mono">{unit.plate || `— ${t('label_plate')} —`}</p>
+                                  <p className="text-white/40 text-[10px]">{t('label_condition')}: {Math.round(Number(unit.condition) || 0)}%</p>
                                 </button>
                                 <button
                                   onClick={(e) => { e.stopPropagation(); setPickleFaxId(unit.id) }}
                                   className="h-7 w-7 shrink-0 flex items-center justify-center rounded bg-white/5 hover:bg-white/10 text-white/60 hover:text-white transition-colors"
-                                  title="View PickleFAX"
+                                  title={t('picklefax_title')}
                                 >
                                   <FileText className="h-3.5 w-3.5" />
                                 </button>
@@ -531,19 +771,79 @@ export default function ShowroomPage({ data }: Props) {
         )}
 
         <div className="absolute bottom-24 left-1/2 -translate-x-1/2 pointer-events-none">
-          <p className="text-white/20 text-[10px] uppercase tracking-widest">Drag to rotate &middot; Scroll to zoom</p>
+          <p className="text-white/20 text-[10px] uppercase tracking-widest">{t('orbit_hint')}</p>
         </div>
       </div>
 
-      {/* Bottom purchase bar */}
-      {selected && (
-        <div className="fixed bottom-0 left-80 right-0 pointer-events-auto">
+      {/* Bottom bar — purchase (stock) or bid (auction) */}
+      {selectedAuction ? (() => {
+        const bidFloor = nextBidFloor(selectedAuction)
+        const endingSoon = isEndingSoon(selectedAuction.ends_at, 30)
+        return (
+          <div className="fixed bottom-0 left-[340px] right-0 pointer-events-auto">
+            <div className="bg-black/90 border-t border-amber-500/30 px-6 py-3 flex items-center gap-4">
+              <div className="flex-1 min-w-0">
+                <p className="text-white font-bold text-lg truncate leading-tight">{selectedAuction.vehicle_label || selectedAuction.vehicle_model}</p>
+                <p className="text-white/40 text-xs">
+                  {selectedAuction.current_bid ? `${t('label_current_bid')}: ${formatCurrency(selectedAuction.current_bid)} ${t('label_by_bidder', bidderLabel(selectedAuction.current_bidder))}` : t('label_no_bids_yet')}
+                  {selectedAuction.bid_count != null && ` · ${t('label_bid_count', String(selectedAuction.bid_count))}`}
+                </p>
+              </div>
+
+              <div className="text-right shrink-0">
+                {selectedAuction.ends_at ? (
+                  <p className={`text-lg font-mono font-bold ${endingSoon ? 'text-rose-400 animate-pulse' : 'text-white'}`}>{formatTimeRemaining(selectedAuction.ends_at)}</p>
+                ) : (
+                  <p className="text-sm text-amber-400">{selectedAuction.duration_minutes}m · {t('label_starts_first_offer')}</p>
+                )}
+              </div>
+
+              <Input
+                type="number"
+                inputMode="numeric"
+                placeholder={t('label_min_bid', formatCurrency(bidFloor))}
+                value={bidInput}
+                onChange={(e) => setBidInput(e.target.value)}
+                className="w-32 h-9 bg-white/5 border-white/10 text-white text-sm shrink-0"
+              />
+
+              <div className="flex gap-1 shrink-0">
+                {[0, 1, 2].map((mult) => {
+                  const amt = bidFloor + selectedAuction.min_increment * mult
+                  return (
+                    <button key={mult} onClick={() => setBidInput(String(amt))} className="px-2 h-9 rounded-md bg-white/5 hover:bg-white/10 text-white/70 hover:text-white text-[11px] transition-colors">
+                      {formatCurrency(amt)}
+                    </button>
+                  )
+                })}
+              </div>
+
+              {bidError && <p className="text-rose-400 text-[10px] shrink-0">{bidError}</p>}
+
+              <Button className="h-9 px-4 gap-1.5 bg-amber-600 hover:bg-amber-700 shrink-0" disabled={bidding || !bidInput} onClick={() => handleBid()}>
+                <Gavel className="h-3.5 w-3.5" /> {t('btn_place_bid')}
+              </Button>
+
+              {selectedAuction.buyout_price != null && (
+                <Button variant="outline" className="h-9 px-3 gap-1 border-amber-500/50 text-amber-400 hover:bg-amber-500/10 shrink-0" disabled={bidding} onClick={() => handleBid(selectedAuction.buyout_price!)}>
+                  <Zap className="h-3 w-3" /> {formatCurrency(selectedAuction.buyout_price)}
+                </Button>
+              )}
+
+              <button onClick={() => setPickleFaxId(selectedAuction.stock_id)} className="h-9 w-9 shrink-0 flex items-center justify-center rounded-md bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-colors" title={t('picklefax_title')}>
+                <FileText className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+        )
+      })() : selected ? (
+        <div className="fixed bottom-0 left-[340px] right-0 pointer-events-auto">
           <div className="bg-black/90 border-t border-white/10 px-6 py-3 flex items-center gap-4">
             <div className="flex-1 min-w-0">
               <p className="text-white font-bold text-2xl truncate leading-tight">
                 {selected.vehicle_label || selected.vehicle_model}
               </p>
-              <p className="text-white/40 text-lg capitalize">{selected.class || 'Vehicle'}</p>
+              <p className="text-white/40 text-lg capitalize">{selected.class || t('label_vehicle')}</p>
             </div>
 
             <p className="text-accent font-bold text-lg shrink-0">{formatCurrency(selected.retail_price)}</p>
@@ -551,7 +851,7 @@ export default function ShowroomPage({ data }: Props) {
             {!selected.is_used && (
             <div className="flex items-center gap-1.5 shrink-0">
               <ColorSwatch
-                label="Primary"
+                label={t('label_primary_color')}
                 color={primaryColor}
                 isOpen={colorPicker === 'primary'}
                 onToggle={() => setColorPicker(colorPicker === 'primary' ? null : 'primary')}
@@ -565,7 +865,7 @@ export default function ShowroomPage({ data }: Props) {
                 }}
               />
               <ColorSwatch
-                label="Secondary"
+                label={t('label_secondary_color')}
                 color={secondaryColor}
                 isOpen={colorPicker === 'secondary'}
                 onToggle={() => setColorPicker(colorPicker === 'secondary' ? null : 'secondary')}
@@ -584,14 +884,14 @@ export default function ShowroomPage({ data }: Props) {
             <Tabs
               defaultValue="bank"
               value={paymentMethod}
-              onValueChange={(v) => setPaymentMethod(v as 'cash' | 'bank')}
+              onValueChange={(v) => setPaymentMethod(v as typeof paymentMethod)}
             >
               <TabsList className="h-9 bg-white/5 border border-white/10">
                 <TabsTrigger value="bank" className="gap-1.5 text-xs data-[state=active]:bg-white/10">
-                  <CreditCard className="h-3.5 w-3.5" /> Bank
+                  <CreditCard className="h-3.5 w-3.5" /> {t('label_bank')}
                 </TabsTrigger>
                 <TabsTrigger value="cash" className="gap-1.5 text-xs data-[state=active]:bg-white/10">
-                  <Banknote className="h-3.5 w-3.5" /> Cash
+                  <Banknote className="h-3.5 w-3.5" /> {t('label_cash')}
                 </TabsTrigger>
               </TabsList>
             </Tabs>
@@ -604,11 +904,124 @@ export default function ShowroomPage({ data }: Props) {
               {purchasing ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
-                'Purchase'
+                t('btn_purchase')
               )}
             </Button>
+
+            {financingSettings?.financingEnabled && !selected.auction_id && (
+              <Button
+                variant="outline"
+                className="h-9 px-4 gap-1.5 border-white/20 text-white/80 hover:bg-white/10 hover:text-white"
+                onClick={() => { if (!selectedInstallments && financingSettings) setSelectedInstallments(financingSettings.installmentOptions[0] ?? 8); setShowContract(true) }}
+              >
+                <PenLine className="h-3.5 w-3.5" /> {t('btn_finance')}
+              </Button>
+            )}
           </div>
         </div>
+      ) : null}
+
+      {/* Financing contract dialog */}
+      {showContract && selected && financingSettings && (
+        <FinancingContractDialog
+          vehicleLabel={selected.vehicle_label || selected.vehicle_model}
+          vehicleModel={selected.vehicle_model}
+          vehicleClass={selected.class}
+          isUsed={!!selected.is_used}
+          price={selected.retail_price}
+          dealershipName={data.dealershipName}
+          settings={financingSettings}
+          initialInstallments={selectedInstallments ?? undefined}
+          playerName={playerName ?? undefined}
+          onSign={handleFinanceSign}
+          onClose={() => setShowContract(false)}
+          signing={financingSigning}
+        />
+      )}
+
+      {/* My Loans panel */}
+      {showLoans && myLoans.length > 0 && (
+        <>
+          <div className="fixed inset-0 z-[60]" onClick={() => setShowLoans(false)} />
+          <div className="fixed top-12 left-[340px] z-[70] w-80 bg-black/95 border border-white/10 rounded-lg shadow-2xl overflow-hidden pointer-events-auto">
+            <div className="p-3 border-b border-white/10 flex items-center justify-between">
+              <p className="text-white text-xs font-bold uppercase tracking-wider flex items-center gap-1.5">
+                <CreditCard className="h-3.5 w-3.5 text-blue-400" /> {t('label_my_loans')}
+              </p>
+              <button onClick={() => setShowLoans(false)} className="text-white/40 hover:text-white"><X className="h-3.5 w-3.5" /></button>
+            </div>
+            <div className="max-h-64 overflow-auto divide-y divide-white/5">
+              {myLoans.map((loan) => {
+                const pct = loan.totalAmount > 0 ? Math.round((loan.amountPaid / loan.totalAmount) * 100) : 0
+                return (
+                  <div key={loan.id} className="p-3">
+                    <div className="flex items-center justify-between mb-1">
+                      <p className="text-white text-xs font-mono">{loan.vehiclePlate}</p>
+                      <p className="text-white/40 text-[10px]">{t('label_paid', `${pct}%`)}</p>
+                    </div>
+                    <div className="h-1 bg-white/10 rounded-full overflow-hidden mb-1.5">
+                      <div className="h-full bg-blue-500 rounded-full" style={{ width: `${pct}%` }} />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <p className="text-white/50 text-[10px]">{t('label_left', formatCurrency(loan.remaining))}</p>
+                      <Button size="sm" className="h-6 text-[10px] gap-1" onClick={() => handleLoanPayment(loan.id)}>
+                        {t('btn_make_payment')} {formatCurrency(loan.installmentAmount)}
+                      </Button>
+                    </div>
+                    {loan.missedPayments > 0 && (
+                      <p className="text-rose-400 text-[10px] mt-1">{t('label_missed_payments', String(loan.missedPayments))}</p>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Pending pickups panel */}
+      {showPickups && pendingPickups.length > 0 && (
+        <>
+          <div className="fixed inset-0 z-[60]" onClick={() => setShowPickups(false)} />
+          <div className="fixed top-12 left-[340px] z-[70] w-80 bg-black/95 border border-white/10 rounded-lg shadow-2xl overflow-hidden pointer-events-auto">
+            <div className="p-3 border-b border-white/10 flex items-center justify-between">
+              <p className="text-white text-xs font-bold uppercase tracking-wider flex items-center gap-1.5">
+                <Package className="h-3.5 w-3.5 text-emerald-400" /> {t('label_won_auctions')}
+              </p>
+              <button onClick={() => setShowPickups(false)} className="text-white/40 hover:text-white"><X className="h-3.5 w-3.5" /></button>
+            </div>
+            <div className="max-h-64 overflow-auto divide-y divide-white/5">
+              {pendingPickups.map((p) => {
+                const isClaiming = claimingId === p.id
+                return (
+                  <div key={p.id} className="p-3">
+                    <div className="flex items-center justify-between mb-1">
+                      <p className="text-white text-xs font-semibold">{p.vehicle_label || p.vehicle_model}</p>
+                      <p className="text-emerald-400 text-xs font-bold">{formatCurrency(p.winning_bid)}</p>
+                    </div>
+                    <p className="text-white/40 text-[10px] mb-2">{p.dealership_name}{p.plate ? ` · ${p.plate}` : ''}</p>
+                    <div className="flex gap-1.5">
+                      <button
+                        onClick={() => handleSendToGarage(p.id)}
+                        disabled={isClaiming}
+                        className="flex-1 h-7 rounded-md bg-white/5 hover:bg-white/10 border border-white/10 text-white/70 hover:text-white text-[11px] font-medium flex items-center justify-center gap-1 transition-colors disabled:opacity-50"
+                      >
+                        <Warehouse className="h-3 w-3" /> {t('btn_send_to_garage')}
+                      </button>
+                      <button
+                        onClick={() => handleClaimVehicle(p.id)}
+                        disabled={isClaiming}
+                        className="flex-1 h-7 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-medium flex items-center justify-center gap-1 transition-colors disabled:opacity-50"
+                      >
+                        <Car className="h-3 w-3" /> {t('btn_claim_vehicle')}
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </>
       )}
 
       {pickleFaxId !== null && (

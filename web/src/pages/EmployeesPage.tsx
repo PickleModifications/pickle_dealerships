@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { fetchNui } from '../lib/utils'
 import { getCached, setCache, buildKey } from '../lib/cache'
 import { SkeletonList } from '../components/ui/skeleton'
+import { t } from '../lib/locale'
 import { X, UserPlus, UserX, Clock, Shield, Briefcase, Users, MapPin } from 'lucide-react'
 import type { DealershipData, Employee } from '../types'
 
@@ -104,13 +105,13 @@ export default function EmployeesPage({ data, onClose }: Props) {
         <>
           <div className="flex items-center justify-between p-5 pb-0">
             <div>
-              <h1 className="text-xl font-bold">Employees</h1>
-              <p className="text-sm text-muted-foreground">{data.dealershipName} &mdash; {employees.length} staff</p>
+              <h1 className="text-xl font-bold">{t('tab_employees')}</h1>
+              <p className="text-sm text-muted-foreground">{data.dealershipName} &mdash; {employees.length} {t('employees_staff')}</p>
             </div>
             <div className="flex gap-2">
               {canManage && (
                 <Button size="sm" onClick={openHireDialog} className="gap-1">
-                  <UserPlus className="h-4 w-4" /> Hire
+                  <UserPlus className="h-4 w-4" /> {t('employees_hire')}
                 </Button>
               )}
               <Button variant="ghost" size="icon" onClick={onClose}>
@@ -137,11 +138,11 @@ export default function EmployeesPage({ data, onClose }: Props) {
             }}
             className="gap-1"
           >
-            <Clock className="h-4 w-4" /> {isClockedIn ? 'Clock Out' : 'Clock In'}
+            <Clock className="h-4 w-4" /> {isClockedIn ? t('clock_out') : t('clock_in')}
           </Button>
           {canManage && (
             <Button size="sm" onClick={openHireDialog} className="gap-1">
-              <UserPlus className="h-4 w-4" /> Hire
+              <UserPlus className="h-4 w-4" /> {t('employees_hire')}
             </Button>
           )}
         </div>
@@ -153,7 +154,7 @@ export default function EmployeesPage({ data, onClose }: Props) {
         ) : employees.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
             <Briefcase className="h-10 w-10 mb-2 opacity-50" />
-            <p>No employees hired yet</p>
+            <p>{t('employees_none_hired')}</p>
           </div>
         ) : (
           <div className="space-y-3">
@@ -177,7 +178,7 @@ export default function EmployeesPage({ data, onClose }: Props) {
                           </Badge>
                           {emp.clocked_in && (
                             <Badge variant="outline" className="gap-1 text-xs text-emerald-400 border-emerald-400/50">
-                              <Clock className="h-3 w-3" /> On Duty
+                              <Clock className="h-3 w-3" /> {t('employees_on_duty')}
                             </Badge>
                           )}
                         </div>
@@ -186,7 +187,7 @@ export default function EmployeesPage({ data, onClose }: Props) {
 
                     <div className="flex items-center gap-3">
                       <div className="text-right">
-                        <p className="text-xs text-muted-foreground">Commission</p>
+                        <p className="text-xs text-muted-foreground">{t('tab_commission')}</p>
                         <p className="text-sm font-medium">{commissionRates[emp.role] ?? Math.round(emp.commission_rate * 100)}%</p>
                       </div>
 
@@ -200,8 +201,8 @@ export default function EmployeesPage({ data, onClose }: Props) {
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
-                              <SelectItem value="salesperson">Salesperson</SelectItem>
-                              <SelectItem value="manager">Manager</SelectItem>
+                              <SelectItem value="salesperson">{t('role_salesperson')}</SelectItem>
+                              <SelectItem value="manager">{t('role_manager')}</SelectItem>
                             </SelectContent>
                           </Select>
                           <Button
@@ -226,26 +227,26 @@ export default function EmployeesPage({ data, onClose }: Props) {
       <Dialog open={hireDialogOpen} onOpenChange={setHireDialogOpen}>
         <DialogContent onClose={() => setHireDialogOpen(false)}>
           <DialogHeader>
-            <DialogTitle>Hire Employee</DialogTitle>
-            <DialogDescription>Select a nearby player to hire.</DialogDescription>
+            <DialogTitle>{t('employees_hire_title')}</DialogTitle>
+            <DialogDescription>{t('employees_hire_desc')}</DialogDescription>
           </DialogHeader>
           <div className="space-y-4 pt-2">
             <div>
-              <label className="text-sm font-medium">Player</label>
+              <label className="text-sm font-medium">{t('employees_player')}</label>
               {loadingPlayers ? (
                 <div className="mt-1 h-9 rounded-md border border-input bg-transparent flex items-center px-3 text-sm text-muted-foreground animate-pulse">
-                  Scanning for nearby players...
+                  {t('employees_scanning')}
                 </div>
               ) : nearbyPlayers.length === 0 ? (
                 <div className="mt-1 p-3 rounded-md border border-border bg-muted/50 text-center">
                   <Users className="h-5 w-5 mx-auto mb-1 text-muted-foreground" />
-                  <p className="text-sm text-muted-foreground">No players nearby</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">Players must be within 50m of you</p>
+                  <p className="text-sm text-muted-foreground">{t('employees_no_nearby')}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">{t('employees_nearby_range')}</p>
                 </div>
               ) : (
                 <Select value={selectedPlayer} onValueChange={setSelectedPlayer}>
                   <SelectTrigger className="mt-1">
-                    <SelectValue placeholder="Select a player..." />
+                    <SelectValue placeholder={t('employees_select_player')} />
                   </SelectTrigger>
                   <SelectContent>
                     {nearbyPlayers.map((p) => (
@@ -263,19 +264,19 @@ export default function EmployeesPage({ data, onClose }: Props) {
               )}
             </div>
             <div>
-              <label className="text-sm font-medium">Role</label>
+              <label className="text-sm font-medium">{t('employees_role')}</label>
               <Select value={hireRole} onValueChange={setHireRole}>
                 <SelectTrigger className="mt-1">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="salesperson">Salesperson</SelectItem>
-                  <SelectItem value="manager">Manager</SelectItem>
+                  <SelectItem value="salesperson">{t('role_salesperson')}</SelectItem>
+                  <SelectItem value="manager">{t('role_manager')}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
             <Button className="w-full" onClick={handleHire} disabled={!selectedPlayer || loadingPlayers}>
-              <UserPlus className="h-4 w-4" /> Hire Employee
+              <UserPlus className="h-4 w-4" /> {t('employees_hire_title')}
             </Button>
           </div>
         </DialogContent>

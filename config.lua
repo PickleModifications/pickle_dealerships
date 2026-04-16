@@ -1,5 +1,5 @@
 Config = {}
-Config.Language = "en"
+Config.Language = "zh"
 Config.Debug = true
 Config.RenderDistance = 100.0
 Config.InteractDistance = 2.0
@@ -75,7 +75,7 @@ Config.Tiers = {
         displaySpots = 2,
         upgradeCost = 0,
         catalogAccess = "basic",
-        features = {},
+        features = { "financing" },
     },
     [2] = {
         label = "Established",
@@ -84,7 +84,7 @@ Config.Tiers = {
         displaySpots = 4,
         upgradeCost = 200000,
         catalogAccess = "expanded",
-        features = {},
+        features = { "financing" },
     },
     [3] = {
         label = "Premium",

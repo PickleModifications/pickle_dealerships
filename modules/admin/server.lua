@@ -45,19 +45,19 @@ end)
 --- Force transfer dealership ownership
 lib.callback.register("pickle_dealerships:adminTransferOwnership", function(source, data)
     if not IsPlayerAdmin(source) then
-        return { success = false, message = "You do not have admin permissions." }
+        return { success = false, message = _L("admin_no_permission") }
     end
 
     local dealershipId = data.dealershipId
     local newOwnerId = data.newOwnerId
 
     if not dealershipId or not newOwnerId then
-        return { success = false, message = "Missing dealership ID or new owner ID." }
+        return { success = false, message = _L("admin_missing_owner_data") }
     end
 
     local dealership = GetDealership(dealershipId)
     if not dealership then
-        return { success = false, message = "Dealership not found." }
+        return { success = false, message = _L("dealership_not_found") }
     end
 
     MySQL.update.await("UPDATE dealerships SET owner_identifier = ? WHERE id = ?", { newOwnerId, dealershipId })
@@ -68,29 +68,29 @@ lib.callback.register("pickle_dealerships:adminTransferOwnership", function(sour
 
     debugPrint("Admin " .. adminName .. " transferred dealership #" .. dealershipId .. " to " .. newOwnerId)
 
-    return { success = true, message = "Ownership transferred successfully." }
+    return { success = true, message = _L("admin_ownership_transferred_msg") }
 end)
 
 --- Set dealership balance
 lib.callback.register("pickle_dealerships:adminSetBalance", function(source, data)
     if not IsPlayerAdmin(source) then
-        return { success = false, message = "You do not have admin permissions." }
+        return { success = false, message = _L("admin_no_permission") }
     end
 
     local dealershipId = data.dealershipId
     local amount = tonumber(data.amount)
 
     if not dealershipId or not amount then
-        return { success = false, message = "Missing dealership ID or amount." }
+        return { success = false, message = _L("admin_missing_amount") }
     end
 
     if amount < 0 then
-        return { success = false, message = "Balance cannot be negative." }
+        return { success = false, message = _L("admin_balance_negative") }
     end
 
     local dealership = GetDealership(dealershipId)
     if not dealership then
-        return { success = false, message = "Dealership not found." }
+        return { success = false, message = _L("dealership_not_found") }
     end
 
     MySQL.update.await("UPDATE dealerships SET balance = ? WHERE id = ?", { amount, dealershipId })
@@ -99,29 +99,29 @@ lib.callback.register("pickle_dealerships:adminSetBalance", function(source, dat
     local adminName = GetPlayerCharacterName(source) or GetPlayerName(source)
     AddLedgerEntry(dealershipId, "admin", amount, "Balance set to " .. GetCurrencyString(amount) .. " by admin " .. adminName, GetIdentifier(source))
 
-    return { success = true, newBalance = amount, message = "Balance set to " .. GetCurrencyString(amount) .. "." }
+    return { success = true, newBalance = amount, message = _L("admin_balance_set_to", GetCurrencyString(amount)) }
 end)
 
 --- Set dealership tier
 lib.callback.register("pickle_dealerships:adminSetTier", function(source, data)
     if not IsPlayerAdmin(source) then
-        return { success = false, message = "You do not have admin permissions." }
+        return { success = false, message = _L("admin_no_permission") }
     end
 
     local dealershipId = data.dealershipId
     local tier = tonumber(data.tier)
 
     if not dealershipId or not tier then
-        return { success = false, message = "Missing dealership ID or tier." }
+        return { success = false, message = _L("admin_missing_tier") }
     end
 
     if tier < 1 or tier > 4 then
-        return { success = false, message = "Tier must be between 1 and 4." }
+        return { success = false, message = _L("admin_tier_range") }
     end
 
     local dealership = GetDealership(dealershipId)
     if not dealership then
-        return { success = false, message = "Dealership not found." }
+        return { success = false, message = _L("dealership_not_found") }
     end
 
     MySQL.update.await("UPDATE dealerships SET tier = ? WHERE id = ?", { tier, dealershipId })
@@ -130,23 +130,23 @@ lib.callback.register("pickle_dealerships:adminSetTier", function(source, data)
     local adminName = GetPlayerCharacterName(source) or GetPlayerName(source)
     AddLedgerEntry(dealershipId, "admin", 0, "Tier set to " .. tier .. " by admin " .. adminName, GetIdentifier(source))
 
-    return { success = true, newTier = tier, message = "Tier set to " .. tier .. "." }
+    return { success = true, newTier = tier, message = _L("admin_tier_set_to", tier) }
 end)
 
 --- Reset dealership (wipe owner, employees, stock, tier, balance)
 lib.callback.register("pickle_dealerships:adminResetDealership", function(source, data)
     if not IsPlayerAdmin(source) then
-        return { success = false, message = "You do not have admin permissions." }
+        return { success = false, message = _L("admin_no_permission") }
     end
 
     local dealershipId = data.dealershipId
     if not dealershipId then
-        return { success = false, message = "Missing dealership ID." }
+        return { success = false, message = _L("admin_missing_dealership_id") }
     end
 
     local dealership = GetDealership(dealershipId)
     if not dealership then
-        return { success = false, message = "Dealership not found." }
+        return { success = false, message = _L("dealership_not_found") }
     end
 
     -- Wipe all related data
@@ -168,23 +168,23 @@ lib.callback.register("pickle_dealerships:adminResetDealership", function(source
 
     debugPrint("Admin " .. adminName .. " reset dealership #" .. dealershipId)
 
-    return { success = true, message = "Dealership has been reset." }
+    return { success = true, message = _L("admin_dealership_reset_msg") }
 end)
 
 --- Toggle dealership between public and player-owned mode
 lib.callback.register("pickle_dealerships:adminToggleMode", function(source, data)
     if not IsPlayerAdmin(source) then
-        return { success = false, message = "You do not have admin permissions." }
+        return { success = false, message = _L("admin_no_permission") }
     end
 
     local dealershipId = data.dealershipId
     if not dealershipId then
-        return { success = false, message = "Missing dealership ID." }
+        return { success = false, message = _L("admin_missing_dealership_id") }
     end
 
     local dealership = GetDealership(dealershipId)
     if not dealership then
-        return { success = false, message = "Dealership not found." }
+        return { success = false, message = _L("dealership_not_found") }
     end
 
     local currentMode = dealership.mode or "public"
@@ -196,17 +196,17 @@ lib.callback.register("pickle_dealerships:adminToggleMode", function(source, dat
     local adminName = GetPlayerCharacterName(source) or GetPlayerName(source)
     AddLedgerEntry(dealershipId, "admin", 0, "Mode changed to " .. newMode .. " by admin " .. adminName, GetIdentifier(source))
 
-    return { success = true, newMode = newMode, message = "Dealership mode set to " .. newMode .. "." }
+    return { success = true, newMode = newMode, message = _L("admin_mode_set_to", newMode) }
 end)
 
 --- Create a new dealership from admin panel
 lib.callback.register("pickle_dealerships:adminCreateDealership", function(source, data)
     if not IsPlayerAdmin(source) then
-        return { success = false, message = "You do not have admin permissions." }
+        return { success = false, message = _L("admin_no_permission") }
     end
 
     if not data.label or data.label == "" then
-        return { success = false, message = "Dealership name is required." }
+        return { success = false, message = _L("admin_name_required") }
     end
 
     -- Generate a location key from the DB id (set after insert)
@@ -228,26 +228,26 @@ lib.callback.register("pickle_dealerships:adminCreateDealership", function(sourc
         local adminName = GetPlayerCharacterName(source) or GetPlayerName(source)
         debugPrint("Admin " .. adminName .. " created dealership #" .. id .. " (" .. data.label .. ")")
 
-        return { success = true, dealershipId = id, message = "Dealership '" .. data.label .. "' created successfully." }
+        return { success = true, dealershipId = id, message = _L("admin_dealership_created_msg", data.label) }
     else
-        return { success = false, message = "Failed to create dealership in database." }
+        return { success = false, message = _L("admin_db_create_failed") }
     end
 end)
 
 --- Save dealership position data from gizmo placement
 lib.callback.register("pickle_dealerships:adminSavePosition", function(source, data)
     if not IsPlayerAdmin(source) then
-        return { success = false, message = "You do not have admin permissions." }
+        return { success = false, message = _L("admin_no_permission") }
     end
 
     local dealershipId = data.dealershipId
     if not dealershipId then
-        return { success = false, message = "Missing dealership ID." }
+        return { success = false, message = _L("admin_missing_dealership_id") }
     end
 
     local dealership = GetDealership(dealershipId)
     if not dealership then
-        return { success = false, message = "Dealership not found." }
+        return { success = false, message = _L("dealership_not_found") }
     end
 
     -- Get existing metadata or start fresh
@@ -296,23 +296,23 @@ lib.callback.register("pickle_dealerships:adminSavePosition", function(source, d
     local location = dealership.location
     TriggerClientEvent('pickle_dealerships:positionUpdated', -1, location, data.field, data.pointType)
 
-    return { success = true, metadata = metadata, message = "Position saved." }
+    return { success = true, metadata = metadata, message = _L("admin_position_saved") }
 end)
 
 --- Remove a position from dealership metadata
 lib.callback.register("pickle_dealerships:adminRemovePosition", function(source, data)
     if not IsPlayerAdmin(source) then
-        return { success = false, message = "You do not have admin permissions." }
+        return { success = false, message = _L("admin_no_permission") }
     end
 
     local dealershipId = data.dealershipId
     if not dealershipId then
-        return { success = false, message = "Missing dealership ID." }
+        return { success = false, message = _L("admin_missing_dealership_id") }
     end
 
     local dealership = GetDealership(dealershipId)
     if not dealership then
-        return { success = false, message = "Dealership not found." }
+        return { success = false, message = _L("dealership_not_found") }
     end
 
     -- Always re-read metadata fresh from DB to avoid stale cache references
@@ -355,7 +355,7 @@ lib.callback.register("pickle_dealerships:adminRemovePosition", function(source,
             metadata.displaySpots = newSpots
         else
             debugPrint("[RemovePosition] Spot not found!")
-            return { success = false, message = "Display spot not found." }
+            return { success = false, message = _L("admin_display_spot_not_found") }
         end
     elseif field == "interactionPoint" and data.pointType and metadata.interactionPoints then
         metadata.interactionPoints[data.pointType] = nil
@@ -372,7 +372,7 @@ lib.callback.register("pickle_dealerships:adminRemovePosition", function(source,
     local location = dealership.location
     TriggerClientEvent('pickle_dealerships:positionUpdated', -1, location, data.field, data.pointType)
 
-    return { success = true, metadata = metadata, message = "Position removed." }
+    return { success = true, metadata = metadata, message = _L("admin_position_removed") }
 end)
 
 -- ─── Catalog Management ─────────────────────────────────────────────────────
@@ -429,19 +429,19 @@ end)
 --- Add a vehicle to the catalog
 lib.callback.register("pickle_dealerships:adminAddCatalogVehicle", function(source, data)
     if not IsPlayerAdmin(source) then
-        return { success = false, message = "You do not have admin permissions." }
+        return { success = false, message = _L("admin_no_permission") }
     end
 
     if not data.model or data.model == "" then
-        return { success = false, message = "Vehicle model is required." }
+        return { success = false, message = _L("admin_vehicle_model_required") }
     end
     if not data.label or data.label == "" then
-        return { success = false, message = "Vehicle label is required." }
+        return { success = false, message = _L("admin_vehicle_label_required") }
     end
 
     local existing = MySQL.single.await("SELECT id FROM wholesale_catalog WHERE model = ?", { data.model })
     if existing then
-        return { success = false, message = "Vehicle model '" .. data.model .. "' already exists in catalog." }
+        return { success = false, message = _L("admin_vehicle_exists", data.model) }
     end
 
     local id = MySQL.insert.await(
@@ -457,19 +457,19 @@ lib.callback.register("pickle_dealerships:adminAddCatalogVehicle", function(sour
     )
 
     if id then
-        return { success = true, id = id, message = "'" .. data.label .. "' added to catalog." }
+        return { success = true, id = id, message = _L("admin_vehicle_added", data.label) }
     end
-    return { success = false, message = "Failed to add vehicle." }
+    return { success = false, message = _L("admin_failed_add_vehicle") }
 end)
 
 --- Update a catalog vehicle
 lib.callback.register("pickle_dealerships:adminUpdateCatalogVehicle", function(source, data)
     if not IsPlayerAdmin(source) then
-        return { success = false, message = "You do not have admin permissions." }
+        return { success = false, message = _L("admin_no_permission") }
     end
 
     if not data.id then
-        return { success = false, message = "Missing vehicle ID." }
+        return { success = false, message = _L("admin_missing_vehicle_id") }
     end
 
     MySQL.update.await(
@@ -484,37 +484,37 @@ lib.callback.register("pickle_dealerships:adminUpdateCatalogVehicle", function(s
         }
     )
 
-    return { success = true, message = "Vehicle updated." }
+    return { success = true, message = _L("admin_vehicle_updated") }
 end)
 
 --- Remove a vehicle from the catalog
 lib.callback.register("pickle_dealerships:adminRemoveCatalogVehicle", function(source, data)
     if not IsPlayerAdmin(source) then
-        return { success = false, message = "You do not have admin permissions." }
+        return { success = false, message = _L("admin_no_permission") }
     end
 
     if not data.id then
-        return { success = false, message = "Missing vehicle ID." }
+        return { success = false, message = _L("admin_missing_vehicle_id") }
     end
 
     MySQL.update.await("DELETE FROM wholesale_catalog WHERE id = ?", { data.id })
-    return { success = true, message = "Vehicle removed from catalog." }
+    return { success = true, message = _L("admin_vehicle_removed") }
 end)
 
 --- Set dealership job
 lib.callback.register("pickle_dealerships:adminSetJob", function(source, data)
     if not IsPlayerAdmin(source) then
-        return { success = false, message = "You do not have admin permissions." }
+        return { success = false, message = _L("admin_no_permission") }
     end
 
     local dealershipId = data.dealershipId
     if not dealershipId then
-        return { success = false, message = "Missing dealership ID." }
+        return { success = false, message = _L("admin_missing_dealership_id") }
     end
 
     local dealership = GetDealership(dealershipId)
     if not dealership then
-        return { success = false, message = "Dealership not found." }
+        return { success = false, message = _L("dealership_not_found") }
     end
 
     local job = data.job
@@ -523,7 +523,7 @@ lib.callback.register("pickle_dealerships:adminSetJob", function(source, data)
     MySQL.update.await("UPDATE dealerships SET job = ? WHERE id = ?", { job, dealershipId })
     UpdateDealershipCache(dealershipId, { job = job })
 
-    return { success = true, message = "Dealership job set to " .. (job or "none") .. "." }
+    return { success = true, message = _L("admin_job_set_to", job or "none") }
 end)
 
 -- ─── Photo Booth ────────────────────────────────────────────────────────────
@@ -571,35 +571,35 @@ end)
 --- Save a catalog vehicle image URL
 lib.callback.register("pickle_dealerships:adminSaveCatalogImage", function(source, data)
     if not IsPlayerAdmin(source) then
-        return { success = false, message = "You do not have admin permissions." }
+        return { success = false, message = _L("admin_no_permission") }
     end
 
     if not data.catalogId or not data.imageUrl then
-        return { success = false, message = "Missing catalog ID or image URL." }
+        return { success = false, message = _L("admin_missing_catalog_data") }
     end
 
     MySQL.update.await("UPDATE wholesale_catalog SET image = ? WHERE id = ?", { data.imageUrl, data.catalogId })
-    return { success = true, message = "Vehicle image saved." }
+    return { success = true, message = _L("admin_vehicle_image_saved") }
 end)
 
 --- Remove a catalog vehicle image
 lib.callback.register("pickle_dealerships:adminRemoveCatalogImage", function(source, data)
     if not IsPlayerAdmin(source) then
-        return { success = false, message = "You do not have admin permissions." }
+        return { success = false, message = _L("admin_no_permission") }
     end
 
     if not data.catalogId then
-        return { success = false, message = "Missing catalog ID." }
+        return { success = false, message = _L("admin_missing_dealership_id") }
     end
 
     MySQL.update.await("UPDATE wholesale_catalog SET image = NULL WHERE id = ?", { data.catalogId })
-    return { success = true, message = "Vehicle image removed." }
+    return { success = true, message = _L("admin_vehicle_image_removed") }
 end)
 
 --- Set player routing bucket for photo booth isolation
 lib.callback.register("pickle_dealerships:adminSetPhotoBucket", function(source, data)
     if not IsPlayerAdmin(source) then
-        return { success = false, message = "You do not have admin permissions." }
+        return { success = false, message = _L("admin_no_permission") }
     end
 
     local bucket = tonumber(data.bucket) or 0
@@ -615,7 +615,7 @@ RegisterCommand("dealership", function(source, args, rawCommand)
     end
 
     if not IsPlayerAdmin(source) then
-        ShowNotification(source, "You do not have permission to use this command.")
+        ShowNotification(source, _L("admin_no_command_permission"))
         return
     end
 
@@ -630,25 +630,25 @@ RegisterCommand("dealership_stockall", function(source, args, rawCommand)
     end
 
     if not IsPlayerAdmin(source) then
-        ShowNotification(source, "You do not have permission to use this command.")
+        ShowNotification(source, _L("admin_no_command_permission"))
         return
     end
 
     local dealershipId = tonumber(args[1])
     if not dealershipId then
-        ShowNotification(source, "Usage: /dealership_stockall [dealership_id]")
+        ShowNotification(source, _L("admin_stockall_usage"))
         return
     end
 
     local dealership = MySQL.single.await("SELECT * FROM dealerships WHERE id = ?", { dealershipId })
     if not dealership then
-        ShowNotification(source, "Dealership not found.")
+        ShowNotification(source, _L("dealership_not_found"))
         return
     end
 
     local catalog = MySQL.query.await("SELECT * FROM wholesale_catalog", {})
     if not catalog or #catalog == 0 then
-        ShowNotification(source, "No vehicles in catalog.")
+        ShowNotification(source, _L("admin_no_catalog_vehicles"))
         return
     end
 
@@ -667,6 +667,6 @@ RegisterCommand("dealership_stockall", function(source, args, rawCommand)
         end
     end
 
-    ShowNotification(source, ("Added %d vehicles to dealership #%d stock."):format(count, dealershipId))
+    ShowNotification(source, _L("admin_stockall_complete", count, dealershipId))
     TriggerClientEvent('pickle_dealerships:refreshDisplay', -1, dealership.location)
 end, false)

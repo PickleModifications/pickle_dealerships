@@ -3,6 +3,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { fetchNui, formatCurrency } from '../lib/utils'
+import { t } from '../lib/locale'
 import type { StockItem } from '../types'
 
 // Kept in sync with Config.Auction.durations (minutes)
@@ -62,44 +63,44 @@ export default function AuctionListDialog({ item, onClose, onListed }: Props) {
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent onClose={onClose}>
         <DialogHeader>
-          <DialogTitle>List for Auction</DialogTitle>
+          <DialogTitle>{t('title_list_for_auction')}</DialogTitle>
           <DialogDescription>{item.vehicle_label || item.vehicle_model}</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-3 pt-2">
           <div className="flex justify-between text-xs">
-            <span className="text-muted-foreground">Wholesale cost</span>
+            <span className="text-muted-foreground">{t('label_wholesale_cost')}</span>
             <span>{formatCurrency(item.wholesale_cost)}</span>
           </div>
           <div className="flex justify-between text-xs">
-            <span className="text-muted-foreground">Current retail</span>
+            <span className="text-muted-foreground">{t('label_retail_price')}</span>
             <span>{formatCurrency(item.retail_price)}</span>
           </div>
 
           <div>
-            <label className="text-xs font-medium">Starting Bid</label>
+            <label className="text-xs font-medium">{t('label_starting_bid')}</label>
             <Input type="number" inputMode="numeric" value={startingBid} onChange={(e) => setStartingBid(e.target.value)} placeholder="e.g. 5000" className="mt-1" />
           </div>
 
           <div>
-            <label className="text-xs font-medium">Minimum Increment</label>
+            <label className="text-xs font-medium">{t('label_min_increment')}</label>
             <Input type="number" inputMode="numeric" value={minIncrement} onChange={(e) => setMinIncrement(e.target.value)} placeholder="250" className="mt-1" />
-            <p className="text-[10px] text-muted-foreground mt-0.5">Floor: $50</p>
+            <p className="text-[10px] text-muted-foreground mt-0.5">{t('floor_label')}</p>
           </div>
 
           <div className="grid grid-cols-2 gap-2">
             <div>
-              <label className="text-xs font-medium">Reserve (hidden)</label>
-              <Input type="number" inputMode="numeric" value={reservePrice} onChange={(e) => setReservePrice(e.target.value)} placeholder="Optional" className="mt-1" />
+              <label className="text-xs font-medium">{t('label_reserve_price')}</label>
+              <Input type="number" inputMode="numeric" value={reservePrice} onChange={(e) => setReservePrice(e.target.value)} placeholder={t('optional')} className="mt-1" />
             </div>
             <div>
-              <label className="text-xs font-medium">Buyout Price</label>
-              <Input type="number" inputMode="numeric" value={buyoutPrice} onChange={(e) => setBuyoutPrice(e.target.value)} placeholder="Optional" className="mt-1" />
+              <label className="text-xs font-medium">{t('label_buyout_price')}</label>
+              <Input type="number" inputMode="numeric" value={buyoutPrice} onChange={(e) => setBuyoutPrice(e.target.value)} placeholder={t('optional')} className="mt-1" />
             </div>
           </div>
 
           <div>
-            <label className="text-xs font-medium">Duration</label>
+            <label className="text-xs font-medium">{t('label_duration')}</label>
             <div className="flex flex-wrap gap-1 mt-1">
               {DURATION_PRESETS.map((mins) => (
                 <button
@@ -116,9 +117,9 @@ export default function AuctionListDialog({ item, onClose, onListed }: Props) {
           {error && <p className="text-xs text-rose-400">{error}</p>}
 
           <div className="flex gap-2 pt-1">
-            <Button variant="outline" className="flex-1" onClick={onClose}>Cancel</Button>
+            <Button variant="outline" className="flex-1" onClick={onClose}>{t('btn_cancel')}</Button>
             <Button className="flex-1" disabled={!canSubmit} onClick={handleSubmit}>
-              {submitting ? 'Listing…' : 'List Auction'}
+              {submitting ? t('listing') : t('btn_list_auction')}
             </Button>
           </div>
         </div>

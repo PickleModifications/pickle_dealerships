@@ -391,7 +391,7 @@ lib.callback.register('pickle_dealerships:orderVehicle', function(source, locati
         { dealership.id, 'expense', -totalCost, 'Vehicle order: ' .. model .. ' x' .. qty, identifier }
     )
 
-    ShowNotification(source, 'Ordered ' .. qty .. 'x ' .. model .. ' for $' .. totalCost .. '.')
+    ShowNotification(source, _L('stock_ordered_server', qty, model, GetCurrencyString(totalCost)))
 
     -- Notify clients to refresh display
     TriggerClientEvent('pickle_dealerships:refreshDisplay', -1, locationKey)
@@ -442,7 +442,7 @@ lib.callback.register('pickle_dealerships:setRetailPrice', function(source, loca
         { retailPrice, stockId }
     )
 
-    ShowNotification(source, 'Retail price updated to $' .. retailPrice .. '.', 'success')
+    ShowNotification(source, _L('stock_retail_price_updated', GetCurrencyString(retailPrice)), 'success')
     return true
 end)
 
@@ -509,7 +509,7 @@ lib.callback.register('pickle_dealerships:setDisplaySpot', function(source, loca
     -- Notify clients to refresh display
     TriggerClientEvent('pickle_dealerships:refreshDisplay', -1, locationKey)
 
-    ShowNotification(source, spot and ('Vehicle placed on display spot #' .. spot .. '.') or 'Vehicle removed from display.', 'success')
+    ShowNotification(source, spot and _L('stock_display_spot_set', spot) or _L('stock_display_removed_server'), 'success')
     return true
 end)
 
@@ -608,6 +608,15 @@ lib.callback.register('pickle_dealerships:tradeInVehicle', function(source, loca
         return false, 'Ownership changed before the trade-in completed.'
     end
 
+    -- Block trade-in if vehicle is under active financing
+    local activeFinancing = MySQL.scalar.await(
+        "SELECT COUNT(*) FROM `dealership_financing` WHERE `vehicle_plate` = ? AND `status` = 'active'",
+        { plate }
+    )
+    if activeFinancing and tonumber(activeFinancing) > 0 then
+        return false, 'This vehicle is under active financing and cannot be traded in.'
+    end
+
     -- Capacity check
     ProcessDeliveredOrders(dealership.id)
     local tierCfg = Config.Tiers[dealership.tier or 1]
@@ -644,7 +653,7 @@ lib.callback.register('pickle_dealerships:tradeInVehicle', function(source, loca
 
     -- Pay the seller (consent already confirmed above)
     AddMoney(sellerSource, buyPrice, 'bank')
-    ShowNotification(sellerSource, ('Your %s was traded in for $%s.'):format(label, buyPrice))
+    ShowNotification(sellerSource, _L('stock_trade_in_seller', label, GetCurrencyString(buyPrice)))
 
     -- Remove ownership from the seller's framework records
     RemoveOwnedVehicle(sellerIdentifier, plate)
@@ -660,7 +669,7 @@ lib.callback.register('pickle_dealerships:tradeInVehicle', function(source, loca
 
     AddLedgerEntry(dealership.id, 'expense', -buyPrice, 'Trade-in: ' .. label .. ' (' .. plate .. ')', identifier)
 
-    ShowNotification(source, ('Traded in %s for $%s.'):format(label, buyPrice))
+    ShowNotification(source, _L('stock_trade_in_buyer', label, GetCurrencyString(buyPrice)))
     TriggerClientEvent('pickle_dealerships:refreshDisplay', -1, locationKey)
 
     return true, stockId

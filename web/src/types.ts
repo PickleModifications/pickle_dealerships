@@ -133,9 +133,11 @@ export interface Coupon {
 export interface FinancingAgreement {
   id: number
   dealership_id: number
+  dealership_name?: string
   identifier: string
   vehicle_plate: string
   vehicle_label?: string
+  vehicle_model?: string
   total_amount: number
   amount_paid: number
   installment_amount: number
@@ -144,6 +146,15 @@ export interface FinancingAgreement {
   missed_payments: number
   status: 'active' | 'paid' | 'defaulted' | 'repossessed'
   created_at: string
+}
+
+export interface FinancingSettings {
+  financingEnabled: boolean
+  minDownPercent: number
+  interestRate: number
+  paymentIntervalHours: number
+  maxMissedPayments: number
+  installmentOptions: number[]
 }
 
 export interface DashboardStats {

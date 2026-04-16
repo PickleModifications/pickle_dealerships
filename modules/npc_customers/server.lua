@@ -374,17 +374,17 @@ lib.callback.register("pickle_dealerships:completeNPCSale", function(source, dat
     local npcProfile   = data.npcProfile
 
     if not dealershipId or not stockId or not saleAmount then
-        return { success = false, message = "Invalid sale data." }
+        return { success = false, message = _L("npc_invalid_sale_data") }
     end
 
     local dealership = GetDealership(dealershipId)
     if not dealership then
-        return { success = false, message = "Dealership not found." }
+        return { success = false, message = _L("dealership_not_found") }
     end
 
     local identifier = GetIdentifier(source)
     if not identifier then
-        return { success = false, message = "Player identifier not found." }
+        return { success = false, message = _L("npc_player_identifier_not_found") }
     end
 
     -- Apply NPC sale multiplier
@@ -401,7 +401,7 @@ lib.callback.register("pickle_dealerships:completeNPCSale", function(source, dat
     local commission = math.floor(adjustedAmount * commissionRate)
     if commission > 0 then
         AddMoney(source, commission, "bank")
-        ShowNotification(source, "You earned " .. GetCurrencyString(commission) .. " commission!")
+        ShowNotification(source, _L("npc_commission_earned", GetCurrencyString(commission)))
     end
 
     -- Satisfaction bonus reputation
@@ -441,6 +441,6 @@ lib.callback.register("pickle_dealerships:completeNPCSale", function(source, dat
         success    = true,
         saleAmount = adjustedAmount,
         commission = commission,
-        message    = "Sale complete! You earned " .. GetCurrencyString(commission) .. " in commission.",
+        message    = _L("npc_sale_complete_message", GetCurrencyString(commission)),
     }
 end)

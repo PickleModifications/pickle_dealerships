@@ -3,6 +3,7 @@ import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { fetchNui, formatCurrency } from '../lib/utils'
+import { t } from '../lib/locale'
 import { useNuiEvent } from '../hooks/useNuiEvent'
 import { X, Gavel, Flame, Package, FileText, Clock, Zap } from 'lucide-react'
 import VehicleImg from '../components/VehicleImg'
@@ -211,7 +212,7 @@ export default function AuctionPage({ onClose }: Props) {
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
               <Gavel className="h-4 w-4 text-accent" />
-              <h1 className="text-white text-sm font-bold uppercase tracking-wider">Auction House</h1>
+              <h1 className="text-white text-sm font-bold uppercase tracking-wider">{t('title_auction_house')}</h1>
             </div>
             <Button variant="ghost" size="icon" onClick={handleClose} className="h-7 w-7 text-white/60 hover:text-white hover:bg-white/10">
               <X className="h-4 w-4" />
@@ -220,9 +221,9 @@ export default function AuctionPage({ onClose }: Props) {
 
           <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
             <TabsList className="h-8 w-full grid grid-cols-3 bg-white/5">
-              <TabsTrigger value="live" className="text-[10px] gap-1 data-[state=active]:bg-white/10"><Flame className="h-3 w-3" /> Live</TabsTrigger>
-              <TabsTrigger value="ending" className="text-[10px] gap-1 data-[state=active]:bg-white/10"><Clock className="h-3 w-3" /> Ending</TabsTrigger>
-              <TabsTrigger value="pickups" className="text-[10px] gap-1 data-[state=active]:bg-white/10"><Package className="h-3 w-3" /> Pickups {pickups.length > 0 && <span className="text-accent">({pickups.length})</span>}</TabsTrigger>
+              <TabsTrigger value="live" className="text-[10px] gap-1 data-[state=active]:bg-white/10"><Flame className="h-3 w-3" /> {t('tab_live')}</TabsTrigger>
+              <TabsTrigger value="ending" className="text-[10px] gap-1 data-[state=active]:bg-white/10"><Clock className="h-3 w-3" /> {t('tab_ending')}</TabsTrigger>
+              <TabsTrigger value="pickups" className="text-[10px] gap-1 data-[state=active]:bg-white/10"><Package className="h-3 w-3" /> {t('tab_pickups')} {pickups.length > 0 && <span className="text-accent">({pickups.length})</span>}</TabsTrigger>
             </TabsList>
           </Tabs>
         </div>
@@ -230,7 +231,7 @@ export default function AuctionPage({ onClose }: Props) {
         <div className="flex-1 overflow-auto px-2 pb-3">
           {tab === 'pickups' ? (
             pickups.length === 0 ? (
-              <p className="text-white/40 text-xs text-center mt-6">No pending pickups</p>
+              <p className="text-white/40 text-xs text-center mt-6">{t('empty_no_pickups')}</p>
             ) : (
               <div className="space-y-1.5">
                 {pickups.map((p) => (
@@ -239,14 +240,14 @@ export default function AuctionPage({ onClose }: Props) {
                     <p className="text-white/40 text-[10px]">{p.dealership_name}</p>
                     <div className="flex items-center justify-between mt-1.5">
                       <p className="text-accent text-xs font-bold">{formatCurrency(p.winning_bid)}</p>
-                      <Button size="sm" className="h-6 text-[10px]" onClick={() => handleClaim(p.id)}>Claim</Button>
+                      <Button size="sm" className="h-6 text-[10px]" onClick={() => handleClaim(p.id)}>{t('btn_claim_vehicle')}</Button>
                     </div>
                   </div>
                 ))}
               </div>
             )
           ) : filteredList.length === 0 ? (
-            <p className="text-white/40 text-xs text-center mt-6">No {tab === 'ending' ? 'lots ending soon' : 'active auctions'}</p>
+            <p className="text-white/40 text-xs text-center mt-6">{tab === 'ending' ? t('empty_no_lots_ending') : t('empty_no_auctions')}</p>
           ) : (
             <div className="space-y-1.5">
               {filteredList.map((a) => {
@@ -270,7 +271,7 @@ export default function AuctionPage({ onClose }: Props) {
                       <p className="text-white text-[11px] font-semibold truncate leading-tight">{a.vehicle_label || a.vehicle_model}</p>
                       <p className="text-accent text-[11px] font-bold mt-0.5">{formatCurrency(a.current_bid ?? a.starting_bid)}</p>
                       <p className={`text-[10px] mt-0.5 ${soon ? 'text-rose-400 animate-pulse font-mono' : !a.ends_at ? 'text-amber-400' : 'text-white/50 font-mono'}`}>
-                        {a.ends_at ? formatTimeRemaining(a.ends_at) : `${a.duration_minutes}m · Starts on first offer`}
+                        {a.ends_at ? formatTimeRemaining(a.ends_at) : `${a.duration_minutes}m · ${t('label_starts_first_offer')}`}
                       </p>
                     </div>
                   </button>
@@ -289,54 +290,54 @@ export default function AuctionPage({ onClose }: Props) {
         {selected ? (
           <>
             <div className="p-4 border-b border-white/10">
-              <p className="text-white/50 text-[10px] uppercase tracking-wider">Now Auctioning</p>
+              <p className="text-white/50 text-[10px] uppercase tracking-wider">{t('label_now_auctioning')}</p>
               <h2 className="text-white text-lg font-bold leading-tight mt-0.5">{selected.vehicle_label || selected.vehicle_model}</h2>
               <p className="text-white/40 text-xs mt-0.5">{selected.dealership_name}</p>
               <button
                 onClick={() => setPickleFaxStockId(selected.stock_id)}
                 className="mt-2 w-full h-7 rounded-md bg-accent/10 border border-accent/40 text-accent hover:bg-accent/20 text-[11px] font-semibold flex items-center justify-center gap-1.5 transition-colors"
               >
-                <FileText className="h-3 w-3" /> View PickleFAX Report
+                <FileText className="h-3 w-3" /> {t('picklefax_title')}
               </button>
             </div>
 
             <div className="p-4 border-b border-white/10">
               <div className="flex items-end justify-between">
                 <div>
-                  <p className="text-white/50 text-[10px] uppercase tracking-wider">Current Bid</p>
+                  <p className="text-white/50 text-[10px] uppercase tracking-wider">{t('label_current_bid')}</p>
                   <p className="text-accent text-3xl font-black tracking-tight">{formatCurrency(selected.current_bid ?? selected.starting_bid)}</p>
                   <p className="text-white/40 text-[10px] mt-0.5">
-                    {selected.current_bid ? `by ${bidderLabel(selected.current_bidder)}` : 'No bids yet'}
-                    {selected.bid_count != null && ` • ${selected.bid_count} bid${selected.bid_count === 1 ? '' : 's'}`}
+                    {selected.current_bid ? t('label_by_bidder', bidderLabel(selected.current_bidder)) : t('label_no_bids_yet')}
+                    {selected.bid_count != null && ` • ${t('label_bid_count', String(selected.bid_count))}`}
                   </p>
                 </div>
                 <div className="text-right">
                   <p className="text-white/50 text-[10px] uppercase tracking-wider">
-                    {selected.ends_at ? 'Ends In' : 'Duration'}
+                    {selected.ends_at ? t('label_ends_in') : t('label_duration')}
                   </p>
                   {selected.ends_at ? (
                     <p className={`text-2xl font-mono font-bold ${endingSoon ? 'text-rose-400 animate-pulse' : 'text-white'}`}>{formatTimeRemaining(selected.ends_at)}</p>
                   ) : (
                     <>
                       <p className="text-2xl font-mono font-bold text-white/70">{selected.duration_minutes}m</p>
-                      <p className="text-[10px] text-amber-400 mt-0.5">Starts on first offer</p>
+                      <p className="text-[10px] text-amber-400 mt-0.5">{t('label_starts_first_offer')}</p>
                     </>
                   )}
                 </div>
               </div>
               {selected.reserve_price != null && (
                 <p className={`text-[10px] mt-1.5 ${selected.reserve_met ? 'text-emerald-400' : 'text-amber-400'}`}>
-                  {selected.reserve_met ? '✓ Reserve met' : '• Reserve not met'}
+                  {selected.reserve_met ? `✓ ${t('label_reserve_met')}` : `• ${t('label_reserve_not_met')}`}
                 </p>
               )}
             </div>
 
             <div className="p-4 border-b border-white/10">
-              <label className="text-white/50 text-[10px] uppercase tracking-wider">Your Bid</label>
+              <label className="text-white/50 text-[10px] uppercase tracking-wider">{t('label_your_bid')}</label>
               <Input
                 type="number"
                 inputMode="numeric"
-                placeholder={`Min ${formatCurrency(bidFloor)}`}
+                placeholder={t('label_min_bid', formatCurrency(bidFloor))}
                 value={bidInput}
                 onChange={(e) => setBidInput(e.target.value)}
                 className="mt-1 bg-white/5 border-white/10 text-white"
@@ -359,20 +360,20 @@ export default function AuctionPage({ onClose }: Props) {
               {bidError && <p className="text-rose-400 text-[11px] mt-2">{bidError}</p>}
 
               <Button className="w-full mt-3" disabled={bidding || !bidInput} onClick={() => handleBid()}>
-                <Gavel className="h-3 w-3 mr-1" /> Place Bid
+                <Gavel className="h-3 w-3 mr-1" /> {t('btn_place_bid')}
               </Button>
 
               {selected.buyout_price != null && (
                 <Button variant="outline" className="w-full mt-2 border-amber-500/50 text-amber-400 hover:bg-amber-500/10" disabled={bidding} onClick={() => handleBid(selected.buyout_price!)}>
-                  <Zap className="h-3 w-3 mr-1" /> Buyout for {formatCurrency(selected.buyout_price)}
+                  <Zap className="h-3 w-3 mr-1" /> {t('btn_buyout')} {formatCurrency(selected.buyout_price)}
                 </Button>
               )}
             </div>
 
             <div className="flex-1 overflow-auto p-4">
-              <p className="text-white/50 text-[10px] uppercase tracking-wider mb-2">Bid History</p>
+              <p className="text-white/50 text-[10px] uppercase tracking-wider mb-2">{t('label_bid_history')}</p>
               {!selected.bids || selected.bids.length === 0 ? (
-                <p className="text-white/30 text-xs">No bids yet. Be the first!</p>
+                <p className="text-white/30 text-xs">{t('label_no_bids_first')}</p>
               ) : (
                 <div className="space-y-1">
                   {selected.bids.map((b) => (
@@ -387,7 +388,7 @@ export default function AuctionPage({ onClose }: Props) {
           </>
         ) : (
           <div className="flex-1 flex items-center justify-center text-white/40 text-sm px-6 text-center">
-            {auctions.length === 0 ? 'No active auctions right now' : 'Select an auction to bid'}
+            {auctions.length === 0 ? t('empty_no_active_auctions_now') : t('empty_select_auction')}
           </div>
         )}
       </div>

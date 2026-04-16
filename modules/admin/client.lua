@@ -20,8 +20,8 @@ RegisterNUICallback("adminGetAllDealerships", function(_, cb)
     if result then
         cb({ success = true, dealerships = result })
     else
-        ShowNotification("Failed to fetch dealerships or insufficient permissions.")
-        cb({ success = false, message = "Failed to fetch dealerships." })
+        ShowNotification(_L("admin_fetch_failed"))
+        cb({ success = false, message = _L("admin_fetch_failed") })
     end
 end)
 
@@ -35,8 +35,8 @@ RegisterNUICallback("adminTransferOwnership", function(data, cb)
         ShowNotification(result.message)
         cb({ success = true })
     else
-        ShowNotification(result and result.message or "Transfer failed.")
-        cb({ success = false, message = result and result.message or "Transfer failed." })
+        ShowNotification(result and result.message or _L("admin_transfer_failed"))
+        cb({ success = false, message = result and result.message or _L("admin_transfer_failed") })
     end
 end)
 
@@ -50,8 +50,8 @@ RegisterNUICallback("adminSetBalance", function(data, cb)
         ShowNotification(result.message)
         cb({ success = true, newBalance = result.newBalance })
     else
-        ShowNotification(result and result.message or "Failed to set balance.")
-        cb({ success = false, message = result and result.message or "Failed to set balance." })
+        ShowNotification(result and result.message or _L("admin_balance_failed"))
+        cb({ success = false, message = result and result.message or _L("admin_balance_failed") })
     end
 end)
 
@@ -65,8 +65,8 @@ RegisterNUICallback("adminSetTier", function(data, cb)
         ShowNotification(result.message)
         cb({ success = true, newTier = result.newTier })
     else
-        ShowNotification(result and result.message or "Failed to set tier.")
-        cb({ success = false, message = result and result.message or "Failed to set tier." })
+        ShowNotification(result and result.message or _L("admin_tier_failed"))
+        cb({ success = false, message = result and result.message or _L("admin_tier_failed") })
     end
 end)
 
@@ -79,8 +79,8 @@ RegisterNUICallback("adminResetDealership", function(data, cb)
         ShowNotification(result.message)
         cb({ success = true })
     else
-        ShowNotification(result and result.message or "Failed to reset dealership.")
-        cb({ success = false, message = result and result.message or "Failed to reset dealership." })
+        ShowNotification(result and result.message or _L("admin_reset_failed"))
+        cb({ success = false, message = result and result.message or _L("admin_reset_failed") })
     end
 end)
 
@@ -93,8 +93,8 @@ RegisterNUICallback("adminToggleMode", function(data, cb)
         ShowNotification(result.message)
         cb({ success = true, newMode = result.newMode })
     else
-        ShowNotification(result and result.message or "Failed to toggle mode.")
-        cb({ success = false, message = result and result.message or "Failed to toggle mode." })
+        ShowNotification(result and result.message or _L("admin_mode_failed"))
+        cb({ success = false, message = result and result.message or _L("admin_mode_failed") })
     end
 end)
 
@@ -109,8 +109,8 @@ RegisterNUICallback("adminCreateDealership", function(data, cb)
         ShowNotification(result.message)
         cb({ success = true, dealershipId = result.dealershipId })
     else
-        ShowNotification(result and result.message or "Failed to create dealership.")
-        cb({ success = false, message = result and result.message or "Failed to create dealership." })
+        ShowNotification(result and result.message or _L("admin_create_failed"))
+        cb({ success = false, message = result and result.message or _L("admin_create_failed") })
     end
 end)
 
@@ -169,7 +169,7 @@ RegisterNUICallback("adminStartGizmo", function(data, cb)
             positionsDealershipId = data.dealershipId,
         })
 
-        cb({ success = false, message = "Placement cancelled." })
+        cb({ success = false, message = _L("admin_placement_cancelled") })
     end
 end)
 
@@ -178,7 +178,7 @@ RegisterNUICallback("adminRemovePosition", function(data, cb)
     if result and result.success then
         ShowNotification(result.message)
     else
-        ShowNotification(result and result.message or "Failed to remove position.")
+        ShowNotification(result and result.message or _L("admin_position_failed"))
     end
     cb(result or { success = false })
 end)
@@ -188,7 +188,7 @@ RegisterNUICallback("adminSetJob", function(data, cb)
     if result and result.success then
         ShowNotification(result.message)
     else
-        ShowNotification(result and result.message or "Failed to set job.")
+        ShowNotification(result and result.message or _L("admin_job_failed"))
     end
     cb(result or { success = false })
 end)
@@ -205,7 +205,7 @@ RegisterNUICallback("adminGetCatalog", function(data, cb)
     if result then
         cb({ success = true, items = result.items, total = result.total, page = result.page, pageSize = result.pageSize })
     else
-        cb({ success = false, message = "Failed to fetch catalog." })
+        cb({ success = false, message = _L("admin_catalog_fetch_failed") })
     end
 end)
 
@@ -214,7 +214,7 @@ RegisterNUICallback("adminAddCatalogVehicle", function(data, cb)
     if result and result.success then
         ShowNotification(result.message)
     else
-        ShowNotification(result and result.message or "Failed to add vehicle.")
+        ShowNotification(result and result.message or _L("admin_catalog_add_failed"))
     end
     cb(result or { success = false })
 end)
@@ -224,7 +224,7 @@ RegisterNUICallback("adminUpdateCatalogVehicle", function(data, cb)
     if result and result.success then
         ShowNotification(result.message)
     else
-        ShowNotification(result and result.message or "Failed to update vehicle.")
+        ShowNotification(result and result.message or _L("admin_catalog_update_failed"))
     end
     cb(result or { success = false })
 end)
@@ -234,7 +234,7 @@ RegisterNUICallback("adminRemoveCatalogVehicle", function(data, cb)
     if result and result.success then
         ShowNotification(result.message)
     else
-        ShowNotification(result and result.message or "Failed to remove vehicle.")
+        ShowNotification(result and result.message or _L("admin_catalog_remove_failed"))
     end
     cb(result or { success = false })
 end)
@@ -436,7 +436,7 @@ RegisterNUICallback("adminStartPhotoCapture", function(data, cb)
     -- Fetch upload config from server before proceeding
     local uploadConfig = lib.callback.await("pickle_dealerships:adminGetUploadConfig", false)
     if not uploadConfig then
-        ShowNotification("Image upload is not configured. Check config_sv.lua.")
+        ShowNotification(_L("admin_upload_not_configured"))
         cb({ success = false })
         return
     end
@@ -599,7 +599,7 @@ RegisterNUICallback("photoBoothSave", function(data, cb)
     if not PhotoBoothState then cb({ success = false }) return end
 
     if not data.imageData or data.imageData == "" then
-        ShowNotification("No image to save.")
+        ShowNotification(_L("admin_no_image"))
         cb({ success = false })
         CleanupPhotoBooth()
         return
@@ -613,7 +613,7 @@ RegisterNUICallback("photoBoothSave", function(data, cb)
     if result and result.success then
         ShowNotification(result.message)
     else
-        ShowNotification(result and result.message or "Failed to save image.")
+        ShowNotification(result and result.message or _L("admin_image_failed"))
     end
 
     cb(result or { success = false })

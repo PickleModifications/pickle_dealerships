@@ -265,7 +265,7 @@ local function SpawnNPCCustomer(dealershipId, dealershipConfig)
         targetPed = ped,
     }, function()
         if currentNPCInteraction then
-            ShowNotification("You are already assisting a customer.")
+            ShowNotification(_L("npc_already_assisting"))
             return
         end
 

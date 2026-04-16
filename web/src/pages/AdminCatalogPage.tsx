@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog'
 import { fetchNui, formatCurrency, getVehicleImage } from '../lib/utils'
 import { SkeletonList } from '../components/ui/skeleton'
+import { t } from '../lib/locale'
 import { Plus, Trash2, Pencil, Search, Car, Camera, Loader2 } from 'lucide-react'
 import VehicleImg from '../components/VehicleImg'
 
@@ -179,17 +180,17 @@ export default function AdminCatalogPage() {
       <div className="p-4 flex flex-wrap gap-2">
         <div className="relative flex-1 min-w-[180px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input placeholder="Search vehicles..." value={search} onChange={(e) => handleSearchChange(e.target.value)} className="pl-9" />
+          <Input placeholder={t('label_search_vehicles')} value={search} onChange={(e) => handleSearchChange(e.target.value)} className="pl-9" />
         </div>
         <Select value={typeFilter} onValueChange={handleTypeChange}>
           <SelectTrigger className="w-[120px]"><SelectValue /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All Types</SelectItem>
+            <SelectItem value="all">{t('label_all_types')}</SelectItem>
             {vehicleTypes.map((t) => <SelectItem key={t} value={t} className="capitalize">{t}</SelectItem>)}
           </SelectContent>
         </Select>
         <Button size="sm" onClick={openAdd} className="gap-1">
-          <Plus className="h-4 w-4" /> Add Vehicle
+          <Plus className="h-4 w-4" /> {t('btn_add_vehicle')}
         </Button>
       </div>
 
@@ -199,7 +200,7 @@ export default function AdminCatalogPage() {
         ) : items.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
             <Car className="h-10 w-10 mb-2 opacity-50" />
-            <p>{total === 0 && !search ? 'No vehicles in catalog. Add some!' : 'No matching vehicles'}</p>
+            <p>{total === 0 && !search ? t('empty_no_catalog') : t('empty_no_catalog_match')}</p>
           </div>
         ) : (
           <div className="relative w-full" style={{ height: `${virtualizer.getTotalSize()}px` }}>
@@ -234,7 +235,7 @@ export default function AdminCatalogPage() {
                         <p className="font-bold text-sm whitespace-nowrap">{formatCurrency(v.wholesale)}</p>
                       </div>
                       <div className="flex gap-1 ml-3">
-                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => fetchNui('adminStartPhotoCapture', { catalogId: v.id, model: v.model, label: v.label, class: v.class })} title="Set Photo">
+                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => fetchNui('adminStartPhotoCapture', { catalogId: v.id, model: v.model, label: v.label, class: v.class })} title={t('admin_set_photo')}>
                           <Camera className="h-3.5 w-3.5" />
                         </Button>
                         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(v)}>
@@ -261,27 +262,27 @@ export default function AdminCatalogPage() {
       <Dialog open={formOpen} onOpenChange={setFormOpen}>
         <DialogContent onClose={() => setFormOpen(false)}>
           <DialogHeader>
-            <DialogTitle>{editing ? 'Edit Vehicle' : 'Add Vehicle to Catalog'}</DialogTitle>
-            <DialogDescription>{editing ? `Editing ${editing.label}` : 'Add a new vehicle to the wholesale catalog.'}</DialogDescription>
+            <DialogTitle>{editing ? t('title_edit_vehicle') : t('title_add_vehicle')}</DialogTitle>
+            <DialogDescription>{editing ? `${t('admin_editing')} ${editing.label}` : t('admin_add_catalog_desc')}</DialogDescription>
           </DialogHeader>
           <div className="space-y-3 pt-2">
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-sm font-medium">Model</label>
+                <label className="text-sm font-medium">{t('label_model')}</label>
                 <Input value={model} onChange={(e) => setModel(e.target.value)} placeholder="e.g. sultan" className="mt-1 font-mono" disabled={!!editing} />
               </div>
               <div>
-                <label className="text-sm font-medium">Label</label>
+                <label className="text-sm font-medium">{t('label_label')}</label>
                 <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Sultan" className="mt-1" />
               </div>
             </div>
             <div>
-              <label className="text-sm font-medium">Wholesale Price</label>
+              <label className="text-sm font-medium">{t('label_wholesale_cost')}</label>
               <Input type="number" value={wholesale} onChange={(e) => setWholesale(e.target.value)} placeholder="15000" className="mt-1" />
             </div>
             <div className="grid grid-cols-3 gap-3">
               <div>
-                <label className="text-sm font-medium">Tier</label>
+                <label className="text-sm font-medium">{t('label_tier')}</label>
                 <Select value={tier} onValueChange={setTier}>
                   <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -290,7 +291,7 @@ export default function AdminCatalogPage() {
                 </Select>
               </div>
               <div>
-                <label className="text-sm font-medium">Class</label>
+                <label className="text-sm font-medium">{t('label_class')}</label>
                 <Select value={vClass} onValueChange={setVClass}>
                   <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -299,7 +300,7 @@ export default function AdminCatalogPage() {
                 </Select>
               </div>
               <div>
-                <label className="text-sm font-medium">Type</label>
+                <label className="text-sm font-medium">{t('label_type')}</label>
                 <Select value={vType} onValueChange={setVType}>
                   <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -309,8 +310,8 @@ export default function AdminCatalogPage() {
               </div>
             </div>
             <div className="flex gap-2 pt-1">
-              <Button variant="outline" className="flex-1" onClick={() => setFormOpen(false)}>Cancel</Button>
-              <Button className="flex-1" onClick={handleSave}>{editing ? 'Save Changes' : 'Add Vehicle'}</Button>
+              <Button variant="outline" className="flex-1" onClick={() => setFormOpen(false)}>{t('btn_cancel')}</Button>
+              <Button className="flex-1" onClick={handleSave}>{editing ? t('btn_save_changes') : t('btn_add_vehicle')}</Button>
             </div>
           </div>
         </DialogContent>

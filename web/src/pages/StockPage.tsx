@@ -8,6 +8,7 @@ import { Separator } from '../components/ui/separator'
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog'
 import { fetchNui, formatCurrency, getVehicleImage } from '../lib/utils'
+import { t } from '../lib/locale'
 import { getCached, setCache, buildKey } from '../lib/cache'
 import { SkeletonCardGrid } from '../components/ui/skeleton'
 import { X, Search, Package, Truck, Clock, Car, Pencil, SlidersHorizontal, FileText, Gavel } from 'lucide-react'
@@ -188,7 +189,7 @@ export default function StockPage({ data, onClose }: Props) {
       {!data.embedded && (
         <div className="flex items-center justify-between p-5 pb-0">
           <div>
-            <h1 className="text-xl font-bold">Stock Inventory</h1>
+            <h1 className="text-xl font-bold">{t('title_stock_inventory')}</h1>
             <p className="text-sm text-muted-foreground">{data.dealershipName} &mdash; {stock.reduce((sum, s) => sum + (s.quantity || 1), 0)} vehicles</p>
           </div>
           <Button variant="ghost" size="icon" onClick={onClose}>
@@ -200,7 +201,7 @@ export default function StockPage({ data, onClose }: Props) {
       <div className="px-5 pt-3 flex gap-2">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input placeholder="Search vehicles..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" />
+          <Input placeholder={t('label_search_vehicles')} value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" />
         </div>
         <Button
           variant={showFilters || activeFilterCount > 0 ? 'default' : 'outline'}
@@ -221,18 +222,18 @@ export default function StockPage({ data, onClose }: Props) {
         <div className="px-5 pt-3 space-y-3">
           <div className="flex flex-wrap gap-3">
             <div className="flex-1 min-w-[140px]">
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">Sort By</p>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">{t('label_sort_by')}</p>
               <div className="flex flex-wrap gap-1">
-                {([['name_asc', 'A — Z'], ['name_desc', 'Z — A'], ['price_asc', 'Price Low'], ['price_desc', 'Price High']] as const).map(([value, label]) => (
+                {([['name_asc', t('label_sort_az')], ['name_desc', t('label_sort_za')], ['price_asc', t('label_sort_price_low')], ['price_desc', t('label_sort_price_high')]] as const).map(([value, label]) => (
                   <button key={value} onClick={() => setSortBy(value)} className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${sortBy === value ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>{label}</button>
                 ))}
               </div>
             </div>
             {classes.length > 0 && (
               <div className="flex-1 min-w-[140px]">
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">Class</p>
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">{t('label_class')}</p>
                 <div className="flex flex-wrap gap-1">
-                  <button onClick={() => setClassFilter('all')} className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${classFilter === 'all' ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>All</button>
+                  <button onClick={() => setClassFilter('all')} className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${classFilter === 'all' ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>{t('label_all')}</button>
                   {classes.map((cls) => (
                     <button key={cls} onClick={() => setClassFilter(cls)} className={`px-2 py-0.5 rounded text-[10px] font-medium capitalize transition-colors ${classFilter === cls ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>{cls}</button>
                   ))}
@@ -243,9 +244,9 @@ export default function StockPage({ data, onClose }: Props) {
           {maxRetailPrice > 0 && (
             <div>
               <div className="flex items-center justify-between mb-1.5">
-                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Price Range</p>
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{t('label_price_range')}</p>
                 {isPriceFiltered(priceRange) && (
-                  <button onClick={() => setPriceRange([0, maxRetailPrice])} className="text-[9px] text-accent hover:text-accent/80">Reset</button>
+                  <button onClick={() => setPriceRange([0, maxRetailPrice])} className="text-[9px] text-accent hover:text-accent/80">{t('label_reset')}</button>
                 )}
               </div>
               <div className="flex items-center gap-2 mb-1.5">
@@ -265,10 +266,10 @@ export default function StockPage({ data, onClose }: Props) {
         <Tabs value={stockTab} onValueChange={(v) => setStockTab(v as 'new' | 'used')}>
           <TabsList className="h-8 w-full grid grid-cols-2">
             <TabsTrigger value="new" className="text-xs gap-1.5">
-              New <span className="text-[10px] text-muted-foreground">({availableNew.length})</span>
+              {t('tab_new')} <span className="text-[10px] text-muted-foreground">({availableNew.length})</span>
             </TabsTrigger>
             <TabsTrigger value="used" className="text-xs gap-1.5">
-              Pre-owned <span className="text-[10px] text-muted-foreground">({preOwned.length})</span>
+              {t('tab_preowned')} <span className="text-[10px] text-muted-foreground">({preOwned.length})</span>
             </TabsTrigger>
           </TabsList>
         </Tabs>
@@ -278,7 +279,7 @@ export default function StockPage({ data, onClose }: Props) {
       {!loading && stockTab === 'new' && inTransit.length > 0 && (
         <div className="px-5 pt-3">
           <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1.5">
-            <Truck className="h-3.5 w-3.5" /> In Transit ({inTransit.length})
+            <Truck className="h-3.5 w-3.5" /> {t('label_in_transit')} ({inTransit.length})
           </p>
           <div className="space-y-1.5">
             {inTransit.map((item) => (
@@ -294,14 +295,14 @@ export default function StockPage({ data, onClose }: Props) {
                             <Badge variant="secondary" className="text-xs">x{item.quantity}</Badge>
                           )}
                         </div>
-                        <p className="text-xs text-muted-foreground capitalize">{item.class || 'Vehicle'}</p>
+                        <p className="text-xs text-muted-foreground capitalize">{item.class || t('label_vehicle')}</p>
                       </div>
                     </div>
                     <div className="text-right">
                       {item.delivered_at ? (
                         <p className="text-sm font-mono font-semibold text-amber-400">{getTimeRemaining(item.delivered_at)}</p>
                       ) : (
-                        <Badge variant="outline" className="text-muted-foreground">Awaiting Pickup</Badge>
+                        <Badge variant="outline" className="text-muted-foreground">{t('label_pending')}</Badge>
                       )}
                     </div>
                   </div>
@@ -328,18 +329,18 @@ export default function StockPage({ data, onClose }: Props) {
           ) : filtered.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
               <Package className="h-10 w-10 mb-2 opacity-50" />
-              <p>{search ? 'No matching vehicles found' : 'No vehicles in stock'}</p>
+              <p>{search ? t('empty_no_matching') : t('empty_no_vehicles')}</p>
             </div>
           ) : available.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
               <Package className="h-10 w-10 mb-2 opacity-50" />
-              <p>{stockTab === 'used' ? 'No pre-owned vehicles in stock' : 'No new vehicles in stock'}</p>
+              <p>{stockTab === 'used' ? t('empty_no_preowned') : t('empty_no_new')}</p>
             </div>
           ) : (
             <div>
               {inTransit.length > 0 && (
                 <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1.5">
-                  <Package className="h-3.5 w-3.5" /> Available ({available.length})
+                  <Package className="h-3.5 w-3.5" /> {t('label_available', String(available.length))}
                 </p>
               )}
               <div className="relative w-full" style={{ height: `${virtualizer.getTotalSize()}px` }}>
@@ -370,13 +371,13 @@ export default function StockPage({ data, onClose }: Props) {
                                     {item.is_used ? (
                                       <>
                                         {item.plate && (
-                                          <span className="text-[10px] bg-violet-500/20 text-violet-300 px-1 rounded shrink-0 font-mono" title={`Plate: ${item.plate}`}>
+                                          <span className="text-[10px] bg-violet-500/20 text-violet-300 px-1 rounded shrink-0 font-mono" title={`${t('label_plate')}: ${item.plate}`}>
                                             {item.plate}
                                           </span>
                                         )}
                                         {item.auction_id && (
-                                          <span className="text-[10px] bg-amber-500/20 text-amber-300 px-1 rounded shrink-0 flex items-center gap-0.5" title="Currently at auction">
-                                            <Gavel className="h-2.5 w-2.5" /> At Auction
+                                          <span className="text-[10px] bg-amber-500/20 text-amber-300 px-1 rounded shrink-0 flex items-center gap-0.5" title={t('label_at_auction')}>
+                                            <Gavel className="h-2.5 w-2.5" /> {t('label_at_auction')}
                                           </span>
                                         )}
                                       </>
@@ -391,14 +392,14 @@ export default function StockPage({ data, onClose }: Props) {
                                       </span>
                                     )}
                                   </div>
-                                  <p className="text-[11px] text-muted-foreground capitalize">{item.class || 'Vehicle'}</p>
+                                  <p className="text-[11px] text-muted-foreground capitalize">{item.class || t('label_vehicle')}</p>
                                 </div>
                               </div>
                               <div className="flex items-center gap-0.5 shrink-0">
                                 {item.is_used && (
                                   <button
                                     className="h-6 w-6 flex items-center justify-center rounded hover:bg-muted text-muted-foreground hover:text-foreground"
-                                    title="View PickleFAX report"
+                                    title={t('picklefax_title')}
                                     onClick={() => setPickleFaxId(item.id)}
                                   >
                                     <FileText className="h-3 w-3" />
@@ -407,7 +408,7 @@ export default function StockPage({ data, onClose }: Props) {
                                 {canManage && item.is_used && !item.auction_id && (
                                   <button
                                     className="h-6 w-6 flex items-center justify-center rounded hover:bg-amber-500/20 text-muted-foreground hover:text-amber-400"
-                                    title="List for auction"
+                                    title={t('title_list_for_auction')}
                                     onClick={() => setAuctionListingItem(item)}
                                   >
                                     <Gavel className="h-3 w-3" />
@@ -416,7 +417,7 @@ export default function StockPage({ data, onClose }: Props) {
                                 {canManage && !item.auction_id && (
                                   <button
                                     className="h-6 w-6 flex items-center justify-center rounded hover:bg-muted text-muted-foreground hover:text-foreground"
-                                    title="Edit retail price"
+                                    title={t('title_edit_retail_price')}
                                     onClick={() => { setEditingPrice(item); setPriceInput(String(item.retail_price)) }}
                                   >
                                     <Pencil className="h-3 w-3" />
@@ -427,11 +428,11 @@ export default function StockPage({ data, onClose }: Props) {
                             <div className="flex items-center justify-between mt-auto pt-2 border-t border-border">
                               <div className="flex gap-3">
                                 <div>
-                                  <p className="text-[10px] text-muted-foreground">Retail</p>
+                                  <p className="text-[10px] text-muted-foreground">{t('label_retail')}</p>
                                   <p className="text-sm font-bold text-accent">{formatCurrency(item.retail_price)}</p>
                                 </div>
                                 <div>
-                                  <p className="text-[10px] text-muted-foreground">Profit</p>
+                                  <p className="text-[10px] text-muted-foreground">{t('label_profit')}</p>
                                   <p className={`text-sm font-medium ${item.retail_price - item.wholesale_cost < 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
                                     {formatCurrency(item.retail_price - item.wholesale_cost)}
                                   </p>
@@ -441,7 +442,7 @@ export default function StockPage({ data, onClose }: Props) {
                                   const color = cond >= 80 ? 'text-emerald-400' : cond >= 50 ? 'text-amber-400' : 'text-rose-400'
                                   return (
                                     <div>
-                                      <p className="text-[10px] text-muted-foreground">Condition</p>
+                                      <p className="text-[10px] text-muted-foreground">{t('label_condition')}</p>
                                       <p className={`text-sm font-medium ${color}`}>{cond}%</p>
                                     </div>
                                   )
@@ -476,16 +477,16 @@ export default function StockPage({ data, onClose }: Props) {
       <Dialog open={!!editingPrice} onOpenChange={(open) => { if (!open) setEditingPrice(null) }}>
         <DialogContent onClose={() => setEditingPrice(null)}>
           <DialogHeader>
-            <DialogTitle>Edit Retail Price</DialogTitle>
+            <DialogTitle>{t('title_edit_retail_price')}</DialogTitle>
             <DialogDescription>{editingPrice?.vehicle_label || editingPrice?.vehicle_model}</DialogDescription>
           </DialogHeader>
           <div className="space-y-3 pt-2">
             <div>
-              <p className="text-xs text-muted-foreground mb-1">Wholesale Cost</p>
+              <p className="text-xs text-muted-foreground mb-1">{t('label_wholesale_cost')}</p>
               <p className="text-sm font-medium">{formatCurrency(editingPrice?.wholesale_cost || 0)}</p>
             </div>
             <div>
-              <label className="text-sm font-medium">Retail Price</label>
+              <label className="text-sm font-medium">{t('label_retail_price')}</label>
               <Input
                 type="number"
                 value={priceInput}
@@ -497,14 +498,14 @@ export default function StockPage({ data, onClose }: Props) {
                 const profit = parseInt(priceInput) - editingPrice.wholesale_cost
                 return (
                   <p className={`text-xs mt-1 ${profit < 0 ? 'text-rose-400' : 'text-muted-foreground'}`}>
-                    Profit: {formatCurrency(profit)} ({Math.round((profit / editingPrice.wholesale_cost) * 100)}%)
+                    {t('label_profit')}: {formatCurrency(profit)} ({Math.round((profit / editingPrice.wholesale_cost) * 100)}%)
                   </p>
                 )
               })()}
             </div>
             <div className="flex gap-2">
-              <Button variant="outline" className="flex-1" onClick={() => setEditingPrice(null)}>Cancel</Button>
-              <Button className="flex-1" onClick={handleSetPrice}>Save Price</Button>
+              <Button variant="outline" className="flex-1" onClick={() => setEditingPrice(null)}>{t('btn_cancel')}</Button>
+              <Button className="flex-1" onClick={handleSetPrice}>{t('btn_save_price')}</Button>
             </div>
           </div>
         </DialogContent>

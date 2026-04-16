@@ -1,6 +1,6 @@
 -- =============================================
 --  pickle_dealerships | modules/financing/server.lua
---  Vehicle financing system
+--  Vehicle financing system — per-dealership settings, create/pay/repo
 -- =============================================
 
 -- ─── Helpers ────────────────────────────────────────────────────────────────
@@ -34,6 +34,103 @@ local function AddDealershipBalance(dealershipId, amount)
     end
 end
 
+-- ─── Per-Dealership Financing Settings ──────────────────────────────────────
+
+local DEFAULT_SETTINGS = {
+    financingEnabled = true,
+    minDownPercent = 30,
+    interestRate = 5,
+    paymentIntervalHours = 24,
+    maxMissedPayments = 3,
+    installmentOptions = { 4, 8, 12 },
+}
+
+local function GetFinancingSettings(dealershipId)
+    local dealership = GetDealership(dealershipId)
+    if not dealership then return DEFAULT_SETTINGS end
+
+    -- Merge DB-stored settings over defaults
+    local settings = {}
+    for k, v in pairs(DEFAULT_SETTINGS) do settings[k] = v end
+
+    local stored = dealership.financing_settings
+    if stored then
+        if type(stored) == "string" then stored = json.decode(stored) end
+        if type(stored) == "table" then
+            for k, v in pairs(stored) do
+                if DEFAULT_SETTINGS[k] ~= nil then settings[k] = v end
+            end
+        end
+    end
+
+    -- Override with global Config as fallbacks (for legacy compat)
+    if not dealership.financing_settings then
+        settings.minDownPercent = (Config.FinancingMinDown or 0.30) * 100
+        settings.interestRate = (Config.FinancingInterest or 0.05) * 100
+        settings.paymentIntervalHours = Config.FinancingPaymentInterval or 24
+        settings.maxMissedPayments = Config.FinancingMaxMissed or 3
+    end
+
+    return settings
+end
+
+lib.callback.register("pickle_dealerships:getFinancingSettings", function(_, data)
+    local dealershipId = tonumber(data and data.dealershipId)
+    if not dealershipId then return nil end
+
+    local dealership = GetDealership(dealershipId)
+    if not dealership then return nil end
+
+    -- Check tier
+    if not HasTierFeature(dealership.tier, "financing") then return nil end
+
+    return GetFinancingSettings(dealershipId)
+end)
+
+lib.callback.register("pickle_dealerships:updateFinancingSettings", function(source, data)
+    local dealershipId = tonumber(data and data.dealershipId)
+    if not dealershipId then return false, "Invalid request." end
+
+    local role = GetPlayerDealershipRole(source, dealershipId)
+    if role ~= 'owner' and role ~= 'admin' then
+        return false, "Only owners can change financing settings."
+    end
+
+    local settings = data.settings
+    if type(settings) ~= "table" then return false, "Invalid settings." end
+
+    -- Validate ranges
+    local validated = {}
+    validated.financingEnabled = settings.financingEnabled ~= false
+    validated.minDownPercent = math.max(10, math.min(90, tonumber(settings.minDownPercent) or 30))
+    validated.interestRate = math.max(0, math.min(50, tonumber(settings.interestRate) or 5))
+    validated.paymentIntervalHours = math.max(1, math.min(168, tonumber(settings.paymentIntervalHours) or 24))
+    validated.maxMissedPayments = math.max(1, math.min(10, tonumber(settings.maxMissedPayments) or 3))
+
+    local opts = settings.installmentOptions
+    if type(opts) == "table" and #opts > 0 then
+        local validOpts = {}
+        for _, v in ipairs(opts) do
+            local n = tonumber(v)
+            if n and n >= 2 and n <= 48 then validOpts[#validOpts + 1] = n end
+        end
+        table.sort(validOpts)
+        validated.installmentOptions = #validOpts > 0 and validOpts or { 4, 8, 12 }
+    else
+        validated.installmentOptions = { 4, 8, 12 }
+    end
+
+    MySQL.update.await(
+        "UPDATE `dealerships` SET `financing_settings` = ? WHERE `id` = ?",
+        { json.encode(validated), dealershipId }
+    )
+
+    -- Refresh cache
+    UpdateDealershipCache(dealershipId, { financing_settings = json.encode(validated) })
+
+    return true
+end)
+
 -- ─── Create Financing ───────────────────────────────────────────────────────
 
 lib.callback.register("pickle_dealerships:createFinancing", function(source, data)
@@ -51,9 +148,13 @@ lib.callback.register("pickle_dealerships:createFinancing", function(source, dat
         return { success = false, message = "Dealership not found." }
     end
 
-    -- Check if financing feature is available for this tier
     if not HasTierFeature(dealership.tier, "financing") then
         return { success = false, message = "This dealership does not offer financing." }
+    end
+
+    local settings = GetFinancingSettings(dealershipId)
+    if not settings.financingEnabled then
+        return { success = false, message = "Financing is currently disabled at this dealership." }
     end
 
     local stockItem = GetStockItem(stockId)
@@ -69,12 +170,24 @@ lib.callback.register("pickle_dealerships:createFinancing", function(source, dat
     if stockItem.sold_at then
         return { success = false, message = "Vehicle has already been sold." }
     end
+    if stockItem.auction_id then
+        return { success = false, message = "Vehicle is currently at auction." }
+    end
+
+    -- Validate installment count is in the allowed options
+    local validInstallments = false
+    for _, opt in ipairs(settings.installmentOptions or { 4, 8, 12 }) do
+        if opt == installments then validInstallments = true break end
+    end
+    if not validInstallments then
+        return { success = false, message = "Invalid installment plan." }
+    end
 
     local price = stockItem.retail_price
-    local minDown = math.floor(price * Config.FinancingMinDown)
+    local minDown = math.floor(price * settings.minDownPercent / 100)
 
     if downPayment < minDown then
-        return { success = false, message = ("Minimum down payment is %s (%d%%)."):format(GetCurrencyString(minDown), Config.FinancingMinDown * 100) }
+        return { success = false, message = ("Minimum down payment is %s (%d%%)."):format(GetCurrencyString(minDown), settings.minDownPercent) }
     end
 
     local identifier = GetIdentifier(source)
@@ -82,7 +195,6 @@ lib.callback.register("pickle_dealerships:createFinancing", function(source, dat
         return { success = false, message = "Could not identify player." }
     end
 
-    -- Check player has funds for down payment
     local playerMoney = GetMoney(source, "bank")
     if playerMoney < downPayment then
         return { success = false, message = "Insufficient funds for down payment." }
@@ -90,68 +202,68 @@ lib.callback.register("pickle_dealerships:createFinancing", function(source, dat
 
     -- Calculate financing details
     local remainingBalance = price - downPayment
-    local interestRate = Config.FinancingInterest or 0.05
+    local interestRate = settings.interestRate / 100
     local totalWithInterest = remainingBalance + math.floor(remainingBalance * interestRate)
     local installmentAmount = math.ceil(totalWithInterest / installments)
 
     -- Deduct down payment
     RemoveMoney(source, downPayment, "bank")
 
-    -- Sales tax on full price
-    local salesTax = math.floor(price * Config.SalesTax)
-    local netDownPayment = downPayment - math.floor(downPayment * Config.SalesTax)
+    -- Sales tax
+    local salesTax = math.floor(price * (Config.SalesTax or 0))
+    local netDownPayment = downPayment - math.floor(downPayment * (Config.SalesTax or 0))
 
-    -- Credit down payment to dealership
     AddDealershipBalance(dealershipId, netDownPayment)
-
-    -- Mark stock as sold
     MarkStockSold(stockId, identifier, nil)
 
     -- Generate plate and register vehicle
     local plate = GeneratePlate()
-    AddOwnedVehicle(source, stockItem.vehicle_model)
+
+    -- For pre-owned, use properties
+    local isUsed = stockItem.is_used == 1 or stockItem.is_used == true
+    local properties = nil
+    if isUsed and stockItem.metadata then
+        properties = stockItem.metadata
+        if type(properties) == "string" then properties = json.decode(properties) end
+    end
+
+    if properties and plate then
+        if type(properties) == "table" then properties.plate = plate end
+        AddOwnedVehicleWithProps(source, stockItem.vehicle_model, plate, properties)
+    else
+        AddOwnedVehicle(source, stockItem.vehicle_model)
+    end
 
     -- Calculate next payment time
-    local paymentIntervalSeconds = (Config.FinancingPaymentInterval or 24) * 3600
+    local paymentIntervalSeconds = (settings.paymentIntervalHours or 24) * 3600
     local nextPaymentTimestamp = os.time() + paymentIntervalSeconds
 
-    -- Create financing record
     MySQL.insert(
         "INSERT INTO `dealership_financing` (`dealership_id`, `identifier`, `vehicle_plate`, `total_amount`, `amount_paid`, `installment_amount`, `interest_rate`, `next_payment`, `status`) VALUES (?, ?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?), 'active')",
         {
             dealershipId,
             identifier,
-            toupper(plate),
+            string.upper(plate),
             totalWithInterest,
             0,
             installmentAmount,
-            interestRate * 100,
+            settings.interestRate,
             nextPaymentTimestamp,
         }
     )
 
-    -- Ledger entries
     AddLedgerEntry(dealershipId, "sale", price, ("Financed vehicle: %s (down: %s)"):format(stockItem.vehicle_label or stockItem.vehicle_model, GetCurrencyString(downPayment)), identifier)
     if salesTax > 0 then
         AddLedgerEntry(dealershipId, "tax", -salesTax, ("Sales tax on financed %s"):format(stockItem.vehicle_label or stockItem.vehicle_model), nil)
     end
-
-    ShowNotification(source, ("You financed a %s! Down payment: %s. Monthly payment: %s for %d installments."):format(
-        stockItem.vehicle_label or stockItem.vehicle_model,
-        GetCurrencyString(downPayment),
-        GetCurrencyString(installmentAmount),
-        installments
-    ))
-
-    debugPrint(("[Financing] Player %s financed %s - Down: %s, Installments: %d x %s"):format(
-        identifier, stockItem.vehicle_model, GetCurrencyString(downPayment), installments, GetCurrencyString(installmentAmount)
-    ))
 
     return {
         success = true,
         plate = plate,
         model = stockItem.vehicle_model,
         label = stockItem.vehicle_label or stockItem.vehicle_model,
+        isUsed = isUsed,
+        properties = isUsed and stockItem.metadata or nil,
         downPayment = downPayment,
         installmentAmount = installmentAmount,
         totalInstallments = installments,
@@ -184,30 +296,25 @@ lib.callback.register("pickle_dealerships:makePayment", function(source, data)
     local paymentAmount = financing.installment_amount
     local remaining = financing.total_amount - financing.amount_paid
 
-    -- Cap payment at remaining balance
     if paymentAmount > remaining then
         paymentAmount = remaining
     end
 
-    -- Check player funds
     local playerMoney = GetMoney(source, "bank")
     if playerMoney < paymentAmount then
         return { success = false, message = "Insufficient funds for payment." }
     end
 
-    -- Deduct money
     RemoveMoney(source, paymentAmount, "bank")
 
-    -- Update financing record
     local newAmountPaid = financing.amount_paid + paymentAmount
     local fullyPaid = newAmountPaid >= financing.total_amount
 
-    -- Credit dealership (minus tax)
-    local netPayment = paymentAmount - math.floor(paymentAmount * Config.SalesTax)
+    local netPayment = paymentAmount - math.floor(paymentAmount * (Config.SalesTax or 0))
     AddDealershipBalance(financing.dealership_id, netPayment)
 
-    -- Calculate next payment timestamp
-    local paymentIntervalSeconds = (Config.FinancingPaymentInterval or 24) * 3600
+    local settings = GetFinancingSettings(financing.dealership_id)
+    local paymentIntervalSeconds = (settings.paymentIntervalHours or 24) * 3600
     local nextPaymentTimestamp = os.time() + paymentIntervalSeconds
 
     if fullyPaid then
@@ -216,17 +323,13 @@ lib.callback.register("pickle_dealerships:makePayment", function(source, data)
             { newAmountPaid, financingId }
         )
         AddLedgerEntry(financing.dealership_id, "financing_payment", paymentAmount, ("Final financing payment for plate %s"):format(financing.vehicle_plate), identifier)
-        ShowNotification(source, ("Congratulations! Your vehicle (%s) is fully paid off!"):format(financing.vehicle_plate))
     else
         MySQL.update(
             "UPDATE `dealership_financing` SET `amount_paid` = ?, `next_payment` = FROM_UNIXTIME(?), `missed_payments` = 0 WHERE `id` = ?",
             { newAmountPaid, nextPaymentTimestamp, financingId }
         )
         AddLedgerEntry(financing.dealership_id, "financing_payment", paymentAmount, ("Financing payment for plate %s"):format(financing.vehicle_plate), identifier)
-        ShowNotification(source, ("Payment of %s received. Remaining: %s"):format(GetCurrencyString(paymentAmount), GetCurrencyString(financing.total_amount - newAmountPaid)))
     end
-
-    debugPrint(("[Financing] Player %s paid %s on financing #%d"):format(identifier, GetCurrencyString(paymentAmount), financingId))
 
     return {
         success = true,
@@ -239,7 +342,7 @@ end)
 
 -- ─── Get My Financing ───────────────────────────────────────────────────────
 
-lib.callback.register("pickle_dealerships:getMyFinancing", function(source, data)
+lib.callback.register("pickle_dealerships:getMyFinancing", function(source)
     local identifier = GetIdentifier(source)
     if not identifier then return {} end
 
@@ -247,7 +350,6 @@ lib.callback.register("pickle_dealerships:getMyFinancing", function(source, data
         "SELECT f.*, d.name AS dealership_name FROM `dealership_financing` f LEFT JOIN `dealerships` d ON f.dealership_id = d.id WHERE f.identifier = ? AND f.status = 'active' ORDER BY f.created_at DESC",
         { identifier }
     )
-
     if not rows then return {} end
 
     local results = {}
@@ -273,10 +375,54 @@ lib.callback.register("pickle_dealerships:getMyFinancing", function(source, data
     return results
 end)
 
+-- ─── Owner: Get Dealership Agreements ──────────────────────────────────────
+
+lib.callback.register("pickle_dealerships:getDealershipFinancingAgreements", function(source, data)
+    local dealershipId = tonumber(data and data.dealershipId)
+    if not dealershipId then return {} end
+
+    local role = GetPlayerDealershipRole(source, dealershipId)
+    if role ~= 'owner' and role ~= 'admin' then return {} end
+
+    local rows = MySQL.query.await(
+        "SELECT * FROM `dealership_financing` WHERE `dealership_id` = ? ORDER BY `status` ASC, `created_at` DESC",
+        { dealershipId }
+    ) or {}
+
+    return rows
+end)
+
+-- ─── Owner: Forgive Loan ───────────────────────────────────────────────────
+
+lib.callback.register("pickle_dealerships:forgiveLoan", function(source, data)
+    local financingId = tonumber(data and data.financingId)
+    local dealershipId = tonumber(data and data.dealershipId)
+    if not financingId or not dealershipId then return false, "Invalid request." end
+
+    local role = GetPlayerDealershipRole(source, dealershipId)
+    if role ~= 'owner' and role ~= 'admin' then
+        return false, "Only owners can forgive loans."
+    end
+
+    local rows = MySQL.query.await(
+        "SELECT * FROM `dealership_financing` WHERE `id` = ? AND `dealership_id` = ? AND `status` = 'active' LIMIT 1",
+        { financingId, dealershipId }
+    )
+    if not rows or not rows[1] then return false, "Agreement not found." end
+
+    MySQL.update(
+        "UPDATE `dealership_financing` SET `status` = 'paid', `amount_paid` = `total_amount`, `missed_payments` = 0 WHERE `id` = ?",
+        { financingId }
+    )
+
+    AddLedgerEntry(dealershipId, "loan_forgiven", 0, ("Loan forgiven for plate %s by owner"):format(rows[1].vehicle_plate), GetIdentifier(source))
+
+    return true
+end)
+
 -- ─── Financing Check Thread (Overdue Payments) ─────────────────────────────
 
 CreateThread(function()
-    -- Wait for database to be ready
     Wait(10000)
 
     while true do
@@ -290,24 +436,21 @@ CreateThread(function()
         if rows then
             for i = 1, #rows do
                 local financing = rows[i]
+                local settings = GetFinancingSettings(financing.dealership_id)
+                local maxMissed = settings.maxMissedPayments or 3
                 local newMissed = financing.missed_payments + 1
 
-                if newMissed >= (Config.FinancingMaxMissed or 3) then
-                    -- Repossess the vehicle
+                if newMissed >= maxMissed then
                     MySQL.update(
                         "UPDATE `dealership_financing` SET `status` = 'repossessed', `missed_payments` = ? WHERE `id` = ?",
                         { newMissed, financing.id }
                     )
-
-                    -- Remove vehicle from player_vehicles
                     MySQL.update(
                         "DELETE FROM `player_vehicles` WHERE `plate` = ?",
                         { financing.vehicle_plate }
                     )
-
                     AddLedgerEntry(financing.dealership_id, "repossession", 0, ("Vehicle repossessed: plate %s after %d missed payments"):format(financing.vehicle_plate, newMissed), financing.identifier)
 
-                    -- Notify player if online
                     local playerSource = GetSourceFromIdentifier(financing.identifier)
                     if playerSource then
                         TriggerClientEvent("pickle_dealerships:vehicleRepossessed", playerSource, {
@@ -315,11 +458,8 @@ CreateThread(function()
                             missedPayments = newMissed,
                         })
                     end
-
-                    debugPrint(("[Financing] Vehicle %s repossessed from %s after %d missed payments"):format(financing.vehicle_plate, financing.identifier, newMissed))
                 else
-                    -- Increment missed payments and push next_payment forward
-                    local paymentIntervalSeconds = (Config.FinancingPaymentInterval or 24) * 3600
+                    local paymentIntervalSeconds = (settings.paymentIntervalHours or 24) * 3600
                     local nextPaymentTimestamp = now + paymentIntervalSeconds
 
                     MySQL.update(
@@ -327,19 +467,16 @@ CreateThread(function()
                         { newMissed, nextPaymentTimestamp, financing.id }
                     )
 
-                    -- Notify player if online
                     local playerSource = GetSourceFromIdentifier(financing.identifier)
                     if playerSource then
                         TriggerClientEvent("pickle_dealerships:financingReminder", playerSource, {
                             plate = financing.vehicle_plate,
                             missedPayments = newMissed,
-                            maxMissed = Config.FinancingMaxMissed or 3,
+                            maxMissed = maxMissed,
                             installmentAmount = financing.installment_amount,
                             remaining = financing.total_amount - financing.amount_paid,
                         })
                     end
-
-                    debugPrint(("[Financing] Player %s missed payment #%d on plate %s"):format(financing.identifier, newMissed, financing.vehicle_plate))
                 end
             end
         end

@@ -129,7 +129,7 @@ local function StartAuctionCamThread()
     end)
 end
 
-local function CleanupAuctionShowcase()
+local function CleanupAuctionShowcase(skipFadeIn)
     if not AuctionState then return end
 
     AuctionCamThread = nil
@@ -159,8 +159,10 @@ local function CleanupAuctionShowcase()
     AuctionState = nil
     ImmersiveShowcaseActive = false
 
-    DoScreenFadeIn(500)
-    while not IsScreenFadedIn() do Wait(0) end
+    if not skipFadeIn then
+        DoScreenFadeIn(500)
+        while not IsScreenFadedIn() do Wait(0) end
+    end
 end
 
 --- Swap the showcase to a different auction lot
@@ -257,7 +259,7 @@ function OpenAuctionShowcase(locationKey, opts)
 
     OpenNui('auction', {
         dealershipId = 0,
-        dealershipName = "Auction House",
+        dealershipName = _L("auction_house_name"),
         role = 'customer',
         tier = 1,
         location = locationKey or '',
@@ -294,8 +296,15 @@ RegisterNUICallback("getMyIdentifier", function(_, cb)
     cb(id)
 end)
 
-RegisterNUICallback("getActiveAuctions", function(_, cb)
-    local result = lib.callback.await("pickle_dealerships:getActiveAuctions", false)
+RegisterNUICallback("getMyCharacterName", function(_, cb)
+    local name = lib.callback.await("pickle_dealerships:getMyCharacterName", false)
+    cb(name or _L("fallback_player_name"))
+end)
+
+RegisterNUICallback("getActiveAuctions", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:getActiveAuctions", false, {
+        dealershipId = data and data.dealershipId or nil,
+    })
     cb(result or {})
 end)
 
@@ -309,19 +318,19 @@ RegisterNUICallback("placeBid", function(data, cb)
         auctionId = data.auctionId,
         amount = data.amount,
     })
-    if not ok then ShowNotification(result or "Bid failed.") end
+    if not ok then ShowNotification(result or _L("auction_bid_failed")) end
     cb({ success = ok, result = result })
 end)
 
 RegisterNUICallback("createAuction", function(data, cb)
     local ok, result = lib.callback.await("pickle_dealerships:createAuction", false, data)
-    if not ok then ShowNotification(result or "Failed to list.") end
+    if not ok then ShowNotification(result or _L("auction_list_failed")) end
     cb({ success = ok, auctionId = ok and result or nil, message = not ok and result or nil })
 end)
 
 RegisterNUICallback("cancelAuction", function(data, cb)
     local ok, result = lib.callback.await("pickle_dealerships:cancelAuction", false, { auctionId = data.auctionId })
-    if not ok then ShowNotification(result or "Cancel failed.") end
+    if not ok then ShowNotification(result or _L("auction_cancel_failed")) end
     cb({ success = ok, message = not ok and result or nil })
 end)
 
@@ -333,31 +342,36 @@ end)
 RegisterNUICallback("claimAuctionVehicle", function(data, cb)
     local ok, result = lib.callback.await("pickle_dealerships:claimAuctionVehicle", false, { auctionId = data.auctionId })
     if not ok then
-        ShowNotification(result or "Claim failed.")
+        ShowNotification(result or _L("auction_claim_failed"))
         cb({ success = false })
         return
     end
 
-    -- Spawn at seller dealership spawnPoint (need to resolve its location key)
-    local cfgs = DealershipConfigs or {}
-    local targetKey, targetCfg = nil, nil
-    for key, cfg in pairs(cfgs) do
-        if cfg.id == result.dealershipId then
-            targetKey, targetCfg = key, cfg
-            break
-        end
-    end
+    -- Resolve the seller dealership's spawn point via location key
+    local locationKey = result.dealershipLocation
+    local targetCfg = locationKey and DealershipConfigs[locationKey] or nil
 
-    CleanupAuctionShowcase()
+    -- Clean up showcase but keep screen faded out so we can teleport + spawn seamlessly
+    CleanupAuctionShowcase(true)
 
     if targetCfg and targetCfg.spawnPoint then
+        local sp = targetCfg.spawnPoint
+        local ped = PlayerPedId()
+
+        -- Teleport player to the dealership spawn point and load area
+        SetEntityCoords(ped, sp.x, sp.y, sp.z, false, false, false, true)
+        RequestCollisionAtCoord(sp.x, sp.y, sp.z)
+        Wait(500)
+
         local props = result.properties
         if type(props) == "string" then props = json.decode(props) end
-        SpawnPurchasedVehicle(result.model, targetCfg.spawnPoint, nil, nil, props, result.plate)
-        ShowNotification(("Claimed %s"):format(result.label or result.model))
+        SpawnPurchasedVehicle(result.model, sp, nil, nil, props, result.plate)
+        ShowNotification(_L("showroom_claimed", result.label or result.model))
     else
-        ShowNotification("Claimed — visit the seller dealership to pick up.")
+        ShowNotification(_L("auction_claimed_no_spawn"))
     end
+
+    DoScreenFadeIn(500)
     cb({ success = true })
 end)
 

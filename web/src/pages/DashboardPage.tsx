@@ -6,6 +6,7 @@ import { Button } from '../components/ui/button'
 import { ScrollArea } from '../components/ui/scroll-area'
 import { Separator } from '../components/ui/separator'
 import { fetchNui, formatCurrency } from '../lib/utils'
+import { t } from '../lib/locale'
 import { getCached, setCache, buildKey } from '../lib/cache'
 import { SkeletonStatGrid, SkeletonCardGrid } from '../components/ui/skeleton'
 import { X, TrendingUp, DollarSign, ShoppingCart, Users, Package, Award } from 'lucide-react'
@@ -14,13 +15,6 @@ import type { DealershipData, DashboardStats } from '../types'
 interface Props {
   data: DealershipData
   onClose: () => void
-}
-
-const tierLabels: Record<number, string> = {
-  1: 'Starter Lot',
-  2: 'Established',
-  3: 'Premium',
-  4: 'Enterprise',
 }
 
 export default function DashboardPage({ data, onClose }: Props) {
@@ -46,7 +40,7 @@ export default function DashboardPage({ data, onClose }: Props) {
             <div>
               <h1 className="text-xl font-bold">{data.dealershipName}</h1>
               <div className="flex items-center gap-2 mt-1">
-                <Badge variant="secondary">{tierLabels[data.tier] || `Tier ${data.tier}`}</Badge>
+                <Badge variant="secondary">{t(`tier_${data.tier}`)}</Badge>
                 <Badge variant="outline" className="capitalize">{data.role}</Badge>
               </div>
             </div>
@@ -62,30 +56,30 @@ export default function DashboardPage({ data, onClose }: Props) {
         {loading ? (
           <div className="space-y-5"><SkeletonStatGrid count={4} /><SkeletonCardGrid count={2} columns={2} /><SkeletonCardGrid count={2} columns={2} /></div>
         ) : !stats ? (
-          <div className="flex items-center justify-center h-48 text-muted-foreground">Failed to load statistics</div>
+          <div className="flex items-center justify-center h-48 text-muted-foreground">{t('failed_to_load_statistics')}</div>
         ) : (
           <div className="space-y-5">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <StatCard icon={<ShoppingCart className="h-4 w-4" />} label="Total Sales" value={stats.totalSales.toString()} />
-              <StatCard icon={<DollarSign className="h-4 w-4" />} label="Revenue" value={formatCurrency(stats.totalRevenue)} />
-              <StatCard icon={<TrendingUp className="h-4 w-4" />} label="Profit" value={formatCurrency(stats.totalProfit)} valueClassName={stats.totalProfit < 0 ? 'text-rose-400' : undefined} />
-              <StatCard icon={<Award className="h-4 w-4" />} label="Commission" value={formatCurrency(stats.totalCommission)} />
+              <StatCard icon={<ShoppingCart className="h-4 w-4" />} label={t('label_total_sales')} value={stats.totalSales.toString()} />
+              <StatCard icon={<DollarSign className="h-4 w-4" />} label={t('label_revenue')} value={formatCurrency(stats.totalRevenue)} />
+              <StatCard icon={<TrendingUp className="h-4 w-4" />} label={t('label_total_profit')} value={formatCurrency(stats.totalProfit)} valueClassName={stats.totalProfit < 0 ? 'text-rose-400' : undefined} />
+              <StatCard icon={<Award className="h-4 w-4" />} label={t('label_total_commission')} value={formatCurrency(stats.totalCommission)} />
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <Card>
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium text-muted-foreground">This Week</CardTitle>
+                  <CardTitle className="text-sm font-medium text-muted-foreground">{t('label_this_week')}</CardTitle>
                 </CardHeader>
                 <CardContent>
                   <div className="flex justify-between items-center">
                     <div>
                       <p className="text-2xl font-bold">{stats.salesThisWeek}</p>
-                      <p className="text-xs text-muted-foreground">sales</p>
+                      <p className="text-xs text-muted-foreground">{t('label_sales')}</p>
                     </div>
                     <div className="text-right">
                       <p className="text-2xl font-bold">{formatCurrency(stats.revenueThisWeek)}</p>
-                      <p className="text-xs text-muted-foreground">revenue</p>
+                      <p className="text-xs text-muted-foreground">{t('label_revenue_lower')}</p>
                     </div>
                   </div>
                 </CardContent>
@@ -94,11 +88,11 @@ export default function DashboardPage({ data, onClose }: Props) {
               {stats.topSeller && (
                 <Card>
                   <CardHeader className="pb-2">
-                    <CardTitle className="text-sm font-medium text-muted-foreground">Top Seller</CardTitle>
+                    <CardTitle className="text-sm font-medium text-muted-foreground">{t('label_top_seller')}</CardTitle>
                   </CardHeader>
                   <CardContent>
                     <p className="text-lg font-bold">{stats.topSeller.name}</p>
-                    <p className="text-sm text-muted-foreground">{stats.topSeller.sales} sales</p>
+                    <p className="text-sm text-muted-foreground">{stats.topSeller.sales} {t('label_sales')}</p>
                   </CardContent>
                 </Card>
               )}
@@ -108,7 +102,7 @@ export default function DashboardPage({ data, onClose }: Props) {
               <Card>
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                    <Package className="h-4 w-4" /> Stock
+                    <Package className="h-4 w-4" /> {t('tab_stock')}
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
@@ -123,7 +117,7 @@ export default function DashboardPage({ data, onClose }: Props) {
               <Card>
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                    <Users className="h-4 w-4" /> Employees
+                    <Users className="h-4 w-4" /> {t('tab_employees')}
                   </CardTitle>
                 </CardHeader>
                 <CardContent>

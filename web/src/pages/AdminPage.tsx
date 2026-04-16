@@ -14,6 +14,7 @@ import {
   Handshake, Building2, BookOpen, Trash2, Briefcase, Users,
 } from 'lucide-react'
 import { SkeletonList } from '../components/ui/skeleton'
+import { t } from '../lib/locale'
 import type { DealershipData, AdminDealership, DealershipMetadata, PositionData } from '../types'
 import AdminCatalogPage from './AdminCatalogPage'
 
@@ -160,7 +161,7 @@ export default function AdminPage({ data, onClose }: Props) {
     })
   }
 
-  const tierLabels: Record<number, string> = { 1: 'Starter', 2: 'Established', 3: 'Premium', 4: 'Enterprise' }
+  const tierLabelKeys: Record<number, string> = { 1: 'tier_1', 2: 'tier_2', 3: 'tier_3', 4: 'tier_4' }
 
   const renderContent = () => {
     // Positions tab
@@ -173,7 +174,7 @@ export default function AdminPage({ data, onClose }: Props) {
         <div className="flex flex-col h-full">
           <div className="p-4 pb-0">
             <h2 className="font-bold text-sm">{positionsDealership.name}</h2>
-            <p className="text-xs text-muted-foreground">Manage dealership positions</p>
+            <p className="text-xs text-muted-foreground">{t('title_manage_positions')}</p>
           </div>
           <Separator className="mt-3" />
           <ScrollArea className="flex-1 p-4">
@@ -186,9 +187,9 @@ export default function AdminPage({ data, onClose }: Props) {
                       <Briefcase className="h-4 w-4" />
                     </div>
                     <div>
-                      <p className="font-medium text-sm">Framework Job</p>
+                      <p className="font-medium text-sm">{t('admin_framework_job')}</p>
                       <p className="text-xs text-muted-foreground">
-                        {positionsDealership?.job ? <span className="font-mono">{positionsDealership.job}</span> : 'Required for hiring employees'}
+                        {positionsDealership?.job ? <span className="font-mono">{positionsDealership.job}</span> : t('admin_job_required')}
                       </p>
                     </div>
                   </div>
@@ -200,7 +201,7 @@ export default function AdminPage({ data, onClose }: Props) {
                       className="flex-1 font-mono text-sm"
                     />
                     <Button size="sm" onClick={handleSetJob} disabled={jobInput.trim() === (positionsDealership?.job || '')}>
-                      Save
+                      {t('btn_save')}
                     </Button>
                   </div>
                 </CardContent>
@@ -210,8 +211,8 @@ export default function AdminPage({ data, onClose }: Props) {
 
               <PositionRow
                 icon={<Crosshair className="h-4 w-4" />}
-                label="Dealership Center"
-                description="Main location for blips and zone"
+                label={t('label_dealership_center')}
+                description={t('label_blips_zone')}
                 placed={!!positionsMeta.coords}
                 coords={positionsMeta.coords}
                 onPlace={() => startGizmo('coords')}
@@ -219,8 +220,8 @@ export default function AdminPage({ data, onClose }: Props) {
               />
               <PositionRow
                 icon={<Car className="h-4 w-4" />}
-                label="Vehicle Spawn Point"
-                description="Where purchased vehicles spawn"
+                label={t('label_vehicle_spawn_point')}
+                description={t('label_purchased_spawn')}
                 placed={!!positionsMeta.spawnPoint}
                 coords={positionsMeta.spawnPoint}
                 onPlace={() => startGizmo('spawnPoint')}
@@ -228,8 +229,8 @@ export default function AdminPage({ data, onClose }: Props) {
               />
               <PositionRow
                 icon={<Store className="h-4 w-4" />}
-                label="Management Point"
-                description="Owner/manager menu access"
+                label={t('label_management_point')}
+                description={t('label_owner_manager_access')}
                 placed={!!interactions.management}
                 coords={interactions.management}
                 onPlace={() => startGizmo('interactionPoint', 'management')}
@@ -237,8 +238,8 @@ export default function AdminPage({ data, onClose }: Props) {
               />
               <PositionRow
                 icon={<Handshake className="h-4 w-4" />}
-                label="Sales Point"
-                description="Sales tablet access"
+                label={t('label_sales_point')}
+                description={t('label_view_vehicles_access')}
                 placed={!!interactions.sales}
                 coords={interactions.sales}
                 onPlace={() => startGizmo('interactionPoint', 'sales')}
@@ -246,8 +247,8 @@ export default function AdminPage({ data, onClose }: Props) {
               />
               <PositionRow
                 icon={<Car className="h-4 w-4" />}
-                label="Showroom Vehicle Position"
-                description="Where the showroom preview vehicle spawns"
+                label={t('label_showroom_position')}
+                description={t('label_showroom_preview')}
                 placed={!!interactions.showroom}
                 coords={interactions.showroom}
                 onPlace={() => startGizmo('interactionPoint', 'showroom')}
@@ -263,12 +264,12 @@ export default function AdminPage({ data, onClose }: Props) {
                         <ParkingSquare className="h-4 w-4 text-muted-foreground" />
                       </div>
                       <div>
-                        <p className="font-medium text-sm">Display Spots</p>
-                        <p className="text-xs text-muted-foreground">{spots.length} spot{spots.length !== 1 ? 's' : ''} placed</p>
+                        <p className="font-medium text-sm">{t('label_display_spots')}</p>
+                        <p className="text-xs text-muted-foreground">{t('admin_spots_placed', String(spots.length))}</p>
                       </div>
                     </div>
                     <Button size="sm" variant="outline" onClick={() => startGizmo('displaySpot')} className="gap-1">
-                      <Plus className="h-3 w-3" /> Add
+                      <Plus className="h-3 w-3" /> {t('admin_add')}
                     </Button>
                   </div>
                   {spots.length > 0 && (
@@ -276,7 +277,7 @@ export default function AdminPage({ data, onClose }: Props) {
                       {spots.map((spot, i) => (
                         <div key={i} className="flex items-center justify-between bg-muted/50 rounded px-3 py-2">
                           <span className="text-xs text-muted-foreground font-mono">
-                            Spot #{i + 1}: {spot.x.toFixed(1)}, {spot.y.toFixed(1)}, {spot.z.toFixed(1)}
+                            {t('admin_spot')} #{i + 1}: {spot.x.toFixed(1)}, {spot.y.toFixed(1)}, {spot.z.toFixed(1)}
                           </span>
                           <Button
                             variant="ghost"
@@ -303,14 +304,14 @@ export default function AdminPage({ data, onClose }: Props) {
                         <Users className="h-4 w-4 text-muted-foreground" />
                       </div>
                       <div>
-                        <p className="font-medium text-sm">NPC Spawn Points</p>
+                        <p className="font-medium text-sm">{t('label_npc_spawn_points')}</p>
                         <p className="text-xs text-muted-foreground">
-                          {npcSpawns.length} point{npcSpawns.length !== 1 ? 's' : ''} &mdash; where NPC customers appear
+                          {t('admin_npc_points_desc', String(npcSpawns.length))}
                         </p>
                       </div>
                     </div>
                     <Button size="sm" variant="outline" onClick={() => startGizmo('npcSpawnPoint')} className="gap-1">
-                      <Plus className="h-3 w-3" /> Add
+                      <Plus className="h-3 w-3" /> {t('admin_add')}
                     </Button>
                   </div>
                   {npcSpawns.length > 0 && (
@@ -349,13 +350,13 @@ export default function AdminPage({ data, onClose }: Props) {
     return (
       <div className="relative flex-1 flex flex-col overflow-hidden">
         <div className="p-4 flex justify-end">
-          <Button size="sm" onClick={() => setAction('create')} className="gap-1"><Plus className="h-4 w-4" /> Create Dealership</Button>
+          <Button size="sm" onClick={() => setAction('create')} className="gap-1"><Plus className="h-4 w-4" /> {t('admin_create_dealership')}</Button>
         </div>
         <ScrollArea className="flex-1 px-4 pb-4">
           {loading ? (
             <SkeletonList count={3} />
           ) : dealerships.length === 0 ? (
-            <div className="flex items-center justify-center h-48 text-muted-foreground">No dealerships found</div>
+            <div className="flex items-center justify-center h-48 text-muted-foreground">{t('admin_no_dealerships')}</div>
           ) : (
             <div className="space-y-2">
               {dealerships.map((d) => (
@@ -369,16 +370,16 @@ export default function AdminPage({ data, onClose }: Props) {
                           <Badge variant="secondary" className="text-[10px] capitalize">{d.type}</Badge>
                         </div>
                         <p className="text-xs text-muted-foreground mt-0.5">
-                          ID: {d.id} &mdash; {tierLabels[d.tier] || `Tier ${d.tier}`} &mdash; {formatCurrency(d.balance)}
+                          ID: {d.id} &mdash; {tierLabelKeys[d.tier] ? t(tierLabelKeys[d.tier]) : `${t('label_tier')} ${d.tier}`} &mdash; {formatCurrency(d.balance)}
                           {d.job && <> &mdash; <span className="font-mono">{d.job}</span></>}
                         </p>
-                        {d.owner_name && <p className="text-xs text-muted-foreground">Owner: {d.owner_name}</p>}
-                        {!d.owner_identifier && d.mode === 'player-owned' && <p className="text-xs text-orange-400">Unowned</p>}
-                        {!d.job && <p className="text-xs text-orange-400">No job assigned</p>}
+                        {d.owner_name && <p className="text-xs text-muted-foreground">{t('admin_owner')}: {d.owner_name}</p>}
+                        {!d.owner_identifier && d.mode === 'player-owned' && <p className="text-xs text-orange-400">{t('label_unowned')}</p>}
+                        {!d.job && <p className="text-xs text-orange-400">{t('label_no_job')}</p>}
                       </div>
                       <div className="flex gap-1">
-                        <Button variant="ghost" size="icon" className="h-7 w-7" title="Manage Positions" onClick={() => openPositions(d)}><MapPin className="h-3.5 w-3.5" /></Button>
-                        <Button variant="ghost" size="icon" className="h-7 w-7" title="Transfer" onClick={() => {
+                        <Button variant="ghost" size="icon" className="h-7 w-7" title={t('label_manage_positions')} onClick={() => openPositions(d)}><MapPin className="h-3.5 w-3.5" /></Button>
+                        <Button variant="ghost" size="icon" className="h-7 w-7" title={t('admin_transfer')} onClick={() => {
                           setSelected(d)
                           setAction('transfer')
                           setInputValue('')
@@ -388,10 +389,10 @@ export default function AdminPage({ data, onClose }: Props) {
                             setOnlinePlayers(Array.isArray(res) ? res : [])
                           })
                         }}><UserRoundCog className="h-3.5 w-3.5" /></Button>
-                        <Button variant="ghost" size="icon" className="h-7 w-7" title="Balance" onClick={() => { setSelected(d); setAction('balance'); setInputValue(String(d.balance)) }}><DollarSign className="h-3.5 w-3.5" /></Button>
-                        <Button variant="ghost" size="icon" className="h-7 w-7" title="Tier" onClick={() => { setSelected(d); setAction('tier'); setInputValue(String(d.tier)) }}><ArrowUpCircle className="h-3.5 w-3.5" /></Button>
-                        <Button variant="ghost" size="icon" className="h-7 w-7" title="Toggle Mode" onClick={() => { setSelected(d); setAction('toggle') }}><ToggleLeft className="h-3.5 w-3.5" /></Button>
-                        <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" title="Reset" onClick={() => { setSelected(d); setAction('reset') }}><RotateCcw className="h-3.5 w-3.5" /></Button>
+                        <Button variant="ghost" size="icon" className="h-7 w-7" title={t('label_balance')} onClick={() => { setSelected(d); setAction('balance'); setInputValue(String(d.balance)) }}><DollarSign className="h-3.5 w-3.5" /></Button>
+                        <Button variant="ghost" size="icon" className="h-7 w-7" title={t('label_tier')} onClick={() => { setSelected(d); setAction('tier'); setInputValue(String(d.tier)) }}><ArrowUpCircle className="h-3.5 w-3.5" /></Button>
+                        <Button variant="ghost" size="icon" className="h-7 w-7" title={t('admin_toggle_mode')} onClick={() => { setSelected(d); setAction('toggle') }}><ToggleLeft className="h-3.5 w-3.5" /></Button>
+                        <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" title={t('admin_reset')} onClick={() => { setSelected(d); setAction('reset') }}><RotateCcw className="h-3.5 w-3.5" /></Button>
                       </div>
                     </div>
                   </CardContent>
@@ -406,11 +407,11 @@ export default function AdminPage({ data, onClose }: Props) {
           <DialogContent onClose={() => { setAction(null); setSelected(null) }}>
             <DialogHeader>
               <DialogTitle>
-                {action === 'transfer' && 'Transfer Ownership'}
-                {action === 'balance' && 'Set Balance'}
-                {action === 'tier' && 'Set Tier'}
-                {action === 'reset' && 'Reset Dealership'}
-                {action === 'toggle' && 'Toggle Mode'}
+                {action === 'transfer' && t('admin_transfer_ownership')}
+                {action === 'balance' && t('admin_set_balance')}
+                {action === 'tier' && t('admin_set_tier')}
+                {action === 'reset' && t('admin_reset_dealership')}
+                {action === 'toggle' && t('admin_toggle_mode')}
               </DialogTitle>
               <DialogDescription>{selected?.name} (ID: {selected?.id})</DialogDescription>
             </DialogHeader>
@@ -419,25 +420,25 @@ export default function AdminPage({ data, onClose }: Props) {
                 <div className="space-y-3">
                   {/* Current owner display */}
                   <div>
-                    <p className="text-xs text-muted-foreground mb-1">Current Owner</p>
+                    <p className="text-xs text-muted-foreground mb-1">{t('label_current_owner')}</p>
                     {selected?.owner_identifier ? (
                       <div className="bg-muted rounded-md px-3 py-2">
-                        <p className="text-sm font-medium">{selected.owner_name || 'Unknown'}</p>
+                        <p className="text-sm font-medium">{selected.owner_name || t('label_unknown')}</p>
                         <p className="text-xs text-muted-foreground font-mono">{selected.owner_identifier}</p>
                       </div>
                     ) : (
-                      <p className="text-sm text-orange-400">No owner assigned</p>
+                      <p className="text-sm text-orange-400">{t('admin_no_owner')}</p>
                     )}
                   </div>
 
                   {/* Player search dropdown */}
                   <div>
-                    <label className="text-sm font-medium">Transfer To</label>
+                    <label className="text-sm font-medium">{t('label_transfer_to')}</label>
                     <div className="relative mt-1">
                       <Input
                         value={playerSearch}
                         onChange={(e) => { setPlayerSearch(e.target.value); setSelectedPlayer(null) }}
-                        placeholder="Search online players..."
+                        placeholder={t('admin_search_players')}
                       />
                       {playerSearch && !selectedPlayer && (
                         <div className="absolute z-10 top-full mt-1 left-0 right-0 bg-popover border border-border rounded-md shadow-md max-h-40 overflow-auto">
@@ -455,33 +456,33 @@ export default function AdminPage({ data, onClose }: Props) {
                             ))
                           }
                           {onlinePlayers.filter((p) => p.name.toLowerCase().includes(playerSearch.toLowerCase()) || p.identifier.toLowerCase().includes(playerSearch.toLowerCase())).length === 0 && (
-                            <p className="px-3 py-2 text-xs text-muted-foreground">No players found</p>
+                            <p className="px-3 py-2 text-xs text-muted-foreground">{t('empty_no_players')}</p>
                           )}
                         </div>
                       )}
                     </div>
                     {selectedPlayer && (
                       <p className="text-xs text-muted-foreground mt-1">
-                        Transferring to: <span className="font-medium text-foreground">{selectedPlayer.name}</span> <span className="font-mono">({selectedPlayer.identifier})</span>
+                        {t('admin_transferring_to')}: <span className="font-medium text-foreground">{selectedPlayer.name}</span> <span className="font-mono">({selectedPlayer.identifier})</span>
                       </p>
                     )}
                   </div>
                 </div>
               )}
               {action === 'balance' && (
-                <div><label className="text-sm font-medium">New Balance</label><Input type="number" value={inputValue} onChange={(e) => setInputValue(e.target.value)} className="mt-1" /></div>
+                <div><label className="text-sm font-medium">{t('label_new_balance')}</label><Input type="number" value={inputValue} onChange={(e) => setInputValue(e.target.value)} className="mt-1" /></div>
               )}
               {action === 'tier' && (
-                <div><label className="text-sm font-medium">Tier</label>
+                <div><label className="text-sm font-medium">{t('label_tier')}</label>
                   <Select value={inputValue} onValueChange={setInputValue}><SelectTrigger className="mt-1"><SelectValue /></SelectTrigger><SelectContent>
-                    <SelectItem value="1">1 - Starter Lot</SelectItem><SelectItem value="2">2 - Established</SelectItem><SelectItem value="3">3 - Premium</SelectItem><SelectItem value="4">4 - Enterprise</SelectItem>
+                    <SelectItem value="1">1 - {t('tier_1')}</SelectItem><SelectItem value="2">2 - {t('tier_2')}</SelectItem><SelectItem value="3">3 - {t('tier_3')}</SelectItem><SelectItem value="4">4 - {t('tier_4')}</SelectItem>
                   </SelectContent></Select></div>
               )}
-              {action === 'reset' && <p className="text-sm text-destructive">This will clear all stock, employees, and reset the dealership. Cannot be undone.</p>}
-              {action === 'toggle' && <p className="text-sm">Toggle between <strong>public</strong> and <strong>player-owned</strong>. Currently: <strong>{selected?.mode}</strong></p>}
+              {action === 'reset' && <p className="text-sm text-destructive">{t('confirm_reset_warning')}</p>}
+              {action === 'toggle' && <p className="text-sm">{t('confirm_toggle_mode')} {t('admin_currently')}: <strong>{selected?.mode}</strong></p>}
               <div className="flex gap-2">
-                <Button variant="outline" className="flex-1" onClick={() => { setAction(null); setSelected(null) }}>Cancel</Button>
-                <Button className="flex-1" variant={action === 'reset' ? 'destructive' : 'default'} onClick={handleAction} disabled={action === 'transfer' && !selectedPlayer}>Confirm</Button>
+                <Button variant="outline" className="flex-1" onClick={() => { setAction(null); setSelected(null) }}>{t('btn_cancel')}</Button>
+                <Button className="flex-1" variant={action === 'reset' ? 'destructive' : 'default'} onClick={handleAction} disabled={action === 'transfer' && !selectedPlayer}>{t('btn_confirm')}</Button>
               </div>
             </div>
           </DialogContent>
@@ -490,24 +491,24 @@ export default function AdminPage({ data, onClose }: Props) {
         <Dialog open={action === 'create'} onOpenChange={(open) => { if (!open) setAction(null) }}>
           <DialogContent onClose={() => setAction(null)}>
             <DialogHeader>
-              <DialogTitle>Create Dealership</DialogTitle>
-              <DialogDescription>Create a new dealership location.</DialogDescription>
+              <DialogTitle>{t('title_create_dealership')}</DialogTitle>
+              <DialogDescription>{t('admin_create_desc')}</DialogDescription>
             </DialogHeader>
             <div className="space-y-4 pt-2">
-              <div><label className="text-sm font-medium">Dealership Name</label><Input value={createLabel} onChange={(e) => setCreateLabel(e.target.value)} placeholder="e.g. Downtown Motors" className="mt-1" maxLength={50} /></div>
+              <div><label className="text-sm font-medium">{t('label_dealership_name')}</label><Input value={createLabel} onChange={(e) => setCreateLabel(e.target.value)} placeholder="e.g. Downtown Motors" className="mt-1" maxLength={50} /></div>
               <div className="grid grid-cols-2 gap-3">
-                <div><label className="text-sm font-medium">Mode</label>
+                <div><label className="text-sm font-medium">{t('label_mode')}</label>
                   <Select value={createMode} onValueChange={setCreateMode}><SelectTrigger className="mt-1"><SelectValue /></SelectTrigger><SelectContent>
-                    <SelectItem value="player-owned">Player Owned</SelectItem><SelectItem value="public">Public</SelectItem>
+                    <SelectItem value="player-owned">{t('label_player_owned')}</SelectItem><SelectItem value="public">{t('label_public')}</SelectItem>
                   </SelectContent></Select></div>
-                <div><label className="text-sm font-medium">Type</label>
+                <div><label className="text-sm font-medium">{t('label_type')}</label>
                   <Select value={createType} onValueChange={setCreateType}><SelectTrigger className="mt-1"><SelectValue /></SelectTrigger><SelectContent>
-                    <SelectItem value="car">Car</SelectItem><SelectItem value="boat">Boat</SelectItem><SelectItem value="air">Aircraft</SelectItem><SelectItem value="mixed">Mixed</SelectItem>
+                    <SelectItem value="car">{t('label_car')}</SelectItem><SelectItem value="boat">{t('label_boat')}</SelectItem><SelectItem value="air">{t('label_aircraft')}</SelectItem><SelectItem value="mixed">{t('label_mixed')}</SelectItem>
                   </SelectContent></Select></div>
               </div>
               <div className="flex gap-2">
-                <Button variant="outline" className="flex-1" onClick={() => setAction(null)}>Cancel</Button>
-                <Button className="flex-1" onClick={handleAction}><Plus className="h-4 w-4" /> Create</Button>
+                <Button variant="outline" className="flex-1" onClick={() => setAction(null)}>{t('btn_cancel')}</Button>
+                <Button className="flex-1" onClick={handleAction}><Plus className="h-4 w-4" /> {t('btn_create')}</Button>
               </div>
             </div>
           </DialogContent>
@@ -522,21 +523,21 @@ export default function AdminPage({ data, onClose }: Props) {
       <div className="w-48 border-r border-border flex flex-col shrink-0">
         <div className="p-4">
           <h2 className="font-bold text-sm flex items-center gap-2">
-            <Settings className="h-4 w-4 text-accent" /> Admin Panel
+            <Settings className="h-4 w-4 text-accent" /> {t('admin_panel')}
           </h2>
         </div>
         <Separator />
         <nav className="p-2 space-y-0.5 flex-1">
-          <SidebarButton active={tab === 'dealerships'} icon={<Building2 className="h-4 w-4" />} label="Dealerships" onClick={() => setTab('dealerships')} />
-          <SidebarButton active={tab === 'catalog'} icon={<BookOpen className="h-4 w-4" />} label="Vehicle Catalog" onClick={() => setTab('catalog')} />
+          <SidebarButton active={tab === 'dealerships'} icon={<Building2 className="h-4 w-4" />} label={t('admin_dealerships')} onClick={() => setTab('dealerships')} />
+          <SidebarButton active={tab === 'catalog'} icon={<BookOpen className="h-4 w-4" />} label={t('admin_vehicle_catalog')} onClick={() => setTab('catalog')} />
           {positionsDealership && (
             <>
               <Separator className="my-2" />
-              <p className="px-3 text-[10px] text-muted-foreground uppercase tracking-wider mb-1">Selected</p>
+              <p className="px-3 text-[10px] text-muted-foreground uppercase tracking-wider mb-1">{t('admin_selected')}</p>
               <SidebarButton
                 active={tab === 'positions'}
                 icon={<MapPin className="h-4 w-4" />}
-                label="Positions"
+                label={t('admin_positions')}
                 onClick={() => setTab('positions')}
               />
             </>
@@ -545,7 +546,7 @@ export default function AdminPage({ data, onClose }: Props) {
         <Separator />
         <div className="p-2">
           <Button variant="ghost" size="sm" className="w-full justify-start gap-2 text-muted-foreground" onClick={onClose}>
-            <X className="h-4 w-4" /> Close
+            <X className="h-4 w-4" /> {t('btn_close')}
           </Button>
         </div>
       </div>
@@ -602,7 +603,7 @@ function PositionRow({ icon, label, description, placed, coords, onPlace, onRemo
           </div>
           <div className="flex gap-1">
             <Button size="sm" variant={placed ? 'outline' : 'default'} onClick={onPlace} className="gap-1">
-              <MapPin className="h-3 w-3" /> {placed ? 'Replace' : 'Place'}
+              <MapPin className="h-3 w-3" /> {placed ? t('admin_replace') : t('admin_place')}
             </Button>
             {placed && (
               <Button size="sm" variant="ghost" className="text-destructive" onClick={onRemove}>

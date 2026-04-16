@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef } from 'react'
 import { Button } from '../components/ui/button'
 import { fetchNui } from '../lib/utils'
 import { useNuiEvent } from '../hooks/useNuiEvent'
+import { t } from '../lib/locale'
 import { Camera, X, Save, RefreshCw } from 'lucide-react'
 import type { DealershipData } from '../types'
 
@@ -233,7 +234,7 @@ export default function PhotoBoothPage({ data }: Props) {
       <div className="fixed inset-0 flex items-center justify-center bg-black/80">
         <div className="text-center">
           <div className="h-8 w-8 border-2 border-white/30 border-t-white rounded-full animate-spin mx-auto mb-3" />
-          <p className="text-white/70 text-sm">Processing image...</p>
+          <p className="text-white/70 text-sm">{t('photo_processing')}</p>
         </div>
       </div>
     )
@@ -244,7 +245,7 @@ export default function PhotoBoothPage({ data }: Props) {
       <div className="fixed inset-0 flex flex-col items-center justify-center bg-black/80">
         <div className="mb-4">
           <p className="text-white text-lg font-semibold text-center">{data.label || data.model}</p>
-          <p className="text-white/60 text-sm text-center">Preview</p>
+          <p className="text-white/60 text-sm text-center">{t('photo_preview')}</p>
         </div>
 
         <div className="relative max-w-[70vw] max-h-[60vh] rounded-lg overflow-hidden border border-white/20">
@@ -258,14 +259,14 @@ export default function PhotoBoothPage({ data }: Props) {
             onClick={handleRetake}
             disabled={saving}
           >
-            <RefreshCw className="h-4 w-4" /> Retake
+            <RefreshCw className="h-4 w-4" /> {t('photo_retake')}
           </Button>
           <Button
             className="gap-2"
             onClick={handleSave}
             disabled={saving}
           >
-            <Save className="h-4 w-4" /> {saving ? 'Saving...' : 'Save Photo'}
+            <Save className="h-4 w-4" /> {saving ? t('saving') : t('photo_save')}
           </Button>
         </div>
       </div>
@@ -350,23 +351,23 @@ function PhotoHud({ label, subtitle, onCapture, onCancel }: {
 
       {/* Controls — pushed to center via flex */}
       <div className="flex-1 flex items-center justify-center gap-4 text-xs uppercase tracking-wide text-white/50">
-        <span className="flex items-center"><Kbd>WASD</Kbd> MOVE</span>
-        <span className="flex items-center"><Kbd>SHIFT</Kbd> UP</span>
-        <span className="flex items-center"><Kbd>CTRL</Kbd> DOWN</span>
-        <span className="flex items-center text-white/30">DRAG TO PAN</span>
+        <span className="flex items-center"><Kbd>WASD</Kbd> {t('photo_move')}</span>
+        <span className="flex items-center"><Kbd>SHIFT</Kbd> {t('photo_up')}</span>
+        <span className="flex items-center"><Kbd>CTRL</Kbd> {t('photo_down')}</span>
+        <span className="flex items-center text-white/30">{t('photo_drag_to_pan')}</span>
       </div>
 
       {/* Actions */}
       <div className="flex items-center gap-1.5 shrink-0">
         <Button className="h-8 gap-1.5 px-3 text-xs" onClick={onCapture}>
-          <Camera className="h-3.5 w-3.5" /> Capture
+          <Camera className="h-3.5 w-3.5" /> {t('photo_capture')}
         </Button>
         <Button
           variant="ghost"
           size="icon"
           className="h-8 w-8 text-zinc-500 hover:bg-zinc-800 hover:text-white"
           onClick={onCancel}
-          title="Cancel"
+          title={t('btn_cancel')}
         >
           <X className="h-3.5 w-3.5" />
         </Button>

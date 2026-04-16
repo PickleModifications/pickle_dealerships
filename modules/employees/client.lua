@@ -87,5 +87,5 @@ RegisterNUICallback("getNearbyPlayers", function(data, cb)
 end)
 
 RegisterNetEvent("pickle_dealerships:customerArrived", function(data)
-    ShowNotification("A customer has arrived at the dealership!")
+    ShowNotification(_L("employee_customer_arrived"))
 end)

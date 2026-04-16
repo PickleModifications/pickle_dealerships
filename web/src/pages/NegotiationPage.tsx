@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Button } from '../components/ui/button'
 import { fetchNui } from '../lib/utils'
+import { t } from '../lib/locale'
 import { X, UserX, Car } from 'lucide-react'
 import type { NPCProfile } from '../types'
 
@@ -68,14 +69,14 @@ export default function NegotiationPage({ profile, greeting, onClose }: Props) {
             onClick={handlePresent}
             disabled={transitioning}
           >
-            <Car className="h-4 w-4" /> {transitioning ? 'Loading...' : 'Present Vehicle'}
+            <Car className="h-4 w-4" /> {transitioning ? t('loading') : t('negotiation_present_vehicle')}
           </Button>
           <Button
             variant="ghost"
             className="gap-2 text-white/50 hover:text-white"
             onClick={handleDismiss}
           >
-            <UserX className="h-4 w-4" /> Dismiss
+            <UserX className="h-4 w-4" /> {t('negotiation_dismiss')}
           </Button>
         </div>
       </div>

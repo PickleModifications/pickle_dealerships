@@ -9,7 +9,7 @@ local isAtPickup = false
 ---@param data table Mission data from server
 RegisterNetEvent('pickle_dealerships:startDeliveryMission', function(data)
     if activeMission then
-        ShowNotification('You already have an active delivery.', 'error')
+        ShowNotification(_L('delivery_active'), 'error')
         return
     end
 
@@ -36,10 +36,10 @@ RegisterNetEvent('pickle_dealerships:startDeliveryMission', function(data)
     SetBlipRoute(pickupBlip, true)
     SetBlipRouteColour(pickupBlip, 5)
     BeginTextCommandSetBlipName('STRING')
-    AddTextComponentSubstringPlayerName('Delivery Pickup')
+    AddTextComponentSubstringPlayerName(_L('blip_delivery_pickup'))
     EndTextCommandSetBlipName(pickupBlip)
 
-    ShowNotification('Delivery mission started! Head to the pickup location.', 'info')
+    ShowNotification(_L('delivery_mission_started'), 'info')
 
     -- Start mission monitoring thread
     CreateThread(MissionMonitorLoop)
@@ -52,7 +52,7 @@ function MissionMonitorLoop()
 
         if activeMission.phase == 'pickup' then
             -- Draw mission HUD text
-            DrawMissionText('~y~DELIVERY~w~ - Drive to the ~b~pickup~w~ location')
+            DrawMissionText(_L('hud_delivery_drive_to_pickup'))
 
             -- Check proximity to pickup point
             local pickupCoords = activeMission.route.pickup
@@ -64,7 +64,7 @@ function MissionMonitorLoop()
             end
 
         elseif activeMission.phase == 'transport' then
-            DrawMissionText('~y~DELIVERY~w~ - Transport vehicles to the ~g~dealership~w~')
+            DrawMissionText(_L('hud_delivery_transport'))
 
             -- Check proximity to dealership
             local dealerCoords = activeMission.dealershipCoords
@@ -91,7 +91,7 @@ end
 function OnArriveAtPickup()
     if not activeMission then return end
 
-    ShowNotification('Loading vehicles onto trailer...', 'info')
+    ShowNotification(_L('delivery_loading'), 'info')
 
     -- Remove pickup blip
     if pickupBlip then
@@ -143,13 +143,13 @@ function OnArriveAtPickup()
     SetBlipRoute(missionBlip, true)
     SetBlipRouteColour(missionBlip, 2)
     BeginTextCommandSetBlipName('STRING')
-    AddTextComponentSubstringPlayerName('Dealership Dropoff')
+    AddTextComponentSubstringPlayerName(_L('blip_dealership_dropoff'))
     EndTextCommandSetBlipName(missionBlip)
 
     -- Set waypoint to dealership
     SetNewWaypoint(dealerCoords.x, dealerCoords.y)
 
-    ShowNotification('Vehicles loaded! Drive the trailer back to the dealership.', 'success')
+    ShowNotification(_L('delivery_vehicles_loaded'), 'success')
 end
 
 --- Called when the player arrives at the dealership with the trailer
@@ -175,14 +175,14 @@ function OnArriveAtDealership()
         end
     end
 
-    ShowNotification('Delivery arriving...', 'info')
+    ShowNotification(_L('delivery_arriving'), 'info')
 
     -- Complete the delivery via server
     local success, err = lib.callback.await('pickle_dealerships:completeDelivery', false, activeMission.deliveryId)
     if success then
-        ShowNotification('Delivery complete!', 'success')
+        ShowNotification(_L('delivery_complete_client'), 'success')
     else
-        ShowNotification(err or 'Failed to complete delivery.', 'error')
+        ShowNotification(err or _L('delivery_complete_failed'), 'error')
     end
 
     CleanupMission()
@@ -224,7 +224,7 @@ RegisterNetEvent('pickle_dealerships:cancelDelivery', function()
     if not activeMission then return end
 
     lib.callback.await('pickle_dealerships:failDelivery', false, activeMission.deliveryId)
-    ShowNotification('Delivery mission cancelled.', 'error')
+    ShowNotification(_L('delivery_cancelled'), 'error')
     CleanupMission()
 end)
 
@@ -245,7 +245,7 @@ AddEventHandler('gameEventTriggered', function(name, args)
             SetTimeout(5000, function()
                 if activeMission then
                     lib.callback.await('pickle_dealerships:failDelivery', false, activeMission.deliveryId)
-                    ShowNotification('Delivery failed - you died.', 'error')
+                    ShowNotification(_L('delivery_failed_died'), 'error')
                     CleanupMission()
                 end
             end)

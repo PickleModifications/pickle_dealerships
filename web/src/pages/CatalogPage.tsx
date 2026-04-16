@@ -8,6 +8,7 @@ import { Separator } from '../components/ui/separator'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog'
 import { fetchNui, formatCurrency, getVehicleImage } from '../lib/utils'
 import { SkeletonCardGrid } from '../components/ui/skeleton'
+import { t } from '../lib/locale'
 import { X, Search, ShoppingCart, Truck, Lock, Loader2, Car, SlidersHorizontal } from 'lucide-react'
 import VehicleImg from '../components/VehicleImg'
 import type { DealershipData, CatalogItem } from '../types'
@@ -147,8 +148,8 @@ export default function CatalogPage({ data, onClose }: Props) {
       {!data.embedded && (
         <div className="flex items-center justify-between p-5 pb-0">
           <div>
-            <h1 className="text-xl font-bold">Wholesale Catalog</h1>
-            <p className="text-sm text-muted-foreground">Order vehicles for your dealership</p>
+            <h1 className="text-xl font-bold">{t('title_wholesale_catalog')}</h1>
+            <p className="text-sm text-muted-foreground">{t('title_catalog_desc')}</p>
           </div>
           <Button variant="ghost" size="icon" onClick={onClose}>
             <X className="h-5 w-5" />
@@ -159,7 +160,7 @@ export default function CatalogPage({ data, onClose }: Props) {
       <div className="px-5 pt-3 flex gap-2">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input placeholder="Search vehicles..." value={search} onChange={(e) => handleSearchChange(e.target.value)} className="pl-9" />
+          <Input placeholder={t('label_search_vehicles')} value={search} onChange={(e) => handleSearchChange(e.target.value)} className="pl-9" />
         </div>
         <Button
           variant={showFilters || activeFilterCount > 0 ? 'default' : 'outline'}
@@ -180,9 +181,9 @@ export default function CatalogPage({ data, onClose }: Props) {
         <div className="px-5 pt-3 flex flex-wrap gap-3">
           {classes.length > 0 && (
             <div className="flex-1 min-w-[140px]">
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">Class</p>
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">{t('label_class')}</p>
               <div className="flex flex-wrap gap-1">
-                <button onClick={() => handleClassChange('all')} className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${classFilter === 'all' ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>All</button>
+                <button onClick={() => handleClassChange('all')} className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${classFilter === 'all' ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>{t('label_all')}</button>
                 {classes.map((c) => (
                   <button key={c} onClick={() => handleClassChange(c)} className={`px-2 py-0.5 rounded text-[10px] font-medium capitalize transition-colors ${classFilter === c ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>{c}</button>
                 ))}
@@ -190,9 +191,9 @@ export default function CatalogPage({ data, onClose }: Props) {
             </div>
           )}
           <div className="flex-1 min-w-[140px]">
-            <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">Tier</p>
+            <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">{t('label_tier')}</p>
             <div className="flex flex-wrap gap-1">
-              <button onClick={() => handleTierChange('all')} className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${tierFilter === 'all' ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>All</button>
+              <button onClick={() => handleTierChange('all')} className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${tierFilter === 'all' ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>{t('label_all')}</button>
               {tierOrder.map((t) => (
                 <button key={t} onClick={() => handleTierChange(t)} className={`px-2 py-0.5 rounded text-[10px] font-medium capitalize transition-colors ${tierFilter === t ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>{t}</button>
               ))}
@@ -208,7 +209,7 @@ export default function CatalogPage({ data, onClose }: Props) {
           {loading ? (
             <SkeletonCardGrid count={6} columns={3} />
           ) : items.length === 0 ? (
-            <div className="flex items-center justify-center h-48 text-muted-foreground">No vehicles found</div>
+            <div className="flex items-center justify-center h-48 text-muted-foreground">{t('empty_no_matching')}</div>
           ) : (
             <div className="relative w-full" style={{ height: `${virtualizer.getTotalSize()}px` }}>
               {virtualizer.getVirtualItems().map((virtualRow) => {
@@ -246,11 +247,11 @@ export default function CatalogPage({ data, onClose }: Props) {
                               <p className="font-bold text-sm">{formatCurrency(item.wholesale)}</p>
                               {locked ? (
                                 <Badge variant="outline" className="gap-1 text-muted-foreground">
-                                  <Lock className="h-3 w-3" /> Locked
+                                  <Lock className="h-3 w-3" /> {t('catalog_locked')}
                                 </Badge>
                               ) : (
                                 <Button size="sm" onClick={() => { setOrdering(item); setRetailPrice(String(Math.round(item.wholesale * 1.3))) }}>
-                                  <ShoppingCart className="h-3 w-3" /> Order
+                                  <ShoppingCart className="h-3 w-3" /> {t('btn_order')}
                                 </Button>
                               )}
                             </div>
@@ -273,31 +274,31 @@ export default function CatalogPage({ data, onClose }: Props) {
         <Dialog open={!!ordering} onOpenChange={(open) => !open && setOrdering(null)}>
           <DialogContent onClose={() => setOrdering(null)}>
             <DialogHeader>
-              <DialogTitle>Order {ordering?.label}</DialogTitle>
-              <DialogDescription>Set the retail price and quantity for this order.</DialogDescription>
+              <DialogTitle>{t('title_order_vehicle', ordering?.label || '')}</DialogTitle>
+              <DialogDescription>{t('title_order_desc')}</DialogDescription>
             </DialogHeader>
             <div className="space-y-4 pt-2">
               <div>
-                <p className="text-sm text-muted-foreground mb-1">Wholesale Cost</p>
+                <p className="text-sm text-muted-foreground mb-1">{t('label_wholesale_cost')}</p>
                 <p className="text-lg font-bold">{formatCurrency(ordering?.wholesale || 0)}</p>
               </div>
               <div>
-                <label className="text-sm font-medium">Retail Price</label>
+                <label className="text-sm font-medium">{t('label_retail_price')}</label>
                 <Input
                   type="number"
                   value={retailPrice}
                   onChange={(e) => setRetailPrice(e.target.value)}
-                  placeholder="Set retail price..."
+                  placeholder={t('catalog_set_retail_price')}
                   className="mt-1"
                 />
                 {retailPrice && ordering && (
                   <p className="text-xs text-muted-foreground mt-1">
-                    Markup: {formatCurrency(parseInt(retailPrice) - ordering.wholesale)} ({Math.round(((parseInt(retailPrice) - ordering.wholesale) / ordering.wholesale) * 100)}%)
+                    {t('catalog_markup')}: {formatCurrency(parseInt(retailPrice) - ordering.wholesale)} ({Math.round(((parseInt(retailPrice) - ordering.wholesale) / ordering.wholesale) * 100)}%)
                   </p>
                 )}
               </div>
               <div>
-                <label className="text-sm font-medium">Quantity</label>
+                <label className="text-sm font-medium">{t('label_quantity')}</label>
                 <Input
                   type="number"
                   min="1"
@@ -309,11 +310,11 @@ export default function CatalogPage({ data, onClose }: Props) {
               </div>
               <div className="flex items-center justify-between pt-2 border-t border-border">
                 <div>
-                  <p className="text-xs text-muted-foreground">Total Cost (with tax)</p>
+                  <p className="text-xs text-muted-foreground">{t('catalog_total_cost_tax')}</p>
                   <p className="font-bold">{formatCurrency(Math.round((ordering?.wholesale || 0) * 1.1 * (parseInt(quantity) || 1)))}</p>
                 </div>
                 <Button onClick={handleOrder} className="gap-2">
-                  <Truck className="h-4 w-4" /> Place Order
+                  <Truck className="h-4 w-4" /> {t('catalog_place_order')}
                 </Button>
               </div>
             </div>

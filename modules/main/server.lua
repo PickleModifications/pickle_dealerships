@@ -164,31 +164,31 @@ lib.callback.register('pickle_dealerships:purchaseDealership', function(source, 
     local cached = GetCachedByLocation(locationKey)
     local resolved = ResolveDealershipConfig(cached)
     if not resolved then
-        return { success = false, error = 'Invalid dealership location.' }
+        return { success = false, error = _L("invalid_dealership_location") }
     end
 
     if resolved.mode ~= 'player-owned' then
-        return { success = false, error = 'This dealership cannot be purchased.' }
+        return { success = false, error = _L("dealership_cannot_be_purchased") }
     end
 
     if cached and cached.owner_identifier then
-        return { success = false, error = 'This dealership is already owned.' }
+        return { success = false, error = _L("dealership_already_owned") }
     end
 
     local price = resolved.purchasePrice or 0
     local identifier = GetIdentifier(source)
     if not identifier then
-        return { success = false, error = 'Unable to identify player.' }
+        return { success = false, error = _L("unable_to_identify_player") }
     end
 
     local money = GetMoney(source, 'bank')
     if money < price then
-        return { success = false, error = 'You do not have enough money.' }
+        return { success = false, error = _L("not_enough_money") }
     end
 
     local success = RemoveMoney(source, price, 'bank')
     if not success then
-        return { success = false, error = 'Failed to deduct payment.' }
+        return { success = false, error = _L("failed_deduct_payment") }
     end
 
     MySQL.update.await(
@@ -198,7 +198,7 @@ lib.callback.register('pickle_dealerships:purchaseDealership', function(source, 
     cached.owner_identifier = identifier
     cached.balance = 0
 
-    ShowNotification(source, 'You purchased the dealership for $' .. price .. '!')
+    ShowNotification(source, _L("dealership_purchased_price", GetCurrencyString(price)))
     return { success = true }
 end)
 
@@ -209,16 +209,16 @@ lib.callback.register('pickle_dealerships:sellDealership', function(source, loca
     local cached = GetCachedByLocation(locationKey)
     local resolved = ResolveDealershipConfig(cached)
     if not resolved then
-        return { success = false, error = 'Invalid dealership location.' }
+        return { success = false, error = _L("invalid_dealership_location") }
     end
 
     if not cached or not cached.owner_identifier then
-        return { success = false, error = 'This dealership is not owned.' }
+        return { success = false, error = _L("dealership_not_owned") }
     end
 
     local identifier = GetIdentifier(source)
     if identifier ~= cached.owner_identifier then
-        return { success = false, error = 'You do not own this dealership.' }
+        return { success = false, error = _L("you_do_not_own_dealership") }
     end
 
     local sellbackRate = Config.SellbackRate or 0.5
@@ -232,7 +232,7 @@ lib.callback.register('pickle_dealerships:sellDealership', function(source, loca
     cached.balance = 0
 
     AddMoney(source, refund, 'bank')
-    ShowNotification(source, 'You sold the dealership and received $' .. refund .. '.')
+    ShowNotification(source, _L("dealership_sold_refund", GetCurrencyString(refund)))
     TriggerClientEvent('pickle_dealerships:refreshDisplay', -1, locationKey)
 
     return { success = true, refund = refund }
@@ -245,21 +245,21 @@ end)
 lib.callback.register('pickle_dealerships:renameDealership', function(source, locationKey, newName)
     local cached = GetCachedByLocation(locationKey)
     if not cached or not cached.owner_identifier then
-        return { success = false, error = 'This dealership is not owned.' }
+        return { success = false, error = _L("dealership_not_owned") }
     end
 
     local identifier = GetIdentifier(source)
     if identifier ~= cached.owner_identifier then
-        return { success = false, error = 'You do not own this dealership.' }
+        return { success = false, error = _L("you_do_not_own_dealership") }
     end
 
     if not newName or #newName < 1 or #newName > 50 then
-        return { success = false, error = 'Invalid name. Must be between 1 and 50 characters.' }
+        return { success = false, error = _L("invalid_name_length") }
     end
 
     MySQL.update.await('UPDATE dealerships SET name = ? WHERE id = ?', { newName, cached.id })
     cached.name = newName
-    ShowNotification(source, 'Dealership renamed to "' .. newName .. '".')
+    ShowNotification(source, _L("dealership_renamed_to", newName))
     return { success = true }
 end)
 

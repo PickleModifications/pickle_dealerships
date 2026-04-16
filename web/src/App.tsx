@@ -17,7 +17,6 @@ import ManagementPage from './pages/ManagementPage'
 import PhotoBoothPage from './pages/PhotoBoothPage'
 import ShowroomPage from './pages/ShowroomPage'
 import NpcShowroomPage from './pages/NpcShowroomPage'
-import AuctionPage from './pages/AuctionPage'
 import InteractText from './components/InteractText'
 import { PickleFaxDialog } from './components/PickleFax'
 
@@ -109,8 +108,6 @@ function App() {
           fetchNui('photoBoothCancel', {})
         } else if (page === 'showroom') {
           fetchNui('showroomClose', {})
-        } else if (page === 'auction') {
-          fetchNui('auctionClose', {})
         } else if (page === 'negotiation' || page === 'npcShowroom') {
           fetchNui('dismissNPC', {})
         } else {
@@ -158,8 +155,6 @@ function App() {
         return <PhotoBoothPage {...props} />
       case 'showroom':
         return <ShowroomPage {...props} />
-      case 'auction':
-        return <AuctionPage {...props} />
       case 'pickleFax':
         return data?.stockId ? <PickleFaxDialog stockId={data.stockId} mode="customer" onClose={handleClose} /> : null
       default:
@@ -171,7 +166,7 @@ function App() {
     <>
       <InteractText />
       {visible && page && (
-        page === 'photoBooth' || page === 'showroom' || page === 'negotiation' || page === 'npcShowroom' || page === 'pickleFax' || page === 'auction' ? (
+        page === 'photoBooth' || page === 'showroom' || page === 'negotiation' || page === 'npcShowroom' || page === 'pickleFax' ? (
           <div key={openKey} className="fixed inset-0 z-50">
             {renderPage()}
           </div>

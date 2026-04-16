@@ -4,6 +4,7 @@ import { Button } from '../components/ui/button'
 import { Badge } from '../components/ui/badge'
 import { Input } from '../components/ui/input'
 import { fetchNui, formatCurrency } from '../lib/utils'
+import { t } from '../lib/locale'
 import { Search, X, Car, Loader2, UserX, SlidersHorizontal, Send } from 'lucide-react'
 import VehicleImg from '../components/VehicleImg'
 import type { DealershipData, StockItem, NPCProfile } from '../types'
@@ -210,7 +211,7 @@ export default function NpcShowroomPage({ data, profile, greeting, onClose }: Pr
           <div className="flex items-center justify-between mb-2">
             <div>
               <h1 className="text-white text-base font-bold">{data.dealershipName}</h1>
-              <p className="text-white/40 text-xs">Select a vehicle to present</p>
+              <p className="text-white/40 text-xs">{t('npc_select_vehicle')}</p>
             </div>
             <Button
               variant="ghost"
@@ -225,7 +226,7 @@ export default function NpcShowroomPage({ data, profile, greeting, onClose }: Pr
             <div className="relative flex-1">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-white/30" />
               <Input
-                placeholder="Search vehicles..."
+                placeholder={t('label_search_vehicles')}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 className="pl-8 h-8 text-xs bg-white/5 border-white/10 text-white placeholder:text-white/30"
@@ -253,9 +254,9 @@ export default function NpcShowroomPage({ data, profile, greeting, onClose }: Pr
           <div className="px-3 pb-2 space-y-2">
             {/* Sort */}
             <div>
-              <p className="text-[9px] uppercase tracking-wider text-white/30 mb-1">Sort</p>
+              <p className="text-[9px] uppercase tracking-wider text-white/30 mb-1">{t('label_sort_by')}</p>
               <div className="flex flex-wrap gap-1">
-                {([['name_asc', 'A — Z'], ['name_desc', 'Z — A'], ['price_asc', 'Low $'], ['price_desc', 'High $']] as const).map(([value, label]) => (
+                {([['name_asc', t('label_sort_az')], ['name_desc', t('label_sort_za')], ['price_asc', t('label_sort_price_low')], ['price_desc', t('label_sort_price_high')]] as [typeof sortBy, string][]).map(([value, label]) => (
                   <button key={value} onClick={() => setSortBy(value)} className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${sortBy === value ? 'bg-accent text-accent-foreground' : 'bg-white/5 text-white/40 hover:bg-white/10'}`}>{label}</button>
                 ))}
               </div>
@@ -264,9 +265,9 @@ export default function NpcShowroomPage({ data, profile, greeting, onClose }: Pr
             {/* Class */}
             {classes.length > 0 && (
               <div>
-                <p className="text-[9px] uppercase tracking-wider text-white/30 mb-1">Class</p>
+                <p className="text-[9px] uppercase tracking-wider text-white/30 mb-1">{t('label_class')}</p>
                 <div className="flex flex-wrap gap-1">
-                  <button onClick={() => setClassFilter('all')} className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${classFilter === 'all' ? 'bg-accent text-accent-foreground' : 'bg-white/5 text-white/40 hover:bg-white/10'}`}>All</button>
+                  <button onClick={() => setClassFilter('all')} className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${classFilter === 'all' ? 'bg-accent text-accent-foreground' : 'bg-white/5 text-white/40 hover:bg-white/10'}`}>{t('label_all')}</button>
                   {classes.map((cls) => (
                     <button key={cls} onClick={() => setClassFilter(cls)} className={`px-2 py-0.5 rounded text-[10px] font-medium capitalize transition-colors ${classFilter === cls ? 'bg-accent text-accent-foreground' : 'bg-white/5 text-white/40 hover:bg-white/10'}`}>{cls}</button>
                   ))}
@@ -278,9 +279,9 @@ export default function NpcShowroomPage({ data, profile, greeting, onClose }: Pr
             {maxRetailPrice > 0 && (
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <p className="text-[9px] uppercase tracking-wider text-white/30">Price</p>
+                  <p className="text-[9px] uppercase tracking-wider text-white/30">{t('label_price')}</p>
                   {isPriceFiltered(priceRange) && (
-                    <button onClick={() => setPriceRange([0, maxRetailPrice])} className="text-[9px] text-accent hover:text-accent/80">Reset</button>
+                    <button onClick={() => setPriceRange([0, maxRetailPrice])} className="text-[9px] text-accent hover:text-accent/80">{t('label_reset')}</button>
                   )}
                 </div>
                 <div className="flex items-center gap-2 mb-1">
@@ -304,7 +305,7 @@ export default function NpcShowroomPage({ data, profile, greeting, onClose }: Pr
             ) : filtered.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-12 text-white/30">
                 <Car className="h-8 w-8 mb-2" />
-                <p className="text-xs">No vehicles found</p>
+                <p className="text-xs">{t('empty_no_matching')}</p>
               </div>
             ) : (
               <div className="relative w-full" style={{ height: `${virtualizer.getTotalSize()}px` }}>
@@ -358,12 +359,12 @@ export default function NpcShowroomPage({ data, profile, greeting, onClose }: Pr
             )}
             {profile && (
               <div className="flex items-center gap-3 px-4 py-1.5 bg-black/40 rounded-lg text-[11px]">
-                <span className="text-white/40">Budget:</span>
+                <span className="text-white/40">{t('npc_budget')}:</span>
                 <span className="text-emerald-400 font-semibold">{formatCurrency(profile.budget)}</span>
                 {profile.typePreference && (
                   <>
                     <span className="text-white/20">|</span>
-                    <span className="text-white/40">Wants:</span>
+                    <span className="text-white/40">{t('npc_wants')}:</span>
                     <span className="text-white/70 capitalize font-medium">{profile.typePreference}</span>
                   </>
                 )}
@@ -397,7 +398,7 @@ export default function NpcShowroomPage({ data, profile, greeting, onClose }: Pr
         {/* Controls */}
         <div className="bg-black/90 border-t border-white/10 px-6 py-3">
           {phase === 'selecting' && !selected && (
-            <p className="text-white/40 text-sm text-center">Select a vehicle from the list to present to the customer</p>
+            <p className="text-white/40 text-sm text-center">{t('npc_select_from_list')}</p>
           )}
 
           {(phase === 'negotiating' || (phase === 'selecting' && selected)) && selected && (
@@ -406,9 +407,9 @@ export default function NpcShowroomPage({ data, profile, greeting, onClose }: Pr
               <div className="min-w-0">
                 <p className="text-white font-bold text-xl truncate leading-tight">{selected.vehicle_label || selected.vehicle_model}</p>
                 <div className="flex items-center gap-2">
-                  <p className="text-white/40 text-sm capitalize">{selected.class || 'Vehicle'}</p>
+                  <p className="text-white/40 text-sm capitalize">{selected.class || t('label_vehicle')}</p>
                   <span className="text-white/20">|</span>
-                  <p className="text-white/40 text-sm">MSRP <span className="text-white/60 font-semibold">{formatCurrency(selected.wholesale_cost)}</span></p>
+                  <p className="text-white/40 text-sm">{t('npc_msrp')} <span className="text-white/60 font-semibold">{formatCurrency(selected.wholesale_cost)}</span></p>
                 </div>
               </div>
 
@@ -417,7 +418,7 @@ export default function NpcShowroomPage({ data, profile, greeting, onClose }: Pr
                   {/* Stress bar */}
                   <div className="w-32 shrink-0">
                     <div className="flex items-center justify-between mb-1">
-                      <p className="text-[10px] uppercase tracking-wider text-white/40">Stress</p>
+                      <p className="text-[10px] uppercase tracking-wider text-white/40">{t('npc_stress')}</p>
                       <p className={`text-[10px] font-bold ${stress >= 70 ? 'text-red-400' : stress >= 40 ? 'text-orange-400' : 'text-white/50'}`}>{stress}%</p>
                     </div>
                     <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
@@ -438,7 +439,7 @@ export default function NpcShowroomPage({ data, profile, greeting, onClose }: Pr
                         onChange={(e) => setOfferInput(e.target.value)}
                         onKeyDown={(e) => { if (e.key === 'Enter') handleSubmitOffer() }}
                         className="h-9 w-36 pl-7 pr-3 rounded-md bg-white/5 border border-white/10 text-white text-sm outline-none focus:border-accent"
-                        placeholder="Your price..."
+                        placeholder={t('npc_your_price')}
                       />
                     </div>
                     <Button
@@ -447,7 +448,7 @@ export default function NpcShowroomPage({ data, profile, greeting, onClose }: Pr
                       onClick={handleSubmitOffer}
                       className="gap-1.5 h-9"
                     >
-                      <Send className="h-3.5 w-3.5" /> Offer
+                      <Send className="h-3.5 w-3.5" /> {t('npc_offer')}
                     </Button>
                   </div>
                 </>
@@ -459,10 +460,10 @@ export default function NpcShowroomPage({ data, profile, greeting, onClose }: Pr
           {isEnded && (
             <div className="flex items-center justify-center gap-4">
               <p className={`text-sm font-medium ${phase === 'completed' ? 'text-emerald-400' : 'text-red-400'}`}>
-                {phase === 'completed' ? `Sale completed for ${formatCurrency(parseInt(offerInput) || 0)}!` : 'Customer walked away. No sale.'}
+                {phase === 'completed' ? t('npc_sale_completed', formatCurrency(parseInt(offerInput) || 0)) : t('npc_customer_walked_away')}
               </p>
               <Button variant="outline" size="sm" onClick={handleDismiss} className="bg-white/5 border-white/10 text-white hover:bg-white/10">
-                Close
+                {t('btn_close')}
               </Button>
             </div>
           )}

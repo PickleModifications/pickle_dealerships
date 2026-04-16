@@ -6,9 +6,10 @@ import { Input } from '../components/ui/input'
 import { Separator } from '../components/ui/separator'
 import { ScrollArea } from '../components/ui/scroll-area'
 import { fetchNui, formatCurrency } from '../lib/utils'
+import { t } from '../lib/locale'
 import {
   X, LayoutDashboard, Package, Truck, Users, LineChart, Ticket,
-  DollarSign, Store, Clock, Percent,
+  DollarSign, Store, Clock, Percent, CreditCard,
 } from 'lucide-react'
 import type { DealershipData } from '../types'
 
@@ -18,6 +19,7 @@ import CatalogPage from './CatalogPage'
 import EmployeesPage from './EmployeesPage'
 import FinancesPage from './FinancesPage'
 import CouponsPage from './CouponsPage'
+import FinancingSettingsPanel from '../components/FinancingSettingsPanel'
 
 interface Props {
   data: DealershipData
@@ -32,34 +34,30 @@ type ManagementTab =
   | 'finances'
   | 'coupons'
   | 'commission'
+  | 'financing'
 
 interface NavItem {
   id: ManagementTab
-  label: string
+  labelKey: string
   icon: React.ReactNode
   minRole?: string[]
   feature?: string
 }
 
 const navItems: NavItem[] = [
-  { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="h-4 w-4" /> },
-  { id: 'stock', label: 'Stock', icon: <Package className="h-4 w-4" /> },
-  { id: 'catalog', label: 'Order Vehicles', icon: <Truck className="h-4 w-4" /> },
-  { id: 'employees', label: 'Employees', icon: <Users className="h-4 w-4" />, minRole: ['owner', 'manager', 'admin'] },
-  { id: 'finances', label: 'Finances', icon: <LineChart className="h-4 w-4" />, minRole: ['owner', 'manager', 'admin'] },
-  { id: 'commission', label: 'Commission', icon: <Percent className="h-4 w-4" />, minRole: ['owner', 'admin'] },
-  { id: 'coupons', label: 'Coupons', icon: <Ticket className="h-4 w-4" />, minRole: ['owner', 'admin'], feature: 'coupons' },
+  { id: 'dashboard', labelKey: 'tab_dashboard', icon: <LayoutDashboard className="h-4 w-4" /> },
+  { id: 'stock', labelKey: 'tab_stock', icon: <Package className="h-4 w-4" /> },
+  { id: 'catalog', labelKey: 'tab_order_vehicles', icon: <Truck className="h-4 w-4" /> },
+  { id: 'employees', labelKey: 'tab_employees', icon: <Users className="h-4 w-4" />, minRole: ['owner', 'manager', 'admin'] },
+  { id: 'finances', labelKey: 'tab_finances', icon: <LineChart className="h-4 w-4" />, minRole: ['owner', 'manager', 'admin'] },
+  { id: 'commission', labelKey: 'tab_commission', icon: <Percent className="h-4 w-4" />, minRole: ['owner', 'admin'] },
+  { id: 'coupons', labelKey: 'tab_coupons', icon: <Ticket className="h-4 w-4" />, minRole: ['owner', 'admin'], feature: 'coupons' },
+  { id: 'financing', labelKey: 'tab_financing', icon: <CreditCard className="h-4 w-4" />, minRole: ['owner', 'admin'] },
 ]
-
-const tierLabels: Record<number, string> = {
-  1: 'Starter Lot',
-  2: 'Established',
-  3: 'Premium',
-  4: 'Enterprise',
-}
 
 const tierFeatures: Record<string, number> = {
   coupons: 4,
+  financing: 3,
 }
 
 export default function ManagementPage({ data, onClose }: Props) {
@@ -100,16 +98,16 @@ export default function ManagementPage({ data, onClose }: Props) {
           <CardContent className="p-8 text-center">
             <Store className="h-12 w-12 mx-auto mb-4 text-accent" />
             <h2 className="text-2xl font-bold mb-1">{data.dealershipName}</h2>
-            <p className="text-muted-foreground mb-6">This dealership is available for purchase</p>
+            <p className="text-muted-foreground mb-6">{t('dealership_available_for_purchase')}</p>
 
             <div className="bg-muted rounded-lg p-4 mb-6">
-              <p className="text-xs text-muted-foreground mb-1">Purchase Price</p>
+              <p className="text-xs text-muted-foreground mb-1">{t('label_price')}</p>
               <p className="text-3xl font-bold text-accent">{formatCurrency(data.purchasePrice || 0)}</p>
             </div>
 
             <div className="flex gap-3">
               <Button variant="outline" className="flex-1" onClick={onClose}>
-                Cancel
+                {t('btn_cancel')}
               </Button>
               <Button
                 className="flex-1"
@@ -122,7 +120,7 @@ export default function ManagementPage({ data, onClose }: Props) {
                   onClose()
                 }}
               >
-                <DollarSign className="h-4 w-4" /> Purchase
+                <DollarSign className="h-4 w-4" /> {t('btn_purchase')}
               </Button>
             </div>
           </CardContent>
@@ -158,6 +156,8 @@ export default function ManagementPage({ data, onClose }: Props) {
         return <CouponsPage {...subProps} />
       case 'commission':
         return <CommissionSettings dealershipId={data.dealershipId} />
+      case 'financing':
+        return <FinancingSettingsPanel dealershipId={data.dealershipId} />
       default:
         return null
     }
@@ -171,7 +171,7 @@ export default function ManagementPage({ data, onClose }: Props) {
           <h2 className="font-bold text-sm truncate">{data.dealershipName}</h2>
           <div className="flex items-center gap-1.5 mt-1.5">
             <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
-              {tierLabels[data.tier] || `Tier ${data.tier}`}
+              {t(`tier_${data.tier}`)}
             </Badge>
             <Badge variant="outline" className="text-[10px] px-1.5 py-0 capitalize">
               {data.role}
@@ -199,7 +199,7 @@ export default function ManagementPage({ data, onClose }: Props) {
                 }`}
               >
                 {item.icon}
-                {item.label}
+                {t(item.labelKey)}
               </button>
             ))}
           </nav>
@@ -222,14 +222,14 @@ export default function ManagementPage({ data, onClose }: Props) {
               }`}
             >
               <Clock className="h-4 w-4" />
-              {isClockedIn ? 'Clock Out' : 'Clock In'}
+              {isClockedIn ? t('clock_out') : t('clock_in')}
             </button>
           )}
           <button
             onClick={onClose}
             className="w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-sm text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
           >
-            <X className="h-4 w-4" /> Close
+            <X className="h-4 w-4" /> {t('btn_close')}
           </button>
         </div>
       </div>
@@ -272,7 +272,7 @@ function CommissionSettings({ dealershipId }: { dealershipId: number }) {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-48 text-muted-foreground">
-        Loading...
+        {t('loading')}
       </div>
     )
   }
@@ -280,13 +280,13 @@ function CommissionSettings({ dealershipId }: { dealershipId: number }) {
   return (
     <div className="p-5 space-y-4">
       <div>
-        <h2 className="text-lg font-bold">Commission Rates</h2>
-        <p className="text-sm text-muted-foreground">Set commission percentage per role. Applied when employees make a sale.</p>
+        <h2 className="text-lg font-bold">{t('commission_rates')}</h2>
+        <p className="text-sm text-muted-foreground">{t('commission_rates_desc')}</p>
       </div>
 
       <div className="space-y-3 max-w-sm">
         <div>
-          <label className="text-sm font-medium">Salesperson</label>
+          <label className="text-sm font-medium">{t('role_salesperson')}</label>
           <div className="flex items-center gap-2 mt-1">
             <Input
               type="number"
@@ -301,7 +301,7 @@ function CommissionSettings({ dealershipId }: { dealershipId: number }) {
         </div>
 
         <div>
-          <label className="text-sm font-medium">Manager</label>
+          <label className="text-sm font-medium">{t('role_manager')}</label>
           <div className="flex items-center gap-2 mt-1">
             <Input
               type="number"
@@ -316,7 +316,7 @@ function CommissionSettings({ dealershipId }: { dealershipId: number }) {
         </div>
 
         <Button onClick={handleSave} disabled={saving} className="mt-2">
-          {saving ? 'Saving...' : 'Save Rates'}
+          {saving ? t('saving') : t('btn_save')}
         </Button>
       </div>
     </div>

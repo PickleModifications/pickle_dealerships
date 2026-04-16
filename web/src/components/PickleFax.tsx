@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { X, FileText, ShieldCheck, Gauge, Wrench, Palette, ScrollText } from 'lucide-react'
 import { fetchNui, formatCurrency } from '../lib/utils'
+import { t } from '../lib/locale'
 import {
   getConditionGrade,
   parseProperties,
@@ -46,7 +47,7 @@ export function PickleFaxSheet({ details, mode = 'customer', onClose }: { detail
   return (
     <div className="relative bg-gradient-to-b from-[#f8f0dc] to-[#ece0c0] text-stone-900 font-serif shadow-2xl border border-stone-400/60 w-full max-w-2xl mx-auto overflow-hidden">
       <div className="absolute top-8 right-20 rotate-[-12deg] border-[3px] border-rose-700/40 text-rose-700/50 px-3 py-1 text-xs font-bold tracking-widest pointer-events-none select-none">
-        PRE-OWNED
+        {t('picklefax_pre_owned_stamp')}
       </div>
       {onClose && (
         <button
@@ -61,48 +62,48 @@ export function PickleFaxSheet({ details, mode = 'customer', onClose }: { detail
       <div className="px-8 pt-6 pb-4 border-b-2 border-double border-stone-700/60">
         <div className="flex items-center gap-2 text-stone-700">
           <FileText className="h-5 w-5" />
-          <p className="text-[10px] uppercase tracking-[0.3em]">Certified Report</p>
+          <p className="text-[10px] uppercase tracking-[0.3em]">{t('picklefax_certified_report')}</p>
         </div>
         <h1 className="text-3xl font-bold tracking-tight mt-1">
-          Pickle<span className="text-rose-700">FAX</span>
+          {t('picklefax_title').split('FAX')[0]}<span className="text-rose-700">FAX</span>
         </h1>
-        <p className="text-xs text-stone-600 mt-0.5">Vehicle History &amp; Condition Record</p>
+        <p className="text-xs text-stone-600 mt-0.5">{t('picklefax_subtitle')}</p>
         <div className="flex items-end justify-between mt-4">
           <div>
-            <p className="text-[10px] uppercase tracking-wider text-stone-500">Subject Vehicle</p>
+            <p className="text-[10px] uppercase tracking-wider text-stone-500">{t('picklefax_subject_vehicle')}</p>
             <p className="text-xl font-semibold leading-tight">{details.label || details.model}</p>
             <p className="text-[11px] text-stone-600 font-mono uppercase">{details.model}</p>
           </div>
           <div className="text-right">
-            <p className="text-[10px] uppercase tracking-wider text-stone-500">Report Issued</p>
+            <p className="text-[10px] uppercase tracking-wider text-stone-500">{t('picklefax_report_issued')}</p>
             <p className="text-sm font-semibold">{reportDate}</p>
           </div>
         </div>
       </div>
 
-      <Section icon={<ShieldCheck className="h-4 w-4" />} title="Condition Assessment">
+      <Section icon={<ShieldCheck className="h-4 w-4" />} title={t('picklefax_condition_assessment')}>
         <div className="flex items-center gap-5">
           <div className={`text-7xl font-black ${grade.color} leading-none`}>{grade.letter}</div>
           <div className="flex-1">
-            <p className="text-xs uppercase tracking-wider text-stone-500">Overall Grade</p>
+            <p className="text-xs uppercase tracking-wider text-stone-500">{t('picklefax_overall_grade')}</p>
             <p className="text-lg font-semibold">{grade.label}</p>
             <div className="mt-2 h-2 bg-stone-300 rounded-sm overflow-hidden">
               <div className={`h-full rounded-sm ${grade.color.replace('text-', 'bg-')}`} style={{ width: `${Math.round(condPct)}%` }} />
             </div>
-            <p className="text-[11px] text-stone-600 mt-1 font-mono">Condition Index: {Math.round(condPct)}%</p>
+            <p className="text-[11px] text-stone-600 mt-1 font-mono">{t('picklefax_condition_index', Math.round(condPct))}</p>
           </div>
         </div>
         <div className="grid grid-cols-2 gap-4 mt-4">
-          <HealthBar label="Body Integrity" pct={bodyHealth} />
-          <HealthBar label="Engine Health" pct={engineHealth} />
-          {fuelLevel !== null && <HealthBar label="Fuel Level" pct={fuelLevel} />}
-          {dirtLevel !== null && <HealthBar label="Cleanliness" pct={Math.max(0, 100 - (dirtLevel * 6.67))} />}
+          <HealthBar label={t('picklefax_body_integrity')} pct={bodyHealth} />
+          <HealthBar label={t('picklefax_engine_health')} pct={engineHealth} />
+          {fuelLevel !== null && <HealthBar label={t('picklefax_fuel_level')} pct={fuelLevel} />}
+          {dirtLevel !== null && <HealthBar label={t('picklefax_cleanliness')} pct={Math.max(0, 100 - (dirtLevel * 6.67))} />}
         </div>
       </Section>
 
-      <Section icon={<Wrench className="h-4 w-4" />} title="Performance Modifications">
+      <Section icon={<Wrench className="h-4 w-4" />} title={t('picklefax_performance_mods')}>
         {mods.length === 0 ? (
-          <p className="text-sm text-stone-600 italic">No performance modifications on record — factory configuration.</p>
+          <p className="text-sm text-stone-600 italic">{t('picklefax_no_mods')}</p>
         ) : (
           <ul className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-sm">
             {mods.map((m) => (
@@ -115,26 +116,26 @@ export function PickleFaxSheet({ details, mode = 'customer', onClose }: { detail
         )}
       </Section>
 
-      <Section icon={<Palette className="h-4 w-4" />} title="Cosmetic Profile">
+      <Section icon={<Palette className="h-4 w-4" />} title={t('picklefax_cosmetic_profile')}>
         <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
-          <FactRow label="Primary Paint">
+          <FactRow label={t('picklefax_primary_paint')}>
             <span className="inline-flex items-center gap-2">
               <span className="inline-block w-4 h-4 rounded-sm border border-stone-500" style={{ background: primary ?? 'transparent' }} />
               <span className="font-mono text-[11px]">{primaryLabel}</span>
             </span>
           </FactRow>
-          <FactRow label="Secondary Paint">
+          <FactRow label={t('picklefax_secondary_paint')}>
             <span className="inline-flex items-center gap-2">
               <span className="inline-block w-4 h-4 rounded-sm border border-stone-500" style={{ background: secondary ?? 'transparent' }} />
               <span className="font-mono text-[11px]">{secondaryLabel}</span>
             </span>
           </FactRow>
-          <FactRow label="Wheels"><span>{cosmetics.wheels}</span></FactRow>
-          <FactRow label="Plate Style"><span>{cosmetics.plateIndex != null ? `Style #${cosmetics.plateIndex}` : '—'}</span></FactRow>
+          <FactRow label={t('picklefax_wheels')}><span>{cosmetics.wheels}</span></FactRow>
+          <FactRow label={t('picklefax_plate_style')}><span>{cosmetics.plateIndex != null ? `Style #${cosmetics.plateIndex}` : '—'}</span></FactRow>
         </div>
         {cosmetics.extras.length > 0 && (
           <div className="mt-3">
-            <p className="text-[10px] uppercase tracking-wider text-stone-500">Optional Features</p>
+            <p className="text-[10px] uppercase tracking-wider text-stone-500">{t('picklefax_optional_features')}</p>
             <div className="flex flex-wrap gap-1.5 mt-1">
               {cosmetics.extras.map((e) => (
                 <span key={e} className="text-[11px] border border-stone-500/60 px-1.5 py-0.5">{e}</span>
@@ -144,22 +145,22 @@ export function PickleFaxSheet({ details, mode = 'customer', onClose }: { detail
         )}
       </Section>
 
-      <Section icon={<ScrollText className="h-4 w-4" />} title="Title &amp; History">
+      <Section icon={<ScrollText className="h-4 w-4" />} title={t('picklefax_title_history')}>
         <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
-          <FactRow label="License Plate"><span className="font-mono">{details.plate || '—'}</span></FactRow>
-          <FactRow label="Acquired On"><span>{formatDate(details.orderedAt)}</span></FactRow>
-          <FactRow label="Previous Owner">
+          <FactRow label={t('picklefax_license_plate')}><span className="font-mono">{details.plate || '—'}</span></FactRow>
+          <FactRow label={t('picklefax_acquired_on')}><span>{formatDate(details.orderedAt)}</span></FactRow>
+          <FactRow label={t('picklefax_previous_owner')}>
             <span className="font-mono text-xs">
-              {mode === 'employee' ? (details.acquiredFrom || 'Unknown') : maskIdentifier(details.acquiredFrom)}
+              {mode === 'employee' ? (details.acquiredFrom || t('label_unknown')) : maskIdentifier(details.acquiredFrom)}
             </span>
           </FactRow>
-          <FactRow label="Listed Price"><span className="font-semibold">{formatCurrency(details.retailPrice)}</span></FactRow>
+          <FactRow label={t('picklefax_listed_price')}><span className="font-semibold">{formatCurrency(details.retailPrice)}</span></FactRow>
         </div>
       </Section>
 
       <div className="px-8 py-3 border-t-2 border-double border-stone-700/60 flex items-center justify-between text-[10px] uppercase tracking-wider text-stone-600">
         <span className="flex items-center gap-1"><Gauge className="h-3 w-3" /> PickleFAX #{details.id}</span>
-        <span>Authenticated Report</span>
+        <span>{t('picklefax_authenticated')}</span>
       </div>
     </div>
   )
@@ -215,10 +216,10 @@ export function PickleFaxDialog({ stockId, mode = 'customer', onClose }: Props) 
     fetchNui<PickleFaxDetails | null>('getPickleFax', { stockId })
       .then((res) => {
         if (cancelled) return
-        if (!res || !res.isUsed) setError('Report not available for this vehicle.')
+        if (!res || !res.isUsed) setError(t('picklefax_not_available'))
         else setDetails(res)
       })
-      .catch(() => { if (!cancelled) setError('Failed to retrieve report.') })
+      .catch(() => { if (!cancelled) setError(t('picklefax_failed')) })
     return () => { cancelled = true }
   }, [stockId])
 

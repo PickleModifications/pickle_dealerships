@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { fetchNui, formatCurrency } from '../lib/utils'
 import { getCached, setCache, buildKey } from '../lib/cache'
 import { SkeletonCardGrid } from '../components/ui/skeleton'
+import { t } from '../lib/locale'
 import { X, Plus, Trash2, Ticket, Percent, DollarSign } from 'lucide-react'
 import type { DealershipData, Coupon } from '../types'
 
@@ -74,12 +75,12 @@ export default function CouponsPage({ data, onClose }: Props) {
         <>
           <div className="flex items-center justify-between p-5 pb-0">
             <div>
-              <h1 className="text-xl font-bold">Coupons & Promotions</h1>
+              <h1 className="text-xl font-bold">{t('coupons_title')}</h1>
               <p className="text-sm text-muted-foreground">{data.dealershipName}</p>
             </div>
             <div className="flex gap-2">
               <Button size="sm" onClick={() => setCreateOpen(true)} className="gap-1">
-                <Plus className="h-4 w-4" /> Create
+                <Plus className="h-4 w-4" /> {t('btn_create')}
               </Button>
               <Button variant="ghost" size="icon" onClick={onClose}>
                 <X className="h-5 w-5" />
@@ -98,7 +99,7 @@ export default function CouponsPage({ data, onClose }: Props) {
         ) : coupons.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
             <Ticket className="h-10 w-10 mb-2 opacity-50" />
-            <p>No coupons created yet</p>
+            <p>{t('coupons_none')}</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -110,9 +111,9 @@ export default function CouponsPage({ data, onClose }: Props) {
                       <p className="font-bold font-mono text-lg tracking-wider">{coupon.code}</p>
                       <div className="flex items-center gap-1 mt-1">
                         {coupon.discount_type === 'percent' ? (
-                          <Badge className="gap-1"><Percent className="h-3 w-3" /> {coupon.discount_value}% off</Badge>
+                          <Badge className="gap-1"><Percent className="h-3 w-3" /> {coupon.discount_value}% {t('coupons_off')}</Badge>
                         ) : (
-                          <Badge className="gap-1"><DollarSign className="h-3 w-3" /> {formatCurrency(coupon.discount_value)} off</Badge>
+                          <Badge className="gap-1"><DollarSign className="h-3 w-3" /> {formatCurrency(coupon.discount_value)} {t('coupons_off')}</Badge>
                         )}
                       </div>
                     </div>
@@ -123,18 +124,18 @@ export default function CouponsPage({ data, onClose }: Props) {
 
                   <div className="grid grid-cols-2 gap-2 mt-3 text-sm">
                     <div>
-                      <p className="text-xs text-muted-foreground">Uses</p>
-                      <p>{coupon.uses} / {coupon.max_uses === 0 ? 'Unlimited' : coupon.max_uses}</p>
+                      <p className="text-xs text-muted-foreground">{t('coupons_uses')}</p>
+                      <p>{coupon.uses} / {coupon.max_uses === 0 ? t('coupons_unlimited') : coupon.max_uses}</p>
                     </div>
                     <div>
-                      <p className="text-xs text-muted-foreground">Min Purchase</p>
-                      <p>{coupon.min_purchase > 0 ? formatCurrency(coupon.min_purchase) : 'None'}</p>
+                      <p className="text-xs text-muted-foreground">{t('coupons_min_purchase')}</p>
+                      <p>{coupon.min_purchase > 0 ? formatCurrency(coupon.min_purchase) : t('coupons_none_value')}</p>
                     </div>
                   </div>
 
                   {coupon.expires_at && (
                     <p className="text-xs text-muted-foreground mt-2">
-                      Expires: {new Date(coupon.expires_at).toLocaleDateString()}
+                      {t('coupons_expires')}: {new Date(coupon.expires_at).toLocaleDateString()}
                     </p>
                   )}
                 </CardContent>
@@ -147,12 +148,12 @@ export default function CouponsPage({ data, onClose }: Props) {
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent onClose={() => setCreateOpen(false)}>
           <DialogHeader>
-            <DialogTitle>Create Coupon</DialogTitle>
-            <DialogDescription>Create a promotional coupon code for your dealership.</DialogDescription>
+            <DialogTitle>{t('coupons_create_title')}</DialogTitle>
+            <DialogDescription>{t('coupons_create_desc')}</DialogDescription>
           </DialogHeader>
           <div className="space-y-4 pt-2">
             <div>
-              <label className="text-sm font-medium">Coupon Code</label>
+              <label className="text-sm font-medium">{t('label_coupon_code')}</label>
               <Input
                 value={code}
                 onChange={(e) => setCode(e.target.value.toUpperCase())}
@@ -163,19 +164,19 @@ export default function CouponsPage({ data, onClose }: Props) {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-sm font-medium">Discount Type</label>
+                <label className="text-sm font-medium">{t('coupons_discount_type')}</label>
                 <Select value={discountType} onValueChange={(v) => setDiscountType(v as 'percent' | 'flat')}>
                   <SelectTrigger className="mt-1">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="percent">Percentage</SelectItem>
-                    <SelectItem value="flat">Flat Amount</SelectItem>
+                    <SelectItem value="percent">{t('coupons_percentage')}</SelectItem>
+                    <SelectItem value="flat">{t('coupons_flat_amount')}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
               <div>
-                <label className="text-sm font-medium">Value</label>
+                <label className="text-sm font-medium">{t('coupons_value')}</label>
                 <Input
                   type="number"
                   value={discountValue}
@@ -187,15 +188,15 @@ export default function CouponsPage({ data, onClose }: Props) {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-sm font-medium">Max Uses (0 = unlimited)</label>
+                <label className="text-sm font-medium">{t('coupons_max_uses')}</label>
                 <Input type="number" value={maxUses} onChange={(e) => setMaxUses(e.target.value)} className="mt-1" />
               </div>
               <div>
-                <label className="text-sm font-medium">Min Purchase</label>
+                <label className="text-sm font-medium">{t('coupons_min_purchase')}</label>
                 <Input type="number" value={minPurchase} onChange={(e) => setMinPurchase(e.target.value)} className="mt-1" />
               </div>
             </div>
-            <Button className="w-full" onClick={handleCreate}>Create Coupon</Button>
+            <Button className="w-full" onClick={handleCreate}>{t('coupons_create_title')}</Button>
           </div>
         </DialogContent>
       </Dialog>

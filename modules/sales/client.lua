@@ -24,7 +24,7 @@ function SpawnPurchasedVehicle(model, spawnPoint, color, secondaryColor, propert
         timeout = timeout + 10
     end
     if not HasModelLoaded(modelHash) then
-        ShowNotification("Failed to load vehicle model.")
+        ShowNotification(_L("sales_load_failed"))
         return nil
     end
 
@@ -138,9 +138,9 @@ RegisterNUICallback("purchaseVehicle", function(data, cb)
             SpawnPurchasedVehicle(result.model, spawnPoint, color, secColor, props, result.plate)
         end
 
-        ShowNotification(("Congratulations! You purchased a %s."):format(result.label or result.model))
+        ShowNotification(_L("sales_purchase_success", result.label or result.model))
     else
-        ShowNotification(result and result.message or "Purchase failed.")
+        ShowNotification(result and result.message or _L("sales_purchase_failed"))
     end
 
     cb(result or { success = false })
@@ -184,12 +184,12 @@ local function EndTestDrive()
     testDriveDealershipId = nil
     testDriveOrigin = nil
 
-    ShowNotification("Test drive has ended.")
+    ShowNotification(_L("sales_test_drive_ended"))
 end
 
 RegisterNUICallback("startTestDrive", function(data, cb)
     if testDriveActive then
-        ShowNotification("You are already on a test drive.")
+        ShowNotification(_L("sales_test_drive_active"))
         cb({ success = false, message = "Already on a test drive." })
         return
     end
@@ -263,11 +263,11 @@ RegisterNUICallback("startTestDrive", function(data, cb)
         SetBlipScale(testDriveBlip, 0.8)
         SetBlipRoute(testDriveBlip, false)
         BeginTextCommandSetBlipName("STRING")
-        AddTextComponentString("Test Drive Area")
+        AddTextComponentString(_L("blip_test_drive_area"))
         EndTextCommandSetBlipName(testDriveBlip)
     end
 
-    ShowNotification(("Test drive started! You have %d seconds."):format(testDriveTimer))
+    ShowNotification(_L("sales_test_drive_started", testDriveTimer))
     cb({ success = true })
 end)
 
@@ -281,7 +281,7 @@ CreateThread(function()
 
             -- Check timer expiry
             if testDriveTimer <= 0 then
-                ShowNotification("Test drive time expired!")
+                ShowNotification(_L("sales_test_drive_expired"))
                 EndTestDrive()
             else
                 -- Check distance from dealership
@@ -291,22 +291,22 @@ CreateThread(function()
                     local radius = Config.TestDriveRadius or 500.0
 
                     if dist > radius then
-                        ShowNotification("You drove too far from the dealership!")
+                        ShowNotification(_L("sales_test_drive_too_far"))
                         EndTestDrive()
                     elseif dist > radius * 0.85 then
-                        ShowNotification("Warning: You are approaching the test drive boundary!")
+                        ShowNotification(_L("sales_test_drive_boundary"))
                     end
                 end
 
                 -- Check if vehicle still exists
                 if testDriveVehicle and not DoesEntityExist(testDriveVehicle) then
-                    ShowNotification("Test drive vehicle lost!")
+                    ShowNotification(_L("sales_test_drive_lost"))
                     EndTestDrive()
                 end
 
                 -- Show remaining time every 30 seconds
                 if testDriveTimer > 0 and testDriveTimer % 30 == 0 then
-                    ShowNotification(("%d seconds remaining on test drive."):format(testDriveTimer))
+                    ShowNotification(_L("sales_test_drive_remaining", testDriveTimer))
                 end
             end
 
@@ -321,8 +321,8 @@ end)
 
 RegisterNetEvent("pickle_dealerships:confirmPurchase", function(data)
     local alert = lib.alertDialog({
-        header = "Vehicle Purchase",
-        content = ("**%s** is offering you a **%s** for **%s**.\n\nWould you like to purchase this vehicle?"):format(
+        header = _L("sales_confirm_header"),
+        content = _L("sales_confirm_body",
             data.sellerName or "A salesperson",
             data.label or data.model,
             GetCurrencyString(data.price)
@@ -334,10 +334,10 @@ RegisterNetEvent("pickle_dealerships:confirmPurchase", function(data)
     if alert == "confirm" then
         -- Ask payment method
         local paymentMethod = "bank"
-        local input = lib.inputDialog("Payment Method", {
-            { type = "select", label = "Payment Method", options = {
-                { value = "cash", label = "Cash" },
-                { value = "bank", label = "Bank" },
+        local input = lib.inputDialog(_L("sales_payment_method"), {
+            { type = "select", label = _L("sales_payment_method"), options = {
+                { value = "cash", label = _L("sales_payment_cash") },
+                { value = "bank", label = _L("sales_payment_bank") },
             }, default = "bank" },
         })
 
@@ -366,12 +366,12 @@ RegisterNetEvent("pickle_dealerships:confirmPurchase", function(data)
             if spawnPoint then
                 SpawnPurchasedVehicle(result.model, spawnPoint, nil)
             end
-            ShowNotification(("Congratulations! You purchased a %s."):format(result.label or result.model))
+            ShowNotification(_L("sales_purchase_success", result.label or result.model))
         else
-            ShowNotification(result and result.message or "Purchase failed.")
+            ShowNotification(result and result.message or _L("sales_purchase_failed"))
         end
     else
-        ShowNotification("You declined the purchase.")
+        ShowNotification(_L("sales_purchase_declined"))
     end
 end)
 

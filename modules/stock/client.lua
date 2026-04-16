@@ -277,11 +277,11 @@ RegisterNUICallback("orderVehicle", function(data, cb)
 
     local success, result = lib.callback.await('pickle_dealerships:orderVehicle', false, location, data.model, data.wholesale, tonumber(data.quantity) or 1)
     if success then
-        ShowNotification("Vehicle ordered successfully!")
+        ShowNotification(_L("stock_order_success"))
         cb({ success = true, stockId = result })
     else
-        ShowNotification(result or "Failed to order vehicle.")
-        cb({ success = false, message = result or "Order failed." })
+        ShowNotification(result or _L("stock_order_failed"))
+        cb({ success = false, message = result or _L("stock_order_failed") })
     end
 end)
 
@@ -330,7 +330,7 @@ RegisterNUICallback("setRetailPrice", function(data, cb)
     if success then
         cb({ success = true })
     else
-        ShowNotification(err or "Failed to set retail price.")
+        ShowNotification(err or _L("stock_retail_price_failed"))
         cb({ success = false, message = err or "Failed." })
     end
 end)
@@ -346,7 +346,7 @@ RegisterNUICallback("setDisplaySpot", function(data, cb)
     if success then
         cb({ success = true })
     else
-        ShowNotification(err or "Failed to set display spot.")
+        ShowNotification(err or _L("stock_display_spot_failed"))
         cb({ success = false, message = err or "Failed." })
     end
 end)
@@ -396,7 +396,7 @@ end)
 --- Open the trade-in dialog for a targeted vehicle
 local function StartTradeIn(vehicle)
     if not currentDealership then
-        ShowNotification('You must be inside a dealership to trade in a vehicle.')
+        ShowNotification(_L('trade_in_not_in_dealership'))
         return
     end
     if not vehicle or not DoesEntityExist(vehicle) or GetEntityType(vehicle) ~= 2 then return end
@@ -405,20 +405,20 @@ local function StartTradeIn(vehicle)
     if not rawPlate then return end
     local plate = rawPlate:gsub('^%s*(.-)%s*$', '%1')
     if plate == '' then
-        ShowNotification('This vehicle has no plate.')
+        ShowNotification(_L('trade_in_no_plate'))
         return
     end
 
     local properties = lib.getVehicleProperties(vehicle)
     if not properties then
-        ShowNotification('Could not read vehicle properties.')
+        ShowNotification(_L('trade_in_no_props'))
         return
     end
 
     -- Ask the server to resolve the model (and any catalog suggestion) from the plate's framework record
     local suggestion = lib.callback.await('pickle_dealerships:getTradeInSuggestion', false, currentDealership, plate)
     if not suggestion or suggestion.ownerless then
-        ShowNotification('This vehicle is not registered to a player.')
+        ShowNotification(_L('trade_in_not_registered'))
         return
     end
     local suggestedBuy = suggestion.wholesale
@@ -441,7 +441,7 @@ local function StartTradeIn(vehicle)
         retailPrice = retailPrice,
     })
     if not ok then
-        ShowNotification(err or 'Trade-in failed.')
+        ShowNotification(err or _L('trade_in_failed'))
         return
     end
 

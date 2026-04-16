@@ -337,7 +337,7 @@ end
 function OpenKiosk(locationKey)
     local cfg = DealershipConfigs[locationKey]
     if cfg and not cfg.selfService then
-        ShowNotification("Self-service is not available at this dealership.")
+        ShowNotification(_L("showroom_self_service_unavailable"))
         return
     end
 
@@ -387,6 +387,10 @@ end)
 
 RegisterNUICallback('ready', function(_, cb)
     cb('ok')
+end)
+
+RegisterNUICallback('getLocale', function(_, cb)
+    cb(Language[Config.Language] or {})
 end)
 
 -- Cleanup on resource stop

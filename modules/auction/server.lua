@@ -249,9 +249,11 @@ lib.callback.register("pickle_dealerships:claimAuctionVehicle", function(source,
     if not identifier then return false, "Could not identify player." end
 
     local row = MySQL.single.await(
-        [[SELECT a.*, s.vehicle_model, s.vehicle_label, s.metadata AS stock_metadata, s.plate, s.dealership_id AS dsid
+        [[SELECT a.*, s.vehicle_model, s.vehicle_label, s.metadata AS stock_metadata, s.plate, s.dealership_id AS dsid,
+                 d.location AS dealership_location
           FROM `dealership_auctions` a
           JOIN `dealership_stock` s ON s.id = a.stock_id
+          JOIN `dealerships` d ON d.id = s.dealership_id
           WHERE a.id = ?]],
         { auctionId }
     )
@@ -266,19 +268,52 @@ lib.callback.register("pickle_dealerships:claimAuctionVehicle", function(source,
         { identifier, 'auction', row.stock_id }
     )
 
+    -- Parse properties for ownership registration
+    local props = row.stock_metadata
+    if props and type(props) == "string" then props = json.decode(props) end
+    local plate = row.plate
+
+    -- Register ownership in the framework (garage)
+    if plate then
+        AddOwnedVehicleWithProps(source, row.vehicle_model, plate, props)
+    end
+
+    -- If caller requested garage-only delivery, skip spawn
+    local toGarage = data.toGarage == true
+    if toGarage then
+        return true, { toGarage = true, label = row.vehicle_label or row.vehicle_model }
+    end
+
     return true, {
         stockId = row.stock_id,
         model = row.vehicle_model,
         label = row.vehicle_label,
-        plate = row.plate,
+        plate = plate,
         properties = row.stock_metadata,
         dealershipId = row.dsid,
+        dealershipLocation = row.dealership_location,
     }
 end)
 
 -- ─── Read-only lookups ───────────────────────────────────────────────────────
 
-lib.callback.register("pickle_dealerships:getActiveAuctions", function()
+lib.callback.register("pickle_dealerships:getActiveAuctions", function(_, data)
+    local dealershipId = data and tonumber(data.dealershipId) or nil
+    if dealershipId then
+        local rows = MySQL.query.await(
+            [[SELECT a.*, s.vehicle_model, s.vehicle_label, s.plate, s.condition,
+                     d.name AS dealership_name,
+                     (SELECT COUNT(*) FROM dealership_auction_bids b WHERE b.auction_id = a.id) AS bid_count
+              FROM `dealership_auctions` a
+              JOIN `dealership_stock` s ON s.id = a.stock_id
+              JOIN `dealerships` d ON d.id = a.dealership_id
+              WHERE a.status = 'active' AND a.dealership_id = ?
+              ORDER BY a.ends_at ASC]],
+            { dealershipId }
+        ) or {}
+        for _, r in ipairs(rows) do NormalizeStatus(r) end
+        return rows
+    end
     return FetchActiveAuctions()
 end)
 
@@ -298,6 +333,10 @@ end)
 -- Return the caller's identifier (used by UI to highlight own bids as "you")
 lib.callback.register("pickle_dealerships:getMyIdentifier", function(source)
     return GetIdentifier(source)
+end)
+
+lib.callback.register("pickle_dealerships:getMyCharacterName", function(source)
+    return GetPlayerCharacterName(source) or "Player"
 end)
 
 -- ─── Viewer routing bucket (per-player showcase isolation) ──────────────────

@@ -44,32 +44,32 @@ lib.callback.register("pickle_dealerships:hireEmployee", function(source, data)
     local role = data.role or "salesperson"
 
     if not dealershipId or not targetId then
-        return { success = false, message = "Invalid request." }
+        return { success = false, message = _L("invalid_request") }
     end
 
     if not CanPlayerManage(source, dealershipId) then
-        return { success = false, message = "You do not have permission to hire employees." }
+        return { success = false, message = _L("no_permission_hire") }
     end
 
     local dealership = GetDealership(dealershipId)
     if not dealership then
-        return { success = false, message = "Dealership not found." }
+        return { success = false, message = _L("dealership_not_found") }
     end
 
     if not dealership.job or dealership.job == "" then
-        return { success = false, message = "This dealership has no job assigned. Set a job in the admin panel first." }
+        return { success = false, message = _L("dealership_no_job") }
     end
 
     -- Validate target player exists
     local targetName = GetPlayerName(targetId)
     if not targetName then
-        return { success = false, message = "Target player not found." }
+        return { success = false, message = _L("target_player_not_found") }
     end
 
     -- Check if target already has this job
     local targetJob = GetPlayerJobName(targetId)
     if targetJob == dealership.job then
-        return { success = false, message = "This player already works at this dealership." }
+        return { success = false, message = _L("employee_already_works") }
     end
 
     -- Set their framework job
@@ -79,10 +79,10 @@ lib.callback.register("pickle_dealerships:hireEmployee", function(source, data)
     local charName = GetPlayerCharacterName(targetId)
     AddLedgerEntry(dealershipId, "employee_hire", 0, ("Hired %s as %s"):format(charName, role), GetIdentifier(targetId))
 
-    ShowNotification(source, ("You hired %s as a %s."):format(charName, role))
-    ShowNotification(targetId, ("You have been hired as a %s at %s!"):format(role, dealership.name))
+    ShowNotification(source, _L("employee_hired_notify", charName, role))
+    ShowNotification(targetId, _L("employee_hired_target", role, dealership.name))
 
-    return { success = true, message = ("Successfully hired %s."):format(charName) }
+    return { success = true, message = _L("employee_hired_success", charName) }
 end)
 
 -- ─── Fire Employee ──────────────────────────────────────────────────────────
@@ -92,44 +92,44 @@ lib.callback.register("pickle_dealerships:fireEmployee", function(source, data)
     local targetServerId = tonumber(data.targetServerId)
 
     if not dealershipId or not targetServerId then
-        return { success = false, message = "Invalid request." }
+        return { success = false, message = _L("invalid_request") }
     end
 
     if not CanPlayerManage(source, dealershipId) then
-        return { success = false, message = "You do not have permission to fire employees." }
+        return { success = false, message = _L("no_permission_fire") }
     end
 
     local dealership = GetDealership(dealershipId)
     if not dealership or not dealership.job then
-        return { success = false, message = "Dealership not found or has no job." }
+        return { success = false, message = _L("dealership_not_found_no_job") }
     end
 
     -- Verify target has this job
     local targetJob = GetPlayerJobName(targetServerId)
     if targetJob ~= dealership.job then
-        return { success = false, message = "This player does not work at this dealership." }
+        return { success = false, message = _L("employee_not_at_dealership") }
     end
 
     -- Cannot fire yourself
     if targetServerId == source then
-        return { success = false, message = "You cannot fire yourself." }
+        return { success = false, message = _L("cannot_fire_self") }
     end
 
     -- Check hierarchy: managers can't fire managers
     local myGrade = GetPlayerJobGrade(source)
     local targetGrade = GetPlayerJobGrade(targetServerId)
     if targetGrade >= myGrade then
-        return { success = false, message = "You cannot fire someone of equal or higher rank." }
+        return { success = false, message = _L("cannot_fire_higher_rank") }
     end
 
     local charName = GetPlayerCharacterName(targetServerId)
     SetPlayerJob(targetServerId, 'unemployed', 0)
 
     AddLedgerEntry(dealershipId, "employee_fire", 0, ("Fired %s"):format(charName), GetIdentifier(targetServerId))
-    ShowNotification(source, ("You fired %s."):format(charName))
-    ShowNotification(targetServerId, "You have been terminated from the dealership.")
+    ShowNotification(source, _L("employee_fired_notify", charName))
+    ShowNotification(targetServerId, _L("employee_fired_target"))
 
-    return { success = true, message = ("Fired %s."):format(charName) }
+    return { success = true, message = _L("employee_fired_success", charName) }
 end)
 
 -- ─── Set Employee Role (change job grade) ──────────────────────────────────
@@ -140,33 +140,33 @@ lib.callback.register("pickle_dealerships:setEmployeeRole", function(source, dat
     local newRole = data.role
 
     if not dealershipId or not targetServerId or not newRole then
-        return { success = false, message = "Invalid request." }
+        return { success = false, message = _L("invalid_request") }
     end
 
     local dealership = GetDealership(dealershipId)
     if not dealership or not dealership.job then
-        return { success = false, message = "Dealership not found or has no job." }
+        return { success = false, message = _L("dealership_not_found_no_job") }
     end
 
     -- Only owner/admin can change roles
     local myRole = GetPlayerDealershipRole(source, dealershipId)
     if myRole ~= "owner" and not IsPlayerAdmin(source) then
-        return { success = false, message = "Only the owner can change employee roles." }
+        return { success = false, message = _L("only_owner_change_roles") }
     end
 
     local targetJob = GetPlayerJobName(targetServerId)
     if targetJob ~= dealership.job then
-        return { success = false, message = "This player does not work at this dealership." }
+        return { success = false, message = _L("employee_not_at_dealership") }
     end
 
     local grade = RoleToGrade(newRole, dealership.job)
     SetPlayerJob(targetServerId, dealership.job, grade)
 
     local charName = GetPlayerCharacterName(targetServerId)
-    ShowNotification(source, ("Changed %s's role to %s."):format(charName, newRole))
-    ShowNotification(targetServerId, ("Your role has been changed to %s."):format(newRole))
+    ShowNotification(source, _L("employee_role_changed_notify", charName, newRole))
+    ShowNotification(targetServerId, _L("employee_role_changed_target", newRole))
 
-    return { success = true, message = ("Role updated to %s."):format(newRole) }
+    return { success = true, message = _L("employee_role_updated", newRole) }
 end)
 
 -- ─── Get Employees (from framework job) ────────────────────────────────────
@@ -218,7 +218,7 @@ lib.callback.register("pickle_dealerships:clockIn", function(source, data)
 
     local dealership = GetDealership(dealershipId)
     if not dealership then
-        return { success = false, message = "Dealership not found." }
+        return { success = false, message = _L("dealership_not_found") }
     end
 
     -- Allow admins, owners, and employees with matching job to clock in
@@ -243,7 +243,7 @@ lib.callback.register("pickle_dealerships:clockIn", function(source, data)
         print(("[ClockIn] DENIED source=%s dealershipId=%s job=%s playerJob=%s"):format(
             tostring(source), tostring(dealershipId), tostring(dealership.job), tostring(GetPlayerJobName(source))
         ))
-        return { success = false, message = "You do not work at this dealership." }
+        return { success = false, message = _L("employee_not_work_here") }
     end
 
     local src = tonumber(source)
@@ -284,7 +284,7 @@ lib.callback.register("pickle_dealerships:clockIn", function(source, data)
         })
     end
 
-    return { success = true, message = "You are now on duty." }
+    return { success = true, message = _L("employee_on_duty") }
 end)
 
 lib.callback.register("pickle_dealerships:getClockStatus", function(source, data)
@@ -306,9 +306,9 @@ lib.callback.register("pickle_dealerships:clockOut", function(source, data)
     if src and OnDutyEmployees[src] then
         OnDutyEmployees[src] = nil
         TriggerClientEvent("pickle_dealerships:npc:stopDuty", src)
-        return { success = true, message = "You are now off duty." }
+        return { success = true, message = _L("employee_off_duty") }
     end
-    return { success = false, message = "You are not on duty." }
+    return { success = false, message = _L("employee_not_on_duty") }
 end)
 
 -- Clean up on player disconnect

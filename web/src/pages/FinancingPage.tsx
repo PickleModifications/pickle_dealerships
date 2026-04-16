@@ -6,6 +6,7 @@ import { ScrollArea } from '../components/ui/scroll-area'
 import { Separator } from '../components/ui/separator'
 import { Progress } from '../components/ui/progress'
 import { fetchNui, formatCurrency } from '../lib/utils'
+import { t } from '../lib/locale'
 import { SkeletonList } from '../components/ui/skeleton'
 import { X, CreditCard, AlertTriangle } from 'lucide-react'
 import type { DealershipData, FinancingAgreement } from '../types'
@@ -44,8 +45,8 @@ export default function FinancingPage({ data, onClose }: Props) {
     <>
       <div className="flex items-center justify-between p-5 pb-0">
         <div>
-          <h1 className="text-xl font-bold">Financing</h1>
-          <p className="text-sm text-muted-foreground">Your vehicle financing agreements</p>
+          <h1 className="text-xl font-bold">{t('title_financing')}</h1>
+          <p className="text-sm text-muted-foreground">{t('title_financing_desc')}</p>
         </div>
         <Button variant="ghost" size="icon" onClick={onClose}>
           <X className="h-5 w-5" />
@@ -60,7 +61,7 @@ export default function FinancingPage({ data, onClose }: Props) {
         ) : agreements.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
             <CreditCard className="h-10 w-10 mb-2 opacity-50" />
-            <p>No financing agreements</p>
+            <p>{t('empty_no_agreements')}</p>
           </div>
         ) : (
           <div className="space-y-3">
@@ -85,7 +86,7 @@ export default function FinancingPage({ data, onClose }: Props) {
 
                     <div className="mb-3">
                       <div className="flex justify-between text-sm mb-1">
-                        <span>Paid: {formatCurrency(agreement.amount_paid)}</span>
+                        <span>{t('label_paid', formatCurrency(agreement.amount_paid))}</span>
                         <span>{formatCurrency(agreement.total_amount)}</span>
                       </div>
                       <Progress value={paidPercent} />
@@ -93,15 +94,15 @@ export default function FinancingPage({ data, onClose }: Props) {
 
                     <div className="grid grid-cols-3 gap-2 text-center text-sm">
                       <div>
-                        <p className="text-xs text-muted-foreground">Payment</p>
+                        <p className="text-xs text-muted-foreground">{t('label_payment')}</p>
                         <p className="font-medium">{formatCurrency(agreement.installment_amount)}</p>
                       </div>
                       <div>
-                        <p className="text-xs text-muted-foreground">Remaining</p>
+                        <p className="text-xs text-muted-foreground">{t('label_remaining')}</p>
                         <p className="font-medium">{formatCurrency(remaining)}</p>
                       </div>
                       <div>
-                        <p className="text-xs text-muted-foreground">Interest</p>
+                        <p className="text-xs text-muted-foreground">{t('label_interest_rate')}</p>
                         <p className="font-medium">{Math.round(agreement.interest_rate * 100)}%</p>
                       </div>
                     </div>
@@ -109,13 +110,13 @@ export default function FinancingPage({ data, onClose }: Props) {
                     {agreement.missed_payments > 0 && (
                       <div className="flex items-center gap-2 mt-3 p-2 rounded-md bg-destructive/10 text-destructive text-sm">
                         <AlertTriangle className="h-4 w-4" />
-                        <span>{agreement.missed_payments} missed payment{agreement.missed_payments > 1 ? 's' : ''}</span>
+                        <span>{t('label_missed_payments', String(agreement.missed_payments))}</span>
                       </div>
                     )}
 
                     {agreement.status === 'active' && (
                       <Button className="w-full mt-3" size="sm" onClick={() => handlePayment(agreement.id)}>
-                        Make Payment ({formatCurrency(agreement.installment_amount)})
+                        {t('btn_make_payment')} ({formatCurrency(agreement.installment_amount)})
                       </Button>
                     )}
                   </CardContent>
