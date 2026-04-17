@@ -108,7 +108,7 @@ lib.callback.register("pickle_dealerships:createAuction", function(source, data)
     )
     if not id then return false, "Failed to create auction." end
 
-    MySQL.update.await("UPDATE `dealership_stock` SET `auction_id` = ? WHERE `id` = ?", { id, stockId })
+    MySQL.update.await("UPDATE `dealership_stock` SET `auction_id` = ?, `unlisted` = 0 WHERE `id` = ?", { id, stockId })
 
     BroadcastAuctionUpdate(id)
     return true, id
@@ -270,13 +270,19 @@ lib.callback.register("pickle_dealerships:claimAuctionVehicle", function(source,
 
     -- Parse properties for ownership registration
     local props = row.stock_metadata
-    if props and type(props) == "string" then props = json.decode(props) end
-    local plate = row.plate
+    if props and type(props) == "string" then props = json.decode(props) or {} end
+    if type(props) ~= "table" then props = {} end
 
-    -- Register ownership in the framework (garage)
-    if plate then
-        AddOwnedVehicleWithProps(source, row.vehicle_model, plate, props)
+    -- Use a single authoritative plate so GetOwnedVehicleFromPlate resolves correctly
+    -- (matches the sales / financing flow). Falls back to generating one if the stock
+    -- row somehow has no plate.
+    local plate = row.plate
+    if not plate or plate == '' then
+        plate = GeneratePlate()
     end
+    props.plate = plate
+
+    AddOwnedVehicleWithProps(source, row.vehicle_model, plate, props)
 
     -- If caller requested garage-only delivery, skip spawn
     local toGarage = data.toGarage == true
@@ -289,7 +295,7 @@ lib.callback.register("pickle_dealerships:claimAuctionVehicle", function(source,
         model = row.vehicle_model,
         label = row.vehicle_label,
         plate = plate,
-        properties = row.stock_metadata,
+        properties = props,
         dealershipId = row.dsid,
         dealershipLocation = row.dealership_location,
     }

@@ -65,6 +65,7 @@ export interface StockItem {
   image?: string | null
   class?: string
   is_used?: number | boolean
+  unlisted?: number | boolean
   is_order?: boolean
   metadata?: Record<string, unknown> | string | null
   plate?: string | null
@@ -198,6 +199,7 @@ export interface AdminDealership {
   tier: number
   balance: number
   job?: string | null
+  seize_enabled?: number | boolean
   metadata?: DealershipMetadata | string | null
 }
 

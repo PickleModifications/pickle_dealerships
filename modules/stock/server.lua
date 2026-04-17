@@ -116,10 +116,11 @@ lib.callback.register('pickle_dealerships:getStock', function(source, locationKe
     -- Process any orders that have arrived
     ProcessDeliveredOrders(dealership.id)
 
-    local stock = MySQL.query.await(
-        'SELECT ds.*, wc.image, wc.class FROM dealership_stock ds LEFT JOIN wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL ORDER BY ds.ordered_at DESC',
-        { dealership.id }
-    ) or {}
+    local isManager = CanPlayerManage(source, dealership.id)
+    local stockQuery = isManager
+        and 'SELECT ds.*, wc.image, wc.class FROM dealership_stock ds LEFT JOIN wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL ORDER BY ds.ordered_at DESC'
+        or  'SELECT ds.*, wc.image, wc.class FROM dealership_stock ds LEFT JOIN wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.unlisted = 0 ORDER BY ds.ordered_at DESC'
+    local stock = MySQL.query.await(stockQuery, { dealership.id }) or {}
 
     -- Also include pending orders, formatted like stock items so the UI can render them as in-transit cards
     local orders = MySQL.query.await(
@@ -175,7 +176,7 @@ lib.callback.register('pickle_dealerships:getShowroomStock', function(source, da
     }
     local orderBy = sortMap[sortBy] or 'ds.vehicle_label ASC'
 
-    local where = 'ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.delivered_at IS NOT NULL AND ds.delivered_at <= NOW()'
+    local where = 'ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.unlisted = 0 AND ds.delivered_at IS NOT NULL AND ds.delivered_at <= NOW()'
     local params = { dealership.id }
 
     if search ~= '' then
@@ -219,7 +220,7 @@ lib.callback.register('pickle_dealerships:getShowroomStock', function(source, da
     local highestPrice = 0
     if page == 1 and search == '' and classFilter == 'all' and not minPrice and not maxPrice then
         local classRows = MySQL.query.await(
-            'SELECT DISTINCT wc.class FROM dealership_stock ds LEFT JOIN wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.delivered_at IS NOT NULL AND ds.delivered_at <= NOW() AND wc.class IS NOT NULL ORDER BY wc.class',
+            'SELECT DISTINCT wc.class FROM dealership_stock ds LEFT JOIN wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.unlisted = 0 AND ds.delivered_at IS NOT NULL AND ds.delivered_at <= NOW() AND wc.class IS NOT NULL ORDER BY wc.class',
             { dealership.id }
         )
         if classRows then
@@ -229,7 +230,7 @@ lib.callback.register('pickle_dealerships:getShowroomStock', function(source, da
         end
 
         highestPrice = MySQL.scalar.await(
-            'SELECT COALESCE(MAX(ds.retail_price), 0) FROM dealership_stock ds WHERE ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.delivered_at IS NOT NULL AND ds.delivered_at <= NOW()',
+            'SELECT COALESCE(MAX(ds.retail_price), 0) FROM dealership_stock ds WHERE ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.unlisted = 0 AND ds.delivered_at IS NOT NULL AND ds.delivered_at <= NOW()',
             { dealership.id }
         ) or 0
     end
@@ -446,6 +447,56 @@ lib.callback.register('pickle_dealerships:setRetailPrice', function(source, loca
     return true
 end)
 
+--- Owner/manager toggles the unlisted flag on a stock item
+lib.callback.register('pickle_dealerships:toggleUnlisted', function(source, locationKey, stockId)
+    local identifier = GetIdentifier(source)
+    if not identifier then return false, 'Unable to identify player.' end
+
+    local dealership = MySQL.single.await(
+        'SELECT * FROM dealerships WHERE location = ?',
+        { locationKey }
+    )
+    if not dealership then return false, 'Dealership not found.' end
+    if not CanPlayerManage(source, dealership.id) then return false, 'You do not have permission.' end
+
+    local stock = MySQL.single.await(
+        'SELECT id, unlisted, vehicle_label, auction_id FROM dealership_stock WHERE id = ? AND dealership_id = ? AND sold_at IS NULL',
+        { stockId, dealership.id }
+    )
+    if not stock then return false, 'Stock item not found.' end
+
+    local newValue = (stock.unlisted == 1 or stock.unlisted == true) and 0 or 1
+
+    -- If unlisting and the vehicle is at auction, cancel the auction (only if no bids)
+    if newValue == 1 and stock.auction_id then
+        local auction = MySQL.single.await(
+            "SELECT id, current_bid, status FROM dealership_auctions WHERE id = ?",
+            { stock.auction_id }
+        )
+        if auction and auction.status == 'active' then
+            if auction.current_bid and auction.current_bid > 0 then
+                return false, 'Cannot unlist while auction has active bids.'
+            end
+            MySQL.update.await(
+                "UPDATE dealership_auctions SET status = 'cancelled', ended_at = NOW() WHERE id = ?",
+                { stock.auction_id }
+            )
+            MySQL.update.await("UPDATE dealership_stock SET auction_id = NULL WHERE id = ?", { stockId })
+        end
+    end
+
+    -- If unlisting, also remove from display spot
+    if newValue == 1 then
+        MySQL.update.await('UPDATE dealership_stock SET unlisted = 1, display_spot = NULL WHERE id = ?', { stockId })
+    else
+        MySQL.update.await('UPDATE dealership_stock SET unlisted = 0 WHERE id = ?', { stockId })
+    end
+
+    local statusKey = newValue == 1 and 'stock_unlisted' or 'stock_listed'
+    ShowNotification(source, _L(statusKey, stock.vehicle_label or 'Vehicle'), 'success')
+    return true, newValue == 1
+end)
+
 --- Assigns a stock item to a display spot (or removes from display)
 ---@param source number
 ---@param locationKey string
@@ -479,6 +530,7 @@ lib.callback.register('pickle_dealerships:setDisplaySpot', function(source, loca
         { stockId, dealership.id }
     )
     if not stock then return false, 'Stock item not found.' end
+    if spot and (stock.unlisted == 1 or stock.unlisted == true) then return false, 'Cannot display an unlisted vehicle.' end
 
     if spot then
         -- Check if spot is already occupied by another vehicle
@@ -556,6 +608,14 @@ lib.callback.register('pickle_dealerships:getTradeInSuggestion', function(source
         wholesale = entry and tonumber(entry.wholesale) or nil,
         owner = owned.owner,
     }
+end)
+
+--- Quick lookup: is this plate registered to a player? (for client-side pre-flight checks)
+lib.callback.register('pickle_dealerships:isPlateOwned', function(source, plate)
+    if not plate then return false end
+    plate = string.upper(tostring(plate):gsub('^%s*(.-)%s*$', '%1'))
+    local owned = GetOwnedVehicleFromPlate(plate)
+    return owned and owned.owner ~= nil
 end)
 
 --- Manager trades in a player vehicle as pre-owned stock
@@ -671,6 +731,125 @@ lib.callback.register('pickle_dealerships:tradeInVehicle', function(source, loca
 
     ShowNotification(source, _L('stock_trade_in_buyer', label, GetCurrencyString(buyPrice)))
     TriggerClientEvent('pickle_dealerships:refreshDisplay', -1, locationKey)
+
+    return true, stockId
+end)
+
+--- Returns seize-enabled dealerships that this player can manage
+lib.callback.register('pickle_dealerships:getSeizeDealerships', function(source)
+    local identifier = GetIdentifier(source)
+    if not identifier then return {} end
+
+    local dealerships = MySQL.query.await(
+        'SELECT id, name, location FROM dealerships WHERE seize_enabled = 1'
+    ) or {}
+
+    local result = {}
+    for _, d in ipairs(dealerships) do
+        if CanPlayerManage(source, d.id) then
+            result[#result + 1] = { id = d.id, name = d.name, location = d.location }
+        end
+    end
+    return result
+end)
+
+--- Manager seizes a vehicle (no consent, no payment, unlisted by default)
+lib.callback.register('pickle_dealerships:seizeVehicle', function(source, data)
+    local identifier = GetIdentifier(source)
+    if not identifier then return false, 'Unable to identify player.' end
+    if type(data) ~= 'table' then return false, 'Invalid payload.' end
+
+    local dealershipId = tonumber(data.dealershipId)
+    local plate = data.plate and string.upper(tostring(data.plate):gsub('^%s*(.-)%s*$', '%1')) or nil
+    local properties = data.properties
+
+    if not dealershipId or not plate or not properties then return false, 'Missing data.' end
+
+    local dealership = MySQL.single.await('SELECT * FROM dealerships WHERE id = ?', { dealershipId })
+    if not dealership then return false, 'Dealership not found.' end
+    if not dealership.seize_enabled or dealership.seize_enabled == 0 or dealership.seize_enabled == false then return false, 'Seize mode is not enabled for this dealership.' end
+    if not CanPlayerManage(source, dealership.id) then return false, 'You do not have permission.' end
+
+    -- Only player-owned vehicles can be seized. NPC / unregistered vehicles are rejected.
+    local owned = GetOwnedVehicleFromPlate(plate)
+    if not owned or not owned.owner then
+        return false, 'Only player-owned vehicles can be seized.'
+    end
+
+    -- Prefer the framework-stored model name, but fall back to the client-supplied
+    -- name (resolved from the entity hash) when the bridge doesn't persist the model.
+    local model = owned.model
+    if (not model or model == '') and data.modelName and data.modelName ~= '' then
+        model = tostring(data.modelName):lower()
+    end
+    if not model then return false, 'Could not resolve vehicle model.' end
+
+    -- Capacity check
+    ProcessDeliveredOrders(dealership.id)
+    local tierCfg = Config.Tiers[dealership.tier or 1]
+    local stockCapacity = (tierCfg and tierCfg.stockCap) or 20
+    local stockCount = MySQL.scalar.await(
+        'SELECT COALESCE(SUM(quantity), 0) FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NULL',
+        { dealership.id }
+    ) or 0
+    local pendingCount = MySQL.scalar.await(
+        'SELECT COALESCE(SUM(quantity), 0) FROM dealership_orders WHERE dealership_id = ?',
+        { dealership.id }
+    ) or 0
+    if (tonumber(stockCount) + tonumber(pendingCount) + 1) > stockCapacity then
+        return false, 'Stock capacity reached.'
+    end
+
+    -- Derive condition from health
+    local props = properties
+    if type(props) == 'string' then props = json.decode(props) or {} end
+    local body = tonumber(props.bodyHealth) or 1000
+    local engine = tonumber(props.engineHealth) or 1000
+    local condition = math.max(0, math.min(100, ((body + engine) / 2) / 10))
+
+    local catalog = MySQL.single.await('SELECT label FROM wholesale_catalog WHERE model = ?', { model })
+    local label = (catalog and catalog.label) or (data.label and data.label ~= '' and data.label) or model
+
+    -- Remove ownership if the vehicle is registered
+    local previousOwner = nil
+    if owned and owned.owner then
+        previousOwner = owned.owner
+        RemoveOwnedVehicle(owned.owner, plate)
+    end
+
+    -- Cancel any active financing on this vehicle (no refund — the player loses the vehicle)
+    local activeLoan = MySQL.single.await(
+        "SELECT id, identifier, dealership_id FROM dealership_financing WHERE vehicle_plate = ? AND status = 'active'",
+        { plate }
+    )
+    if activeLoan then
+        MySQL.update.await(
+            "UPDATE dealership_financing SET status = 'repossessed' WHERE id = ?",
+            { activeLoan.id }
+        )
+        AddLedgerEntry(activeLoan.dealership_id, "repossession", 0, ("Vehicle seized — financing cancelled: plate %s"):format(plate), activeLoan.identifier)
+        local debtorSource = GetSourceFromIdentifier(activeLoan.identifier)
+        if debtorSource then
+            TriggerClientEvent("pickle_dealerships:vehicleRepossessed", debtorSource, {
+                plate = plate,
+                missedPayments = 0,
+            })
+        end
+    end
+
+    -- Insert as unlisted pre-owned stock (no cost to dealership)
+    local stockId = MySQL.insert.await(
+        'INSERT INTO dealership_stock (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, ordered_at, delivered_at, quantity, is_used, unlisted, metadata, plate, acquired_from, `condition`) VALUES (?, ?, ?, 0, 0, NOW(), NOW(), 1, 1, 1, ?, ?, ?, ?)',
+        {
+            dealership.id, model, label,
+            json.encode(props), plate, previousOwner or 'seized', condition,
+        }
+    )
+
+    AddLedgerEntry(dealership.id, 'seize', 0, 'Seized: ' .. label .. ' (' .. plate .. ')' .. (previousOwner and (' from ' .. previousOwner) or ''), identifier)
+
+    ShowNotification(source, _L('seize_success', label, plate))
+    TriggerClientEvent('pickle_dealerships:refreshDisplay', -1, dealership.location)
 
     return true, stockId
 end)

@@ -199,6 +199,37 @@ lib.callback.register("pickle_dealerships:adminToggleMode", function(source, dat
     return { success = true, newMode = newMode, message = _L("admin_mode_set_to", newMode) }
 end)
 
+--- Toggle seize mode for a dealership
+lib.callback.register("pickle_dealerships:adminToggleSeize", function(source, data)
+    if not IsPlayerAdmin(source) then
+        return { success = false, message = _L("admin_no_permission") }
+    end
+
+    local dealershipId = data.dealershipId
+    if not dealershipId then
+        return { success = false, message = _L("admin_missing_dealership_id") }
+    end
+
+    local dealership = GetDealership(dealershipId)
+    if not dealership then
+        return { success = false, message = _L("dealership_not_found") }
+    end
+
+    local current = (dealership.seize_enabled == 1 or dealership.seize_enabled == true) and 1 or 0
+    local newValue = current == 1 and 0 or 1
+
+    MySQL.update.await("UPDATE dealerships SET seize_enabled = ? WHERE id = ?", { newValue, dealershipId })
+    UpdateDealershipCache(dealershipId, { seize_enabled = newValue })
+
+    local adminName = GetPlayerCharacterName(source) or GetPlayerName(source)
+    AddLedgerEntry(dealershipId, "admin", 0, "Seize mode " .. (newValue == 1 and "enabled" or "disabled") .. " by admin " .. adminName, GetIdentifier(source))
+
+    -- Notify all clients to refresh their seize dealership cache
+    TriggerClientEvent('pickle_dealerships:refreshSeizeCache', -1)
+
+    return { success = true, seizeEnabled = newValue == 1, message = _L("admin_seize_set_to", newValue == 1 and "enabled" or "disabled") }
+end)
+
 --- Create a new dealership from admin panel
 lib.callback.register("pickle_dealerships:adminCreateDealership", function(source, data)
     if not IsPlayerAdmin(source) then

@@ -11,7 +11,7 @@ import { fetchNui, formatCurrency, getVehicleImage } from '../lib/utils'
 import { t } from '../lib/locale'
 import { getCached, setCache, buildKey } from '../lib/cache'
 import { SkeletonCardGrid } from '../components/ui/skeleton'
-import { X, Search, Package, Truck, Clock, Car, Pencil, SlidersHorizontal, FileText, Gavel } from 'lucide-react'
+import { X, Search, Package, Truck, Clock, Car, Pencil, SlidersHorizontal, FileText, Gavel, EyeOff, Eye, Settings } from 'lucide-react'
 import VehicleImg from '../components/VehicleImg'
 import { PickleFaxDialog } from '../components/PickleFax'
 import AuctionListDialog from '../components/AuctionListDialog'
@@ -67,6 +67,7 @@ export default function StockPage({ data, onClose }: Props) {
   const [stockTab, setStockTab] = useState<'new' | 'used'>('new')
   const [pickleFaxId, setPickleFaxId] = useState<number | null>(null)
   const [auctionListingItem, setAuctionListingItem] = useState<StockItem | null>(null)
+  const [selectedItem, setSelectedItem] = useState<StockItem | null>(null)
   const parentRef = useRef<HTMLDivElement>(null)
 
   const loadStock = () => {
@@ -83,6 +84,10 @@ export default function StockPage({ data, onClose }: Props) {
         setMaxRetailPrice(highest)
         setPriceRange([0, highest])
       }
+      setSelectedItem((prev) => {
+        if (!prev) return null
+        return items.find((s) => s.id === prev.id) || null
+      })
       setLoading(false)
     }).catch(() => setLoading(false))
   }
@@ -113,6 +118,14 @@ export default function StockPage({ data, onClose }: Props) {
       setPriceInput('')
       loadStock()
     })
+  }
+
+  const handleToggleUnlisted = (item: StockItem) => {
+    fetchNui('toggleUnlisted', {
+      dealershipId: data.dealershipId,
+      location: data.location,
+      stockId: item.id,
+    }).then(() => loadStock())
   }
 
   const classes = Array.from(new Set(stock.map((s) => s.class).filter(Boolean))).sort() as string[]
@@ -180,7 +193,7 @@ export default function StockPage({ data, onClose }: Props) {
   const virtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 128,
+    estimateSize: () => 100,
     overscan: 5,
   })
 
@@ -353,100 +366,60 @@ export default function StockPage({ data, onClose }: Props) {
                         key={virtualRow.index}
                         className="absolute top-0 left-0 w-full grid grid-cols-3"
                         style={{
-                          height: '120px',
+                          height: '94px',
                           gap: `${GAP}px`,
                           transform: `translateY(${virtualRow.start}px)`,
                         }}
                       >
                         {rowItems.map((item) => {
                           const incoming = inTransitByModel.get(item.vehicle_model)
+                          const profit = item.retail_price - item.wholesale_cost
                           return (
-                          <div key={item.id} className="rounded-lg border border-border hover:border-accent/50 transition-colors h-full p-3 flex flex-col overflow-hidden">
-                            <div className="flex items-start justify-between">
-                              <div className="flex items-start gap-2 flex-1 min-w-0">
-                                <VehicleImg image={item.image} model={item.vehicle_model} alt={item.vehicle_label} className="h-10 w-[70px] object-contain rounded-md bg-muted shrink-0" fallbackClassName="h-10 w-[70px] rounded-md bg-muted flex items-center justify-center shrink-0" />
-                                <div className="flex-1 min-w-0">
-                                  <div className="flex items-center gap-1.5">
-                                    <span className="font-semibold text-sm truncate">{item.vehicle_label || item.vehicle_model}</span>
-                                    {item.is_used ? (
-                                      <>
-                                        {item.plate && (
-                                          <span className="text-[10px] bg-violet-500/20 text-violet-300 px-1 rounded shrink-0 font-mono" title={`${t('label_plate')}: ${item.plate}`}>
-                                            {item.plate}
-                                          </span>
-                                        )}
-                                        {item.auction_id && (
-                                          <span className="text-[10px] bg-amber-500/20 text-amber-300 px-1 rounded shrink-0 flex items-center gap-0.5" title={t('label_at_auction')}>
-                                            <Gavel className="h-2.5 w-2.5" /> {t('label_at_auction')}
-                                          </span>
-                                        )}
-                                      </>
-                                    ) : (
-                                      (item.quantity || 1) > 1 && (
-                                        <span className="text-[10px] bg-muted px-1 rounded shrink-0">x{item.quantity}</span>
-                                      )
-                                    )}
-                                    {incoming && (
-                                      <span className="text-[10px] bg-amber-500/20 text-amber-400 px-1 rounded shrink-0 flex items-center gap-0.5" title={`${incoming.quantity} arriving in ${getTimeRemaining(incoming.delivered_at!)}`}>
-                                        <Truck className="h-2.5 w-2.5" /> +{incoming.quantity}
-                                      </span>
-                                    )}
-                                  </div>
-                                  <p className="text-[11px] text-muted-foreground capitalize">{item.class || t('label_vehicle')}</p>
+                          <div key={item.id} className="rounded-lg border border-border hover:border-accent/50 transition-colors h-full p-2.5 flex flex-col justify-between overflow-hidden cursor-pointer" onClick={() => setSelectedItem(item)}>
+                            <div className="flex items-center gap-2 min-w-0">
+                              <VehicleImg image={item.image} model={item.vehicle_model} alt={item.vehicle_label} className="h-10 w-[70px] object-contain rounded-md bg-muted shrink-0" fallbackClassName="h-10 w-[70px] rounded-md bg-muted flex items-center justify-center shrink-0" />
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="font-semibold text-xs truncate">{item.vehicle_label || item.vehicle_model}</span>
+                                  {item.is_used && item.plate && (
+                                    <span className="text-[9px] bg-violet-500/20 text-violet-300 px-1 rounded shrink-0 font-mono">{item.plate}</span>
+                                  )}
+                                  {incoming && (
+                                    <span className="text-[9px] bg-amber-500/20 text-amber-400 px-1 rounded shrink-0 flex items-center gap-0.5">
+                                      <Truck className="h-2.5 w-2.5" /> +{incoming.quantity}
+                                    </span>
+                                  )}
                                 </div>
-                              </div>
-                              <div className="flex items-center gap-0.5 shrink-0">
-                                {item.is_used && (
-                                  <button
-                                    className="h-6 w-6 flex items-center justify-center rounded hover:bg-muted text-muted-foreground hover:text-foreground"
-                                    title={t('picklefax_title')}
-                                    onClick={() => setPickleFaxId(item.id)}
-                                  >
-                                    <FileText className="h-3 w-3" />
-                                  </button>
-                                )}
-                                {canManage && item.is_used && !item.auction_id && (
-                                  <button
-                                    className="h-6 w-6 flex items-center justify-center rounded hover:bg-amber-500/20 text-muted-foreground hover:text-amber-400"
-                                    title={t('title_list_for_auction')}
-                                    onClick={() => setAuctionListingItem(item)}
-                                  >
-                                    <Gavel className="h-3 w-3" />
-                                  </button>
-                                )}
-                                {canManage && !item.auction_id && (
-                                  <button
-                                    className="h-6 w-6 flex items-center justify-center rounded hover:bg-muted text-muted-foreground hover:text-foreground"
-                                    title={t('title_edit_retail_price')}
-                                    onClick={() => { setEditingPrice(item); setPriceInput(String(item.retail_price)) }}
-                                  >
-                                    <Pencil className="h-3 w-3" />
-                                  </button>
-                                )}
+                                <p className="text-[10px] text-muted-foreground capitalize">{item.class || t('label_vehicle')}</p>
                               </div>
                             </div>
-                            <div className="flex items-center justify-between mt-auto pt-2 border-t border-border">
-                              <div className="flex gap-3">
+                            <div className="flex items-center justify-between pt-1.5 mt-1.5 border-t border-border">
+                              <div className="flex items-center gap-2.5">
                                 <div>
-                                  <p className="text-[10px] text-muted-foreground">{t('label_retail')}</p>
-                                  <p className="text-sm font-bold text-accent">{formatCurrency(item.retail_price)}</p>
+                                  <p className="text-[9px] text-muted-foreground leading-none">{t('label_retail')}</p>
+                                  <p className="text-xs font-bold text-accent leading-tight">{formatCurrency(item.retail_price)}</p>
                                 </div>
                                 <div>
-                                  <p className="text-[10px] text-muted-foreground">{t('label_profit')}</p>
-                                  <p className={`text-sm font-medium ${item.retail_price - item.wholesale_cost < 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
-                                    {formatCurrency(item.retail_price - item.wholesale_cost)}
-                                  </p>
+                                  <p className="text-[9px] text-muted-foreground leading-none">{t('label_profit')}</p>
+                                  <p className={`text-xs font-medium leading-tight ${profit < 0 ? 'text-rose-400' : 'text-emerald-400'}`}>{formatCurrency(profit)}</p>
                                 </div>
                                 {item.is_used && (() => {
                                   const cond = Math.round(Number(item.condition) || 0)
                                   const color = cond >= 80 ? 'text-emerald-400' : cond >= 50 ? 'text-amber-400' : 'text-rose-400'
                                   return (
                                     <div>
-                                      <p className="text-[10px] text-muted-foreground">{t('label_condition')}</p>
-                                      <p className={`text-sm font-medium ${color}`}>{cond}%</p>
+                                      <p className="text-[9px] text-muted-foreground leading-none">{t('label_condition')}</p>
+                                      <p className={`text-xs font-medium leading-tight ${color}`}>{cond}%</p>
                                     </div>
                                   )
                                 })()}
+                              </div>
+                              <div className="flex items-center gap-1">
+                                {!item.is_used && (item.quantity || 1) > 1 && (
+                                  <span className="text-[9px] bg-muted text-muted-foreground px-1 rounded">x{item.quantity}</span>
+                                )}
+                                {!!item.unlisted && <span className="text-[9px] bg-rose-500/20 text-rose-300 px-1 rounded flex items-center gap-0.5"><EyeOff className="h-2 w-2" /></span>}
+                                {!!item.auction_id && <span className="text-[9px] bg-amber-500/20 text-amber-300 px-1 rounded flex items-center gap-0.5"><Gavel className="h-2 w-2" /></span>}
                               </div>
                             </div>
                           </div>
@@ -472,6 +445,103 @@ export default function StockPage({ data, onClose }: Props) {
           onListed={() => loadStock()}
         />
       )}
+
+      {/* Stock item management modal */}
+      {selectedItem && (() => {
+        const hasSubDialog = !!(pickleFaxId || auctionListingItem || editingPrice)
+        return (
+        <div style={{ display: hasSubDialog ? 'none' : undefined }}>
+          <div className="absolute inset-0 z-40 bg-black/50 rounded-[inherit]" onClick={() => setSelectedItem(null)} />
+          <div className="absolute inset-0 z-50 flex items-center justify-center p-6 pointer-events-none" style={{ overflow: 'hidden' }}>
+            <div className="pointer-events-auto relative flex flex-col w-full border border-border bg-card shadow-lg rounded-lg" style={{ maxWidth: '24rem', maxHeight: 'calc(100% - 2rem)', overflow: 'hidden' }}>
+              {/* Header */}
+              <div className="p-5 pb-3 shrink-0">
+                <button className="absolute right-4 top-4 rounded-sm opacity-70 transition-opacity hover:opacity-100 focus:outline-none" onClick={() => setSelectedItem(null)}>
+                  <X className="h-4 w-4" />
+                </button>
+                <div className="flex items-start gap-3">
+                  <VehicleImg image={selectedItem.image} model={selectedItem.vehicle_model} alt={selectedItem.vehicle_label} className="h-14 w-24 object-contain rounded-md bg-muted shrink-0" fallbackClassName="h-14 w-24 rounded-md bg-muted flex items-center justify-center shrink-0" />
+                  <div className="min-w-0">
+                    <h2 className="text-base font-semibold leading-tight truncate">{selectedItem.vehicle_label || selectedItem.vehicle_model}</h2>
+                    <p className="text-xs text-muted-foreground capitalize mt-0.5">{selectedItem.class || t('label_vehicle')}</p>
+                    <div className="flex items-center gap-2 mt-1">
+                      {selectedItem.is_used && selectedItem.plate && (
+                        <span className="text-[10px] bg-violet-500/20 text-violet-300 px-1 rounded font-mono">{selectedItem.plate}</span>
+                      )}
+                      {!selectedItem.is_used && (selectedItem.quantity || 1) > 1 && (
+                        <span className="text-[10px] bg-muted px-1 rounded">x{selectedItem.quantity}</span>
+                      )}
+                      {!!selectedItem.unlisted && (
+                        <span className="text-[10px] bg-rose-500/20 text-rose-300 px-1 rounded flex items-center gap-0.5"><EyeOff className="h-2.5 w-2.5" /> {t('label_unlisted')}</span>
+                      )}
+                      {!!selectedItem.auction_id && (
+                        <span className="text-[10px] bg-amber-500/20 text-amber-300 px-1 rounded flex items-center gap-0.5"><Gavel className="h-2.5 w-2.5" /> {t('label_at_auction')}</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              {/* Body */}
+              <div className="flex-1 overflow-y-auto px-5 pb-5" style={{ minHeight: 0 }}>
+                {/* Stats */}
+                <div className="grid grid-cols-3 gap-2 mb-3">
+                  <div className="bg-muted/50 rounded-md px-3 py-2">
+                    <p className="text-[10px] text-muted-foreground">{t('label_retail')}</p>
+                    <p className="text-sm font-bold text-accent">{formatCurrency(selectedItem.retail_price)}</p>
+                  </div>
+                  <div className="bg-muted/50 rounded-md px-3 py-2">
+                    <p className="text-[10px] text-muted-foreground">{t('label_wholesale_cost')}</p>
+                    <p className="text-sm font-medium">{formatCurrency(selectedItem.wholesale_cost)}</p>
+                  </div>
+                  <div className="bg-muted/50 rounded-md px-3 py-2">
+                    <p className="text-[10px] text-muted-foreground">{t('label_profit')}</p>
+                    <p className={`text-sm font-medium ${selectedItem.retail_price - selectedItem.wholesale_cost < 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                      {formatCurrency(selectedItem.retail_price - selectedItem.wholesale_cost)}
+                    </p>
+                  </div>
+                </div>
+                {selectedItem.is_used && (() => {
+                  const cond = Math.round(Number(selectedItem.condition) || 0)
+                  const color = cond >= 80 ? 'text-emerald-400' : cond >= 50 ? 'text-amber-400' : 'text-rose-400'
+                  return (
+                    <div className="bg-muted/50 rounded-md px-3 py-2 mb-3">
+                      <div className="flex items-center justify-between">
+                        <p className="text-[10px] text-muted-foreground">{t('label_condition')}</p>
+                        <p className={`text-sm font-medium ${color}`}>{cond}%</p>
+                      </div>
+                      <div className="h-1.5 bg-muted rounded-full overflow-hidden mt-1.5">
+                        <div className={`h-full rounded-full ${cond >= 80 ? 'bg-emerald-400' : cond >= 50 ? 'bg-amber-400' : 'bg-rose-400'}`} style={{ width: `${cond}%` }} />
+                      </div>
+                    </div>
+                  )
+                })()}
+                {/* Actions */}
+                <Separator className="my-2" />
+                <div className="space-y-0.5">
+                  {canManage && !selectedItem.auction_id && (
+                    <StockActionRow icon={<Pencil className="h-4 w-4" />} label={t('title_edit_retail_price')} value={formatCurrency(selectedItem.retail_price)} onClick={() => { setEditingPrice(selectedItem); setPriceInput(String(selectedItem.retail_price)) }} />
+                  )}
+                  {selectedItem.is_used && (
+                    <StockActionRow icon={<FileText className="h-4 w-4" />} label={t('picklefax_title')} onClick={() => setPickleFaxId(selectedItem.id)} />
+                  )}
+                  {canManage && selectedItem.is_used && !selectedItem.auction_id && (
+                    <StockActionRow icon={<Gavel className="h-4 w-4" />} label={t('title_list_for_auction')} onClick={() => setAuctionListingItem(selectedItem)} />
+                  )}
+                  {canManage && selectedItem.is_used && (
+                    <StockActionRow
+                      icon={selectedItem.unlisted ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+                      label={selectedItem.unlisted ? t('title_mark_listed') : t('title_mark_unlisted')}
+                      accent={!!selectedItem.unlisted}
+                      onClick={() => handleToggleUnlisted(selectedItem)}
+                    />
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        )
+      })()}
 
       {/* Edit retail price dialog */}
       <Dialog open={!!editingPrice} onOpenChange={(open) => { if (!open) setEditingPrice(null) }}>
@@ -505,7 +575,7 @@ export default function StockPage({ data, onClose }: Props) {
             </div>
             <div className="flex gap-2">
               <Button variant="outline" className="flex-1" onClick={() => setEditingPrice(null)}>{t('btn_cancel')}</Button>
-              <Button className="flex-1" onClick={handleSetPrice}>{t('btn_save_price')}</Button>
+              <Button className="flex-1" onClick={() => { handleSetPrice(); setSelectedItem(null) }}>{t('btn_save_price')}</Button>
             </div>
           </div>
         </DialogContent>
@@ -534,5 +604,22 @@ function DualRangeSlider({ min, max, value, step, onChange, onCommit }: {
         onMouseUp={() => onCommit(value)}
         className="absolute w-full appearance-none bg-transparent pointer-events-none [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:bg-accent [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:relative [&::-webkit-slider-thumb]:z-20" />
     </div>
+  )
+}
+
+function StockActionRow({ icon, label, value, accent, onClick }: {
+  icon: React.ReactNode; label: string; value?: string; accent?: boolean; onClick: () => void
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-sm transition-colors hover:bg-muted group"
+    >
+      <div className={`h-8 w-8 rounded-md flex items-center justify-center shrink-0 ${accent ? 'bg-accent/15 text-accent' : 'bg-muted text-muted-foreground group-hover:text-foreground'}`}>
+        {icon}
+      </div>
+      <span className="flex-1 text-left">{label}</span>
+      {value && <span className="text-xs text-muted-foreground">{value}</span>}
+    </button>
   )
 }

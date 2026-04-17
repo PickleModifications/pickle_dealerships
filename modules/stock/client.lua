@@ -2,8 +2,14 @@ local displayVehicles = {}
 local ghostVehicles = {}
 local currentDealership = nil
 local isInZone = false
+local seizeDealerships = {}  -- cached list of seize-enabled dealerships this player can manage
 
 local GHOST_MODEL = `xm_prop_lab_barrier02` -- prop for empty display spots
+
+--- Refresh the cached list of seize-enabled dealerships this player can manage
+local function RefreshSeizeDealerships()
+    seizeDealerships = lib.callback.await('pickle_dealerships:getSeizeDealerships', false) or {}
+end
 
 --- Parse a display spot into x, y, z, w regardless of format (vector4, table)
 local function ParseSpot(spot)
@@ -78,7 +84,8 @@ local function SpawnDisplayVehicles(locationKey)
 
     for _, item in ipairs(stock) do
         local isDelivered = item.delivered_at and item.delivered_at ~= "" and not item.sold_at
-        if item.display_spot and isDelivered then
+        local isUnlisted = item.unlisted == 1 or item.unlisted == true
+        if item.display_spot and isDelivered and not isUnlisted then
             local spotId = tonumber(item.display_spot)
             -- Find the spot in displaySpots by its unique id
             local spot = nil
@@ -189,6 +196,7 @@ RegisterNetEvent('pickle_dealerships:enteredDealership', function(locationKey, d
     currentDealership = locationKey
     isInZone = true
     SpawnDisplayVehicles(locationKey)
+    RefreshSeizeDealerships()
 end)
 
 RegisterNetEvent('pickle_dealerships:exitedDealership', function(locationKey)
@@ -335,6 +343,21 @@ RegisterNUICallback("setRetailPrice", function(data, cb)
     end
 end)
 
+RegisterNUICallback("toggleUnlisted", function(data, cb)
+    local location = ResolveLocation(data)
+    if not location then
+        cb({ success = false, message = "Could not resolve location." })
+        return
+    end
+
+    local success, unlisted = lib.callback.await('pickle_dealerships:toggleUnlisted', false, location, data.stockId)
+    if success then
+        cb({ success = true, unlisted = unlisted })
+    else
+        cb({ success = false, message = unlisted or "Failed." })
+    end
+end)
+
 RegisterNUICallback("setDisplaySpot", function(data, cb)
     local location = ResolveLocation(data)
     if not location then
@@ -421,12 +444,13 @@ local function StartTradeIn(vehicle)
         ShowNotification(_L('trade_in_not_registered'))
         return
     end
-    local suggestedBuy = suggestion.wholesale
+    local msrp = suggestion.wholesale
+    local suggestedOffer = msrp and math.floor(msrp * 0.9) or 1000
     local label = suggestion.label or 'Vehicle'
 
     local input = lib.inputDialog('Trade-In: ' .. tostring(label), {
-        { type = 'number', label = 'Buy Price', description = suggestedBuy and ('Suggested MSRP: $' .. suggestedBuy) or 'No catalog reference for this model.', default = suggestedBuy, required = true, min = 1 },
-        { type = 'number', label = 'Retail Price (lot)', description = 'Price the dealership will sell it for.', required = true, min = 1 },
+        { type = 'number', label = 'Offer Price', description = msrp and ('Suggested: $' .. suggestedOffer .. ' (MSRP: $' .. msrp .. ')') or 'No catalog reference for this model.', default = suggestedOffer, required = true, min = 1 },
+        { type = 'number', label = 'Retail Price (lot)', description = 'Price the dealership will sell it for.', default = msrp or 1000, required = true, min = 1 },
     })
     if not input then return end
 
@@ -452,18 +476,106 @@ local function StartTradeIn(vehicle)
     end
 end
 
+--- Seize a vehicle (no consent, no payment, unlisted stock)
+local function StartSeize(vehicle)
+    if not vehicle or not DoesEntityExist(vehicle) or GetEntityType(vehicle) ~= 2 then return end
+
+    local rawPlate = GetVehicleNumberPlateText(vehicle)
+    if not rawPlate then return end
+    local plate = rawPlate:gsub('^%s*(.-)%s*$', '%1')
+    if plate == '' then
+        ShowNotification(_L('trade_in_no_plate'))
+        return
+    end
+
+    local properties = lib.getVehicleProperties(vehicle)
+    if not properties then
+        ShowNotification(_L('trade_in_no_props'))
+        return
+    end
+
+    -- Reject NPC / unregistered vehicles up front
+    local isOwned = lib.callback.await('pickle_dealerships:isPlateOwned', false, plate)
+    if not isOwned then
+        ShowNotification(_L('seize_not_player_owned'))
+        return
+    end
+
+    -- Resolve the model name + display label from the entity (hash → name → game label)
+    local modelHash = GetEntityModel(vehicle)
+    local modelName = tostring(GetDisplayNameFromVehicleModel(modelHash)):lower()
+    local labelKey = GetDisplayNameFromVehicleModel(modelHash)
+    local displayLabel = GetLabelText(labelKey)
+    if not displayLabel or displayLabel == '' or displayLabel == 'NULL' then
+        displayLabel = labelKey or modelName
+    end
+
+    -- Pick which dealership to seize into
+    local targetDealership
+    if #seizeDealerships == 1 then
+        targetDealership = seizeDealerships[1]
+    else
+        local options = {}
+        for _, d in ipairs(seizeDealerships) do
+            options[#options + 1] = { label = d.name, value = d.id }
+        end
+        local choice = lib.inputDialog(_L('seize_select_dealership'), {
+            { type = 'select', label = _L('label_dealership'), options = options, required = true },
+        })
+        if not choice then return end
+        for _, d in ipairs(seizeDealerships) do
+            if d.id == tonumber(choice[1]) then targetDealership = d break end
+        end
+    end
+    if not targetDealership then return end
+
+    -- Confirmation
+    local confirm = lib.alertDialog({
+        header = _L('seize_confirm_header'),
+        content = _L('seize_confirm_body', plate, targetDealership.name),
+        centered = true,
+        cancel = true,
+    })
+    if confirm ~= 'confirm' then return end
+
+    local ok, err = lib.callback.await('pickle_dealerships:seizeVehicle', false, {
+        dealershipId = targetDealership.id,
+        plate = plate,
+        properties = properties,
+        modelName = modelName,
+        label = displayLabel,
+    })
+    if not ok then
+        ShowNotification(err or _L('seize_failed'))
+        return
+    end
+
+    -- Despawn the world vehicle
+    if DoesEntityExist(vehicle) then
+        SetEntityAsMissionEntity(vehicle, true, true)
+        DeleteEntity(vehicle)
+    end
+end
+
 CreateThread(function()
     if not Config.UseTarget then return end
     Wait(2000) -- wait for target bridge
 
+    -- Initial fetch of seize dealerships
+    RefreshSeizeDealerships()
+
     AddTargetGlobalVehicle({
         {
             name = 'pickle_dealerships:tradeIn',
-            label = 'Trade In to Dealership',
+            label = _L('interact_trade_in'),
             icon = 'fa-solid fa-handshake-simple',
             distance = 2.5,
             canInteract = function(entity)
                 if not currentDealership then return false end
+                -- Hide trade-in if this dealership has seize enabled
+                for _, d in ipairs(seizeDealerships) do
+                    if d.location == currentDealership then return false end
+                end
                 local role = lib.callback.await('pickle_dealerships:getPlayerRole', false, currentDealership)
                 return role == 'owner' or role == 'manager' or role == 'admin'
             end,
@@ -475,7 +587,28 @@ CreateThread(function()
                 StartTradeIn(entity)
             end,
         },
+        {
+            name = 'pickle_dealerships:seizeVehicle',
+            label = _L('interact_seize_vehicle'),
+            icon = 'fa-solid fa-shield-halved',
+            distance = 2.5,
+            canInteract = function(entity)
+                return #seizeDealerships > 0
+            end,
+            onSelect = function(data)
+                StartSeize(data.entity)
+            end,
+            -- qb-target compatibility
+            action = function(entity)
+                StartSeize(entity)
+            end,
+        },
     })
+end)
+
+--- Refresh seize cache when server notifies us (admin toggled seize mode)
+RegisterNetEvent('pickle_dealerships:refreshSeizeCache', function()
+    RefreshSeizeDealerships()
 end)
 
 --- Cleanup on resource stop

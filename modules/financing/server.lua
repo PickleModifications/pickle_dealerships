@@ -133,11 +133,20 @@ end)
 
 -- ─── Create Financing ───────────────────────────────────────────────────────
 
+--- Returns the player's cash + bank balances (for the financing dialog's pre-flight funds check)
+lib.callback.register("pickle_dealerships:getPlayerBalances", function(source)
+    return {
+        cash = GetMoney(source, "money") or 0,
+        bank = GetMoney(source, "bank") or 0,
+    }
+end)
+
 lib.callback.register("pickle_dealerships:createFinancing", function(source, data)
     local dealershipId = tonumber(data.dealershipId)
     local stockId = tonumber(data.stockId)
     local downPayment = tonumber(data.downPayment) or 0
     local installments = tonumber(data.installments) or 12
+    local paymentMethod = data.paymentMethod == "cash" and "money" or "bank"
 
     if not dealershipId or not stockId then
         return { success = false, message = "Invalid request." }
@@ -195,7 +204,7 @@ lib.callback.register("pickle_dealerships:createFinancing", function(source, dat
         return { success = false, message = "Could not identify player." }
     end
 
-    local playerMoney = GetMoney(source, "bank")
+    local playerMoney = GetMoney(source, paymentMethod)
     if playerMoney < downPayment then
         return { success = false, message = "Insufficient funds for down payment." }
     end
@@ -206,8 +215,8 @@ lib.callback.register("pickle_dealerships:createFinancing", function(source, dat
     local totalWithInterest = remainingBalance + math.floor(remainingBalance * interestRate)
     local installmentAmount = math.ceil(totalWithInterest / installments)
 
-    -- Deduct down payment
-    RemoveMoney(source, downPayment, "bank")
+    -- Deduct down payment from the selected account
+    RemoveMoney(source, downPayment, paymentMethod)
 
     -- Sales tax
     local salesTax = math.floor(price * (Config.SalesTax or 0))
@@ -216,23 +225,22 @@ lib.callback.register("pickle_dealerships:createFinancing", function(source, dat
     AddDealershipBalance(dealershipId, netDownPayment)
     MarkStockSold(stockId, identifier, nil)
 
-    -- Generate plate and register vehicle
-    local plate = GeneratePlate()
-
-    -- For pre-owned, use properties
+    -- Register vehicle with a single, authoritative plate (matches the sales flow
+    -- so GetOwnedVehicleFromPlate resolves correctly for repossession / seize).
     local isUsed = stockItem.is_used == 1 or stockItem.is_used == true
-    local properties = nil
-    if isUsed and stockItem.metadata then
+    local plate
+    local properties
+    if isUsed and stockItem.plate and stockItem.plate ~= '' then
+        plate = stockItem.plate
         properties = stockItem.metadata
-        if type(properties) == "string" then properties = json.decode(properties) end
-    end
-
-    if properties and plate then
-        if type(properties) == "table" then properties.plate = plate end
-        AddOwnedVehicleWithProps(source, stockItem.vehicle_model, plate, properties)
+        if type(properties) == "string" then properties = json.decode(properties) or {} end
+        if type(properties) ~= "table" then properties = {} end
+        properties.plate = plate
     else
-        AddOwnedVehicle(source, stockItem.vehicle_model)
+        plate = GeneratePlate()
+        properties = { plate = plate }
     end
+    AddOwnedVehicleWithProps(source, stockItem.vehicle_model, plate, properties)
 
     -- Calculate next payment time
     local paymentIntervalSeconds = (settings.paymentIntervalHours or 24) * 3600
@@ -445,10 +453,7 @@ CreateThread(function()
                         "UPDATE `dealership_financing` SET `status` = 'repossessed', `missed_payments` = ? WHERE `id` = ?",
                         { newMissed, financing.id }
                     )
-                    MySQL.update(
-                        "DELETE FROM `player_vehicles` WHERE `plate` = ?",
-                        { financing.vehicle_plate }
-                    )
+                    RemoveOwnedVehicle(financing.identifier, financing.vehicle_plate)
                     AddLedgerEntry(financing.dealership_id, "repossession", 0, ("Vehicle repossessed: plate %s after %d missed payments"):format(financing.vehicle_plate, newMissed), financing.identifier)
 
                     local playerSource = GetSourceFromIdentifier(financing.identifier)

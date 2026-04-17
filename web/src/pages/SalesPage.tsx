@@ -44,7 +44,7 @@ export default function SalesPage({ data, onClose }: Props) {
     }).catch(() => setLoading(false))
   }, [data.dealershipId])
 
-  const available = stock.filter((s) => !s.sold_at && s.delivered_at && new Date(s.delivered_at) <= new Date())
+  const available = stock.filter((s) => !s.sold_at && !s.unlisted && s.delivered_at && new Date(s.delivered_at) <= new Date())
   const filtered = available.filter((item) =>
     (item.vehicle_label || item.vehicle_model).toLowerCase().includes(search.toLowerCase())
   )

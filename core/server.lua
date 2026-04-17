@@ -91,6 +91,10 @@ CreateThread(function()
         MySQL.Async.execute([[ ALTER TABLE `dealership_stock` ADD COLUMN IF NOT EXISTS `plate` VARCHAR(20) DEFAULT NULL AFTER `metadata` ]])
         MySQL.Async.execute([[ ALTER TABLE `dealership_stock` ADD COLUMN IF NOT EXISTS `acquired_from` VARCHAR(50) DEFAULT NULL AFTER `plate` ]])
 
+        -- Migration: seize vehicle support
+        MySQL.Async.execute([[ ALTER TABLE `dealerships` ADD COLUMN IF NOT EXISTS `seize_enabled` TINYINT(1) NOT NULL DEFAULT 0 AFTER `job` ]])
+        MySQL.Async.execute([[ ALTER TABLE `dealership_stock` ADD COLUMN IF NOT EXISTS `unlisted` TINYINT(1) NOT NULL DEFAULT 0 AFTER `is_used` ]])
+
         -- dealership_orders — pending/in-transit orders (separate from available stock)
         MySQL.Async.execute([[
             CREATE TABLE IF NOT EXISTS `dealership_orders` (

@@ -23,7 +23,7 @@ local function GenerateNPCProfile(dealershipId)
 
     -- Query actual available stock with wholesale costs and classes
     local availableStock = MySQL.query.await(
-        'SELECT ds.wholesale_cost, wc.class FROM dealership_stock ds LEFT JOIN wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.delivered_at IS NOT NULL AND ds.delivered_at <= NOW()',
+        'SELECT ds.wholesale_cost, wc.class FROM dealership_stock ds LEFT JOIN wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.unlisted = 0 AND ds.delivered_at IS NOT NULL AND ds.delivered_at <= NOW()',
         { dealershipId }
     )
 

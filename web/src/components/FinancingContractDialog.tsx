@@ -1,6 +1,8 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
-import { X, FileText, CreditCard, AlertTriangle, PenLine } from 'lucide-react'
-import { formatCurrency } from '../lib/utils'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { X, FileText, CreditCard, AlertTriangle, PenLine, Banknote, Wallet } from 'lucide-react'
+import Vara from 'vara'
+import satisfyFont from '../../public/fonts/satisfy.json'
+import { formatCurrency, fetchNui } from '../lib/utils'
 import { t } from '../lib/locale'
 import type { FinancingSettings } from '../types'
 
@@ -14,7 +16,7 @@ interface Props {
   settings: FinancingSettings
   initialInstallments?: number
   playerName?: string
-  onSign: (installments: number) => void
+  onSign: (installments: number, paymentMethod: 'cash' | 'bank') => void
   onClose: () => void
   signing?: boolean
 }
@@ -27,14 +29,26 @@ export default function FinancingContractDialog({ vehicleLabel, vehicleModel, ve
   const [installments, setInstallments] = useState(initialInstallments ?? settings.installmentOptions[0] ?? 8)
   const [isSigning, setIsSigning] = useState(false)
   const [signProgress, setSignProgress] = useState(0)
-  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'bank'>('bank')
+  const [balances, setBalances] = useState<{ cash: number; bank: number } | null>(null)
+  const [fundsError, setFundsError] = useState<string | null>(null)
+  const varaContainerRef = useRef<HTMLDivElement>(null)
+  const varaInstanceRef = useRef<Vara | null>(null)
   const signTimerRef = useRef<number | null>(null)
   const signStartRef = useRef<number>(0)
-  const animFrameRef = useRef<number | null>(null)
+  const progressFrameRef = useRef<number | null>(null)
+  const onSignCalledRef = useRef(false)
 
   useEffect(() => {
     const id = requestAnimationFrame(() => setVisible(true))
     return () => cancelAnimationFrame(id)
+  }, [])
+
+  // Fetch cash + bank balances so we can pre-flight the down payment
+  useEffect(() => {
+    fetchNui<{ cash: number; bank: number }>('getPlayerBalances', {}).then((res) => {
+      if (res) setBalances({ cash: res.cash ?? 0, bank: res.bank ?? 0 })
+    }).catch(() => {})
   }, [])
 
   const handleClose = () => {
@@ -59,117 +73,89 @@ export default function FinancingContractDialog({ vehicleLabel, vehicleModel, ve
 
   const sigName = playerName || 'Player'
 
-  // Signature animation — draws the player name character by character in cursive
-  const drawSignature = useCallback((progress: number) => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
+  // Bundle the font JSON into a blob URL so Vara can fetch it without needing a real HTTP path
+  const fontBlobUrl = useMemo(() => {
+    const blob = new Blob([JSON.stringify(satisfyFont)], { type: 'application/json' })
+    return URL.createObjectURL(blob)
+  }, [])
 
-    const w = canvas.width
-    const h = canvas.height
-    const dpr = window.devicePixelRatio || 1
-
-    // Set canvas resolution for crisp text
-    if (canvas.width !== Math.floor(w * dpr)) {
-      const displayW = canvas.clientWidth
-      const displayH = canvas.clientHeight
-      canvas.width = displayW * dpr
-      canvas.height = displayH * dpr
-      ctx.scale(dpr, dpr)
-    }
-
-    const drawW = canvas.clientWidth
-    const drawH = canvas.clientHeight
-    ctx.clearRect(0, 0, drawW, drawH)
-
-    // Determine how many characters to reveal
-    const totalChars = sigName.length
-    const charsToShow = Math.ceil(totalChars * progress)
-    const partialText = sigName.slice(0, charsToShow)
-
-    // Draw with a cursive font, dark ink colour
-    const fontSize = Math.min(28, drawW / (totalChars * 0.55))
-    ctx.font = `italic ${fontSize}px "Brush Script MT", "Segoe Script", "Apple Chancery", cursive`
-    ctx.fillStyle = '#1a1a2e'
-    ctx.textBaseline = 'middle'
-
-    // Slight slant per character for a hand-signed feel
-    const startX = drawW * 0.06
-    let x = startX
-    for (let i = 0; i < partialText.length; i++) {
-      const ch = partialText[i]
-      ctx.save()
-      // Small random-ish vertical jitter seeded by char index for consistency
-      const jitter = Math.sin(i * 7.3) * 1.5
-      const slant = -0.08 + Math.sin(i * 3.1) * 0.03
-      ctx.translate(x, drawH * 0.52 + jitter)
-      ctx.transform(1, 0, slant, 1, 0, 0) // italic skew
-      // Partial last character: fade in
-      if (i === partialText.length - 1 && progress < 1) {
-        const charProgress = (progress * totalChars) - (charsToShow - 1)
-        ctx.globalAlpha = Math.max(0.2, charProgress)
-      }
-      ctx.fillText(ch, 0, 0)
-      x += ctx.measureText(ch).width + 1
-      ctx.restore()
-    }
-
-    // Underline flourish that grows with progress
-    if (progress > 0.3) {
-      const flourishProgress = Math.min(1, (progress - 0.3) / 0.7)
-      const lineEndX = startX + (x - startX) * flourishProgress
-      ctx.beginPath()
-      ctx.strokeStyle = '#1a1a2e'
-      ctx.lineWidth = 1
-      ctx.globalAlpha = 0.4
-      ctx.moveTo(startX, drawH * 0.75)
-      // Slight wave
-      const cp1x = startX + (lineEndX - startX) * 0.3
-      const cp2x = startX + (lineEndX - startX) * 0.7
-      ctx.bezierCurveTo(cp1x, drawH * 0.72, cp2x, drawH * 0.78, lineEndX, drawH * 0.73)
-      ctx.stroke()
-      ctx.globalAlpha = 1
-    }
-  }, [sigName])
+  useEffect(() => () => URL.revokeObjectURL(fontBlobUrl), [fontBlobUrl])
 
   const startSigning = useCallback(() => {
+    // Pre-flight: check if the player has enough in the chosen account
+    const available = paymentMethod === 'cash' ? (balances?.cash ?? 0) : (balances?.bank ?? 0)
+    if (available < downPayment) {
+      setFundsError(t('contract_insufficient_funds', formatCurrency(downPayment), formatCurrency(available)))
+      return
+    }
+    setFundsError(null)
     setIsSigning(true)
     setSignProgress(0)
     signStartRef.current = Date.now()
+    onSignCalledRef.current = false
+  }, [balances, downPayment, paymentMethod])
 
+  // Initialize Vara when the signing UI mounts
+  useEffect(() => {
+    if (!isSigning) return
+    const container = varaContainerRef.current
+    if (!container) return
+
+    // Tag container so Vara can query it
+    const containerId = `vara-sig-${Math.random().toString(36).slice(2, 9)}`
+    container.id = containerId
+    container.innerHTML = ''
+
+    const instance = new Vara(
+      `#${containerId}`,
+      fontBlobUrl,
+      [{ text: sigName, fontSize: 48, duration: SIGN_DURATION, color: '#1a1a2e', id: 'sig', textAlign: 'center' }],
+      { strokeWidth: 1.4, textAlign: 'center' }
+    )
+    varaInstanceRef.current = instance
+
+    instance.animationEnd(() => {
+      if (!onSignCalledRef.current) {
+        onSignCalledRef.current = true
+        onSign(installments, paymentMethod)
+      }
+    })
+
+    return () => {
+      varaInstanceRef.current = null
+      if (container) container.innerHTML = ''
+    }
+  }, [isSigning, sigName, installments, onSign, fontBlobUrl, paymentMethod])
+
+  // Progress bar tick — independent of Vara internals
+  useEffect(() => {
+    if (!isSigning) return
     const tick = () => {
       const elapsed = Date.now() - signStartRef.current
       const p = Math.min(1, elapsed / SIGN_DURATION)
       setSignProgress(p)
-      drawSignature(p)
-
-      if (p >= 1) {
-        onSign(installments)
-        return
-      }
-      animFrameRef.current = requestAnimationFrame(tick)
+      if (p < 1) progressFrameRef.current = requestAnimationFrame(tick)
     }
-    animFrameRef.current = requestAnimationFrame(tick)
-  }, [drawSignature, installments, onSign])
+    progressFrameRef.current = requestAnimationFrame(tick)
+    return () => {
+      if (progressFrameRef.current) cancelAnimationFrame(progressFrameRef.current)
+      progressFrameRef.current = null
+    }
+  }, [isSigning])
 
   const cancelSigning = useCallback(() => {
-    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
+    if (progressFrameRef.current) cancelAnimationFrame(progressFrameRef.current)
     if (signTimerRef.current) clearTimeout(signTimerRef.current)
-    animFrameRef.current = null
+    progressFrameRef.current = null
     signTimerRef.current = null
     setIsSigning(false)
     setSignProgress(0)
-    const canvas = canvasRef.current
-    if (canvas) {
-      const ctx = canvas.getContext('2d')
-      if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height)
-    }
+    onSignCalledRef.current = true // prevent onSign firing if Vara animationEnd still fires
   }, [])
 
   useEffect(() => {
     return () => {
-      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
+      if (progressFrameRef.current) cancelAnimationFrame(progressFrameRef.current)
       if (signTimerRef.current) clearTimeout(signTimerRef.current)
     }
   }, [])
@@ -279,8 +265,8 @@ export default function FinancingContractDialog({ vehicleLabel, vehicleModel, ve
               {isSigning ? (
                 <div>
                   <p className="text-[10px] uppercase tracking-wider text-stone-500 mb-2">{t('contract_signing')}</p>
-                  <div className="relative border-2 border-stone-400 rounded bg-white/40 mb-3">
-                    <canvas ref={canvasRef} className="w-full" style={{ height: 60 }} />
+                  <div className="relative border-2 border-stone-400 rounded bg-white/40 mb-3 overflow-hidden px-3 flex items-center justify-center" style={{ minHeight: 80 }}>
+                    <div ref={varaContainerRef} className="w-full" />
                   </div>
                   <div className="flex items-center gap-3">
                     <div className="flex-1 h-1.5 bg-stone-300 rounded-full overflow-hidden">
@@ -295,18 +281,46 @@ export default function FinancingContractDialog({ vehicleLabel, vehicleModel, ve
                   </div>
                 </div>
               ) : (
-                <div className="flex items-center gap-3">
-                  <div className="flex-1 border-b-2 border-stone-400 pb-1">
-                    <p className="text-[10px] uppercase tracking-wider text-stone-500">{t('contract_buyer_signature')}</p>
+                <div className="space-y-3">
+                  {/* Payment method selector */}
+                  <div>
+                    <p className="text-[10px] uppercase tracking-wider text-stone-500 mb-1.5">{t('contract_payment_method')}</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        onClick={() => { setPaymentMethod('bank'); setFundsError(null) }}
+                        className={`flex items-center justify-between gap-2 px-3 py-2 rounded border-2 text-sm transition-colors ${paymentMethod === 'bank' ? 'border-blue-800 bg-blue-50 text-stone-900' : 'border-stone-300 bg-white/30 text-stone-600 hover:border-stone-500'}`}
+                      >
+                        <span className="flex items-center gap-2"><CreditCard className="h-4 w-4" /> {t('sales_payment_bank')}</span>
+                        {balances && <span className="text-[10px] font-mono text-stone-500">{formatCurrency(balances.bank)}</span>}
+                      </button>
+                      <button
+                        onClick={() => { setPaymentMethod('cash'); setFundsError(null) }}
+                        className={`flex items-center justify-between gap-2 px-3 py-2 rounded border-2 text-sm transition-colors ${paymentMethod === 'cash' ? 'border-blue-800 bg-blue-50 text-stone-900' : 'border-stone-300 bg-white/30 text-stone-600 hover:border-stone-500'}`}
+                      >
+                        <span className="flex items-center gap-2"><Banknote className="h-4 w-4" /> {t('sales_payment_cash')}</span>
+                        {balances && <span className="text-[10px] font-mono text-stone-500">{formatCurrency(balances.cash)}</span>}
+                      </button>
+                    </div>
                   </div>
-                  <button
-                    onClick={startSigning}
-                    disabled={signing}
-                    className="h-10 px-6 rounded bg-blue-800 hover:bg-blue-900 text-white font-semibold text-sm flex items-center gap-2 transition-colors disabled:opacity-50"
-                  >
-                    <PenLine className="h-4 w-4" />
-                    {signing ? t('contract_processing') : t('btn_sign_finance')}
-                  </button>
+                  {fundsError && (
+                    <div className="flex items-start gap-2 px-3 py-2 rounded bg-red-100 border border-red-300">
+                      <Wallet className="h-3.5 w-3.5 text-red-700 shrink-0 mt-0.5" />
+                      <p className="text-red-800 text-[11px]">{fundsError}</p>
+                    </div>
+                  )}
+                  <div className="flex items-center gap-3">
+                    <div className="flex-1 border-b-2 border-stone-400 pb-1">
+                      <p className="text-[10px] uppercase tracking-wider text-stone-500">{t('contract_buyer_signature')}</p>
+                    </div>
+                    <button
+                      onClick={startSigning}
+                      disabled={signing}
+                      className="h-10 px-6 rounded bg-blue-800 hover:bg-blue-900 text-white font-semibold text-sm flex items-center gap-2 transition-colors disabled:opacity-50"
+                    >
+                      <PenLine className="h-4 w-4" />
+                      {signing ? t('contract_processing') : t('btn_sign_finance')}
+                    </button>
+                  </div>
                 </div>
               )}
             </div>

@@ -374,6 +374,7 @@ RegisterNUICallback("showroomFinance", function(data, cb)
         stockId = data.stockId,
         downPayment = data.downPayment,
         installments = data.installments,
+        paymentMethod = data.paymentMethod,
     })
 
     if not result or not result.success then

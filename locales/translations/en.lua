@@ -277,6 +277,8 @@ Language["en"] = {
     admin_catalog_add_failed = "Failed to add vehicle.",
     admin_catalog_update_failed = "Failed to update vehicle.",
     admin_catalog_remove_failed = "Failed to remove vehicle.",
+    admin_seize_failed = "Failed to toggle seize mode.",
+    admin_seize_set_to = "Seize mode %s.",
     admin_upload_not_configured = "Image upload is not configured. Check config_sv.lua.",
     admin_no_image = "No image to save.",
     admin_image_failed = "Failed to save image.",
@@ -292,6 +294,20 @@ Language["en"] = {
     trade_in_no_props = "Could not read vehicle properties.",
     trade_in_not_registered = "This vehicle is not registered to a player.",
     trade_in_failed = "Trade-in failed.",
+    interact_trade_in = "Trade In to Dealership",
+
+    -- Seize Vehicle
+    interact_seize_vehicle = "Seize Vehicle",
+    seize_select_dealership = "Seize Vehicle",
+    seize_confirm_header = "Confirm Seizure",
+    seize_confirm_body = "Seize vehicle with plate **%s** and add it to **%s** inventory?\n\nThe vehicle will be removed from the current owner and added as unlisted stock.",
+    seize_success = "Seized %s (%s) successfully.",
+    seize_failed = "Vehicle seizure failed.",
+    seize_not_player_owned = "Only player-owned vehicles can be seized.",
+
+    -- Stock listing
+    stock_unlisted = "%s marked as unlisted.",
+    stock_listed = "%s marked as listed.",
 
     -- Blips & HUD
     blip_test_drive_area = "Test Drive Area",
@@ -609,6 +625,26 @@ Language["en"] = {
     tier_3 = "Premium",
     tier_4 = "Enterprise",
 
+    -- Catalog tiers (access levels)
+    catalog_tier_basic = "Basic",
+    catalog_tier_expanded = "Expanded",
+    catalog_tier_full = "Full",
+    catalog_tier_exclusive = "Exclusive",
+
+    -- Vehicle classes
+    class_compact = "Compact",
+    class_sedan = "Sedan",
+    class_sports = "Sports",
+    class_super = "Super",
+    class_muscle = "Muscle",
+    class_coupe = "Coupe",
+    class_suv = "SUV",
+    class_offroad = "Off-Road",
+    class_van = "Van",
+    class_boat = "Boat",
+    class_plane = "Plane",
+    class_helicopter = "Helicopter",
+
     -- Roles
     role_owner = "Owner",
     role_manager = "Manager",
@@ -628,6 +664,8 @@ Language["en"] = {
     contract_buyer_signature = "Buyer Signature",
     contract_signing = "Signing in progress...",
     contract_processing = "Processing...",
+    contract_payment_method = "Down Payment Method",
+    contract_insufficient_funds = "Insufficient funds: need %s, you have %s.",
     contract_date_issued = "Date Issued",
     contract_subject_vehicle = "Subject Vehicle",
     contract_stamp_financing = "FINANCING",
@@ -771,6 +809,15 @@ Language["en"] = {
     admin_spot = "Spot",
     admin_spots_placed = "%s spot(s) placed",
     admin_npc_points_desc = "%s point(s) — where NPC customers appear",
+    admin_toggle_seize = "Toggle Seize",
+    confirm_toggle_seize = "Toggle vehicle seizure mode for this dealership. When enabled, employees can seize vehicles anywhere on the map without owner consent.",
+    label_seize = "Seize",
+    label_enabled = "Enabled",
+    label_disabled = "Disabled",
+    label_dealership = "Dealership",
+    label_unlisted = "Unlisted",
+    title_mark_listed = "Mark as Listed",
+    title_mark_unlisted = "Mark as Unlisted",
 
     -- Admin Catalog Page
     admin_editing = "Editing",
@@ -803,4 +850,7 @@ Language["en"] = {
     photo_up = "UP",
     photo_down = "DOWN",
     photo_drag_to_pan = "DRAG TO PAN",
+    photo_drag_to_orbit = "DRAG TO ORBIT",
+    photo_shift_drag_to_pan = "SHIFT + DRAG TO PAN",
+    photo_scroll_to_zoom = "SCROLL TO ZOOM",
 }

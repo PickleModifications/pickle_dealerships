@@ -201,6 +201,9 @@ lib.callback.register("pickle_dealerships:purchaseVehicle", function(source, dat
     if stockItem.sold_at then
         return { success = false, message = "Vehicle has already been sold." }
     end
+    if stockItem.unlisted == 1 or stockItem.unlisted == true then
+        return { success = false, message = "This vehicle is not available for purchase." }
+    end
 
     local success, plate, finalPrice = ProcessSale(source, dealershipId, stockItem, paymentMethod, couponCode, nil)
     if not success then
@@ -324,6 +327,7 @@ lib.callback.register("pickle_dealerships:getVehicleDetails", function(source, d
 
     local stockItem = GetStockItem(stockId)
     if not stockItem then return nil end
+    if stockItem.unlisted == 1 or stockItem.unlisted == true then return nil end
 
     -- Parse color JSON if stored as string
     local color = stockItem.color

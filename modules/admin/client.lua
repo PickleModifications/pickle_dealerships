@@ -98,6 +98,20 @@ RegisterNUICallback("adminToggleMode", function(data, cb)
     end
 end)
 
+--- Toggle seize mode
+RegisterNUICallback("adminToggleSeize", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:adminToggleSeize", false, {
+        dealershipId = data.dealershipId,
+    })
+    if result and result.success then
+        ShowNotification(result.message)
+        cb({ success = true, seizeEnabled = result.seizeEnabled })
+    else
+        ShowNotification(result and result.message or _L("admin_seize_failed"))
+        cb({ success = false, message = result and result.message or _L("admin_seize_failed") })
+    end
+end)
+
 --- Create a new dealership
 RegisterNUICallback("adminCreateDealership", function(data, cb)
     local result = lib.callback.await("pickle_dealerships:adminCreateDealership", false, {
@@ -245,117 +259,81 @@ local PhotoBoothState = nil
 
 local PhotoBoothCamThread = nil
 local PhotoBoothInput = {
-    forward = false, back = false, left = false, right = false,
-    up = false, down = false,
-    lookX = 0.0, lookY = 0.0,
-    dragging = false,
+    lookX = 0.0, lookY = 0.0, dragging = false, zoom = 0.0, panning = false,
 }
 
 RegisterNUICallback("photoBoothInput", function(data, cb)
-    if data.forward ~= nil then PhotoBoothInput.forward = data.forward end
-    if data.back ~= nil then PhotoBoothInput.back = data.back end
-    if data.left ~= nil then PhotoBoothInput.left = data.left end
-    if data.right ~= nil then PhotoBoothInput.right = data.right end
-    if data.up ~= nil then PhotoBoothInput.up = data.up end
-    if data.down ~= nil then PhotoBoothInput.down = data.down end
     if data.lookX then PhotoBoothInput.lookX = PhotoBoothInput.lookX + (tonumber(data.lookX) or 0.0) end
     if data.lookY then PhotoBoothInput.lookY = PhotoBoothInput.lookY + (tonumber(data.lookY) or 0.0) end
     if data.dragging ~= nil then PhotoBoothInput.dragging = data.dragging end
+    if data.panning ~= nil then PhotoBoothInput.panning = data.panning end
+    if data.zoom then PhotoBoothInput.zoom = PhotoBoothInput.zoom + (tonumber(data.zoom) or 0.0) end
     cb({})
 end)
 
+--- Orbit camera thread (mirrors modules/showroom/client.lua, with Shift+drag to pan)
 local function StartPhotoBoothCamThread()
     if PhotoBoothCamThread then return end
     PhotoBoothCamThread = true
 
-    -- Reset input
-    PhotoBoothInput = {
-        forward = false, back = false, left = false, right = false,
-        up = false, down = false,
-        lookX = 0.0, lookY = 0.0,
-        dragging = false,
-    }
+    PhotoBoothInput = { lookX = 0.0, lookY = 0.0, dragging = false, zoom = 0.0, panning = false }
 
     CreateThread(function()
-        local moveSpeed = 0.05
-        local vertSpeed = 0.04
-        local dragSpeed = 0.01
-        local camMode = 'free' -- 'free' (WASD on s.cam) or 'drag' (mouse pans s.dragCam)
+        local orbitSensitivity = 0.005
+        local panSpeed = 0.015
+        local zoomSpeed = 0.5
+        local minRadius = 2.5
+        local maxRadius = 15.0
+        local smoothing = 0.15
+
+        local smoothAngle = PhotoBoothState.orbitAngle
+        local smoothPitch = PhotoBoothState.orbitPitch
+        local smoothRadius = PhotoBoothState.orbitRadius
 
         while PhotoBoothState and PhotoBoothCamThread do
             local s = PhotoBoothState
             if not s or not s.cam then break end
 
             local inp = PhotoBoothInput
-            local hasMovement = inp.forward or inp.back or inp.left or inp.right or inp.up or inp.down
 
-            -- Mode switching: drag starts → create independent dragCam from current cam state
-            if inp.dragging and not hasMovement and camMode == 'free' then
-                local coord = GetCamCoord(s.cam)
-                local rot = GetCamRot(s.cam, 2)
-                s.dragCam = CreateCam("DEFAULT_SCRIPTED_CAMERA", true)
-                SetCamCoord(s.dragCam, coord.x, coord.y, coord.z)
-                SetCamRot(s.dragCam, rot.x, 0.0, rot.z, 2)
-                SetCamActive(s.dragCam, true)
-                SetCamActive(s.cam, false)
-                camMode = 'drag'
-            elseif hasMovement and camMode == 'drag' then
-                -- WASD pressed → sync main cam to dragCam position, switch back
-                local coord = GetCamCoord(s.dragCam)
-                SetCamCoord(s.cam, coord.x, coord.y, coord.z)
-                SetCamActive(s.cam, true)
-                SetCamActive(s.dragCam, false)
-                DestroyCam(s.dragCam, false)
-                s.dragCam = nil
-                camMode = 'free'
+            if inp.lookX ~= 0.0 or inp.lookY ~= 0.0 then
+                if inp.panning then
+                    -- Shift+drag: slide the orbit target along the camera's right axis + world up/down
+                    local rightX = -math.sin(s.orbitAngle)
+                    local rightY = math.cos(s.orbitAngle)
+                    s.targetCenter = vector3(
+                        s.targetCenter.x - rightX * inp.lookX * panSpeed,
+                        s.targetCenter.y - rightY * inp.lookX * panSpeed,
+                        math.max(s.groundZ + 0.3, s.targetCenter.z + inp.lookY * panSpeed)
+                    )
+                else
+                    -- Default drag: orbit
+                    s.orbitAngle = s.orbitAngle - inp.lookX * orbitSensitivity
+                    s.orbitPitch = math.max(-0.8, math.min(0.8, s.orbitPitch - inp.lookY * orbitSensitivity))
+                end
                 inp.lookX = 0.0
                 inp.lookY = 0.0
             end
 
-            if camMode == 'drag' and s.dragCam then
-                -- Drag moves dragCam position laterally/vertically (rotation stays fixed)
-                if inp.lookX ~= 0.0 or inp.lookY ~= 0.0 then
-                    local rot = GetCamRot(s.dragCam, 2)
-                    local headingRad = math.rad(rot.z)
-                    local rightX = math.cos(headingRad)
-                    local rightY = math.sin(headingRad)
-
-                    local coord = GetCamCoord(s.dragCam)
-                    local mx = coord.x - rightX * inp.lookX * dragSpeed
-                    local my = coord.y - rightY * inp.lookX * dragSpeed
-                    local mz = coord.z + inp.lookY * dragSpeed
-
-                    local minZ = s.groundZ + 0.3
-                    if mz < minZ then mz = minZ end
-
-                    SetCamCoord(s.dragCam, mx, my, mz)
-                    inp.lookX = 0.0
-                    inp.lookY = 0.0
-                end
-            else
-                -- Free movement on main cam (PointCamAtCoord keeps it aimed at vehicle)
-                local rot = GetCamRot(s.cam, 2)
-                local headingRad = math.rad(rot.z)
-                local fwdX = -math.sin(headingRad)
-                local fwdY = math.cos(headingRad)
-                local rightX = math.cos(headingRad)
-                local rightY = math.sin(headingRad)
-
-                local camCoord = GetCamCoord(s.cam)
-                local mx, my, mz = camCoord.x, camCoord.y, camCoord.z
-
-                if inp.forward then mx = mx + fwdX * moveSpeed; my = my + fwdY * moveSpeed end
-                if inp.back then mx = mx - fwdX * moveSpeed; my = my - fwdY * moveSpeed end
-                if inp.left then mx = mx - rightX * moveSpeed; my = my - rightY * moveSpeed end
-                if inp.right then mx = mx + rightX * moveSpeed; my = my + rightY * moveSpeed end
-                if inp.up then mz = mz + vertSpeed end
-                if inp.down then mz = mz - vertSpeed end
-
-                local minZ = s.groundZ + 0.3
-                if mz < minZ then mz = minZ end
-
-                SetCamCoord(s.cam, mx, my, mz)
+            if inp.zoom ~= 0.0 then
+                local effectiveMax = math.max(maxRadius, (s.defaultRadius or maxRadius) * 1.3)
+                s.orbitRadius = math.max(minRadius, math.min(effectiveMax, s.orbitRadius - inp.zoom * zoomSpeed))
+                inp.zoom = 0.0
             end
+
+            smoothAngle = smoothAngle + (s.orbitAngle - smoothAngle) * smoothing
+            smoothPitch = smoothPitch + (s.orbitPitch - smoothPitch) * smoothing
+            smoothRadius = smoothRadius + (s.orbitRadius - smoothRadius) * smoothing
+
+            local camX = s.targetCenter.x + smoothRadius * math.cos(smoothAngle)
+            local camY = s.targetCenter.y + smoothRadius * math.sin(smoothAngle)
+            local camZ = s.targetCenter.z + smoothRadius * math.sin(smoothPitch) * 0.5
+
+            local minZ = s.groundZ + 0.3
+            if camZ < minZ then camZ = minZ end
+
+            SetCamCoord(s.cam, camX, camY, camZ)
+            PointCamAtCoord(s.cam, s.targetCenter.x, s.targetCenter.y, s.targetCenter.z)
 
             Wait(0)
         end
@@ -388,12 +366,12 @@ local function CleanupPhotoBooth()
 
     -- Destroy cameras
     RenderScriptCams(false, false, 0, true, true)
-    if PhotoBoothState.dragCam then
-        DestroyCam(PhotoBoothState.dragCam, false)
-    end
     if PhotoBoothState.cam then
         DestroyCam(PhotoBoothState.cam, false)
     end
+
+    -- Restore weather/time via bridge
+    RestorePhotoWeather()
 
     -- Restore routing bucket first (before teleport so collision loads in correct bucket)
     lib.callback.await("pickle_dealerships:adminSetPhotoBucket", false, { bucket = 0 })
@@ -499,9 +477,8 @@ RegisterNUICallback("adminStartPhotoCapture", function(data, cb)
     SetVehicleOnGroundProperly(veh)
     SetModelAsNoLongerNeeded(modelHash)
 
-    -- Set consistent weather/time
-    SetWeatherTypeNowPersist('EXTRASUNNY')
-    NetworkOverrideClockTime(12, 0, 0)
+    -- Set consistent daytime weather via bridge (handles qb-weathersync, Renewed-Weathersync, cd_easytime, standalone)
+    LockPhotoWeather()
 
     -- Hide HUD
     DisplayRadar(false)
@@ -518,19 +495,21 @@ RegisterNUICallback("adminStartPhotoCapture", function(data, cb)
     -- Get actual vehicle position after ground placement, then find its vertical center
     local vehPos = GetEntityCoords(veh)
     local vehCenterZ = vehPos.z + (dimMin.z + dimMax.z) * 0.5
+    local targetCenter = vector3(vehPos.x, vehPos.y, vehCenterZ)
 
-    -- Create free camera at initial position looking at vehicle center
+    -- Create orbit camera at initial angle (matches showroom)
     local initAngle = math.rad(225.0)
-    local camX = vehPos.x + camRadius * math.cos(initAngle)
-    local camY = vehPos.y + camRadius * math.sin(initAngle)
-    local camZ = vehCenterZ
+    local initPitch = 0.0
+    local camX = targetCenter.x + camRadius * math.cos(initAngle)
+    local camY = targetCenter.y + camRadius * math.sin(initAngle)
+    local camZ = targetCenter.z + camRadius * math.sin(initPitch) * 0.5
     local cam = CreateCam("DEFAULT_SCRIPTED_CAMERA", true)
     SetCamCoord(cam, camX, camY, camZ)
-    PointCamAtCoord(cam, vehPos.x, vehPos.y, vehCenterZ)
+    PointCamAtCoord(cam, targetCenter.x, targetCenter.y, targetCenter.z)
     SetCamActive(cam, true)
     RenderScriptCams(true, false, 0, true, true)
 
-    -- Store state
+    -- Store state (includes orbit params used by the cam thread)
     PhotoBoothState = {
         vehicle = veh,
         cam = cam,
@@ -543,6 +522,11 @@ RegisterNUICallback("adminStartPhotoCapture", function(data, cb)
         label = data.label or data.model,
         vehicleClass = data.class,
         uploadConfig = uploadConfig,
+        targetCenter = targetCenter,
+        orbitAngle = initAngle,
+        orbitPitch = initPitch,
+        orbitRadius = camRadius,
+        defaultRadius = camRadius,
     }
 
     -- Start noclip camera thread
@@ -574,7 +558,7 @@ RegisterNUICallback("photoBoothCapture", function(_, cb)
     CloseNui()
     Wait(200)
 
-    exports['screenshot-basic']:requestScreenshot(function(screenshotData)
+    CaptureScreenshot(function(screenshotData)
         -- Reopen the photo booth UI so the component is mounted
         OpenNui('photoBooth', {
             dealershipId = 0,

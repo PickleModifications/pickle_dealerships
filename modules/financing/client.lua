@@ -11,6 +11,7 @@ RegisterNUICallback("createFinancing", function(data, cb)
         stockId = data.stockId,
         downPayment = tonumber(data.downPayment) or 0,
         installments = tonumber(data.installments) or 12,
+        paymentMethod = data.paymentMethod,
     })
 
     if result and result.success then
@@ -76,6 +77,11 @@ RegisterNUICallback("makePayment", function(data, cb)
     end
 
     cb(result or { success = false })
+end)
+
+RegisterNUICallback("getPlayerBalances", function(_, cb)
+    local result = lib.callback.await("pickle_dealerships:getPlayerBalances", false)
+    cb(result or { cash = 0, bank = 0 })
 end)
 
 RegisterNUICallback("getMyFinancing", function(data, cb)

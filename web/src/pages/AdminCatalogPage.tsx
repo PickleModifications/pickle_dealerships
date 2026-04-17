@@ -46,6 +46,13 @@ const tiers = ['basic', 'expanded', 'full', 'exclusive']
 const vehicleTypes = ['car', 'boat', 'air']
 const vehicleClasses = ['compact', 'sedan', 'sports', 'super', 'muscle', 'coupe', 'suv', 'offroad', 'van', 'boat', 'plane', 'helicopter']
 
+const tierLabel = (tier: string) => t(`catalog_tier_${tier}`)
+const classLabel = (cls: string) => t(`class_${cls}`)
+const typeLabel = (type: string) => {
+  const map: Record<string, string> = { car: 'label_car', boat: 'label_boat', air: 'label_aircraft' }
+  return map[type] ? t(map[type]) : type
+}
+
 export default function AdminCatalogPage() {
   const [items, setItems] = useState<CatalogVehicle[]>([])
   const [total, setTotal] = useState(0)
@@ -186,7 +193,7 @@ export default function AdminCatalogPage() {
           <SelectTrigger className="w-[120px]"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">{t('label_all_types')}</SelectItem>
-            {vehicleTypes.map((t) => <SelectItem key={t} value={t} className="capitalize">{t}</SelectItem>)}
+            {vehicleTypes.map((ty) => <SelectItem key={ty} value={ty}>{typeLabel(ty)}</SelectItem>)}
           </SelectContent>
         </Select>
         <Button size="sm" onClick={openAdd} className="gap-1">
@@ -222,14 +229,14 @@ export default function AdminCatalogPage() {
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2">
                             <p className="font-semibold text-sm truncate">{v.label}</p>
-                            <Badge className={`${tierColors[v.tier] || ''} border-0 text-[10px] capitalize`}>{v.tier}</Badge>
+                            <Badge className={`${tierColors[v.tier] || ''} border-0 text-[10px]`}>{tierLabel(v.tier)}</Badge>
                           </div>
                           <p className="text-xs text-muted-foreground">
                             <span className="font-mono">{v.model}</span>
                             <span className="mx-1">&middot;</span>
-                            <span className="capitalize">{v.class}</span>
+                            <span>{classLabel(v.class)}</span>
                             <span className="mx-1">&middot;</span>
-                            <span className="capitalize">{v.vehicle_type}</span>
+                            <span>{typeLabel(v.vehicle_type)}</span>
                           </p>
                         </div>
                         <p className="font-bold text-sm whitespace-nowrap">{formatCurrency(v.wholesale)}</p>
@@ -286,7 +293,7 @@ export default function AdminCatalogPage() {
                 <Select value={tier} onValueChange={setTier}>
                   <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {tiers.map((t) => <SelectItem key={t} value={t} className="capitalize">{t}</SelectItem>)}
+                    {tiers.map((ti) => <SelectItem key={ti} value={ti}>{tierLabel(ti)}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>
@@ -295,7 +302,7 @@ export default function AdminCatalogPage() {
                 <Select value={vClass} onValueChange={setVClass}>
                   <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {vehicleClasses.map((c) => <SelectItem key={c} value={c} className="capitalize">{c}</SelectItem>)}
+                    {vehicleClasses.map((c) => <SelectItem key={c} value={c}>{classLabel(c)}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>
@@ -304,7 +311,7 @@ export default function AdminCatalogPage() {
                 <Select value={vType} onValueChange={setVType}>
                   <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {vehicleTypes.map((t) => <SelectItem key={t} value={t} className="capitalize">{t}</SelectItem>)}
+                    {vehicleTypes.map((ty) => <SelectItem key={ty} value={ty}>{typeLabel(ty)}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>

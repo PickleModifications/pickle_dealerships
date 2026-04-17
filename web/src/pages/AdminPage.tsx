@@ -11,7 +11,7 @@ import { fetchNui, formatCurrency } from '../lib/utils'
 import {
   X, Settings, UserRoundCog, DollarSign, ArrowUpCircle, RotateCcw,
   ToggleLeft, Plus, MapPin, Check, Car, Crosshair, Store, ParkingSquare,
-  Handshake, Building2, BookOpen, Trash2, Briefcase, Users,
+  Handshake, Building2, BookOpen, Trash2, Briefcase, Users, ShieldAlert,
 } from 'lucide-react'
 import { SkeletonList } from '../components/ui/skeleton'
 import { t } from '../lib/locale'
@@ -24,7 +24,7 @@ interface Props {
 }
 
 type AdminTab = 'dealerships' | 'catalog' | 'positions'
-type AdminAction = 'transfer' | 'balance' | 'tier' | 'reset' | 'toggle' | 'create' | null
+type AdminAction = 'transfer' | 'balance' | 'tier' | 'reset' | 'toggle' | 'seize' | 'create' | null
 
 export default function AdminPage({ data, onClose }: Props) {
   const [tab, setTab] = useState<AdminTab>((data.initialTab as AdminTab) || 'dealerships')
@@ -126,8 +126,22 @@ export default function AdminPage({ data, onClose }: Props) {
       tier: () => fetchNui('adminSetTier', { dealershipId, tier: parseInt(inputValue) }).then(() => loadDealerships()),
       reset: () => fetchNui('adminResetDealership', { dealershipId }).then(() => loadDealerships()),
       toggle: () => fetchNui('adminToggleMode', { dealershipId }).then(() => loadDealerships()),
+      seize: () => fetchNui('adminToggleSeize', { dealershipId }).then(() => loadDealerships()),
     }
-    callbacks[action]?.().then(() => { setAction(null); setSelected(null); setInputValue('') })
+    callbacks[action]?.().then(() => {
+      setAction(null)
+      setInputValue('')
+      // Refresh dealership list and update the selected dealership in-place
+      fetchNui<{ success: boolean; dealerships: AdminDealership[] }>('adminGetAllDealerships', {}).then((res) => {
+        if (res.success && res.dealerships) {
+          setDealerships(res.dealerships)
+          if (selected) {
+            const updated = res.dealerships.find((d) => d.id === selected.id)
+            setSelected(updated || null)
+          }
+        }
+      })
+    })
   }
 
   const handleSetJob = () => {
@@ -360,40 +374,22 @@ export default function AdminPage({ data, onClose }: Props) {
           ) : (
             <div className="space-y-2">
               {dealerships.map((d) => (
-                <Card key={d.id} className="overflow-hidden">
+                <Card key={d.id} className="overflow-hidden hover:border-accent/40 transition-colors cursor-pointer" onClick={() => { setSelected(d); setAction(null) }}>
                   <CardContent className="p-3">
-                    <div className="flex items-start justify-between">
-                      <div>
+                    <div className="flex items-center justify-between">
+                      <div className="min-w-0">
                         <div className="flex items-center gap-2">
-                          <h3 className="font-semibold text-sm">{d.name}</h3>
-                          <Badge variant="outline" className="text-[10px] capitalize">{d.mode}</Badge>
-                          <Badge variant="secondary" className="text-[10px] capitalize">{d.type}</Badge>
+                          <h3 className="font-semibold text-sm truncate">{d.name}</h3>
+                          <Badge variant="outline" className="text-[10px] capitalize shrink-0">{d.mode}</Badge>
+                          <Badge variant="secondary" className="text-[10px] capitalize shrink-0">{d.type}</Badge>
+                          {!!d.seize_enabled && <Badge variant="destructive" className="text-[10px] shrink-0">{t('label_seize')}</Badge>}
                         </div>
                         <p className="text-xs text-muted-foreground mt-0.5">
                           ID: {d.id} &mdash; {tierLabelKeys[d.tier] ? t(tierLabelKeys[d.tier]) : `${t('label_tier')} ${d.tier}`} &mdash; {formatCurrency(d.balance)}
                           {d.job && <> &mdash; <span className="font-mono">{d.job}</span></>}
                         </p>
-                        {d.owner_name && <p className="text-xs text-muted-foreground">{t('admin_owner')}: {d.owner_name}</p>}
-                        {!d.owner_identifier && d.mode === 'player-owned' && <p className="text-xs text-orange-400">{t('label_unowned')}</p>}
-                        {!d.job && <p className="text-xs text-orange-400">{t('label_no_job')}</p>}
                       </div>
-                      <div className="flex gap-1">
-                        <Button variant="ghost" size="icon" className="h-7 w-7" title={t('label_manage_positions')} onClick={() => openPositions(d)}><MapPin className="h-3.5 w-3.5" /></Button>
-                        <Button variant="ghost" size="icon" className="h-7 w-7" title={t('admin_transfer')} onClick={() => {
-                          setSelected(d)
-                          setAction('transfer')
-                          setInputValue('')
-                          setSelectedPlayer(null)
-                          setPlayerSearch('')
-                          fetchNui<{ source: number; name: string; identifier: string }[]>('adminGetOnlinePlayers', {}).then((res) => {
-                            setOnlinePlayers(Array.isArray(res) ? res : [])
-                          })
-                        }}><UserRoundCog className="h-3.5 w-3.5" /></Button>
-                        <Button variant="ghost" size="icon" className="h-7 w-7" title={t('label_balance')} onClick={() => { setSelected(d); setAction('balance'); setInputValue(String(d.balance)) }}><DollarSign className="h-3.5 w-3.5" /></Button>
-                        <Button variant="ghost" size="icon" className="h-7 w-7" title={t('label_tier')} onClick={() => { setSelected(d); setAction('tier'); setInputValue(String(d.tier)) }}><ArrowUpCircle className="h-3.5 w-3.5" /></Button>
-                        <Button variant="ghost" size="icon" className="h-7 w-7" title={t('admin_toggle_mode')} onClick={() => { setSelected(d); setAction('toggle') }}><ToggleLeft className="h-3.5 w-3.5" /></Button>
-                        <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" title={t('admin_reset')} onClick={() => { setSelected(d); setAction('reset') }}><RotateCcw className="h-3.5 w-3.5" /></Button>
-                      </div>
+                      <Settings className="h-4 w-4 text-muted-foreground shrink-0 ml-3" />
                     </div>
                   </CardContent>
                 </Card>
@@ -402,9 +398,70 @@ export default function AdminPage({ data, onClose }: Props) {
           )}
         </ScrollArea>
 
-        {/* Action dialogs */}
-        <Dialog open={!!action && action !== 'create'} onOpenChange={(open) => { if (!open) { setAction(null); setSelected(null) } }}>
-          <DialogContent onClose={() => { setAction(null); setSelected(null) }}>
+        {/* Dealership settings modal — rendered manually to guarantee height constraint in CEF */}
+        {selected && !action && (
+          <>
+            <div className="absolute inset-0 z-40 bg-black/50 rounded-[inherit]" onClick={() => setSelected(null)} />
+            <div className="absolute inset-0 z-50 flex items-center justify-center p-6 pointer-events-none" style={{ overflow: 'hidden' }}>
+              <div className="pointer-events-auto relative flex flex-col w-full border border-border bg-card shadow-lg rounded-lg" style={{ maxWidth: '24rem', maxHeight: 'calc(100% - 2rem)', overflow: 'hidden' }}>
+                {/* Header — fixed */}
+                <div className="p-6 pb-3 shrink-0">
+                  <button className="absolute right-4 top-4 rounded-sm opacity-70 transition-opacity hover:opacity-100 focus:outline-none" onClick={() => setSelected(null)}>
+                    <X className="h-4 w-4" />
+                  </button>
+                  <h2 className="text-lg font-semibold leading-none tracking-tight">{selected.name}</h2>
+                  <p className="text-sm text-muted-foreground mt-1.5">
+                    ID: {selected.id} &mdash; {tierLabelKeys[selected.tier] ? t(tierLabelKeys[selected.tier]) : `${t('label_tier')} ${selected.tier}`} &mdash; {formatCurrency(selected.balance)}
+                  </p>
+                </div>
+                {/* Body — scrollable */}
+                <div className="flex-1 overflow-y-auto px-6 pb-6" style={{ minHeight: 0 }}>
+                  <div className="space-y-1">
+                    {selected.owner_name && (
+                      <div className="flex items-center justify-between px-3 py-2 rounded-md bg-muted/50">
+                        <span className="text-xs text-muted-foreground">{t('admin_owner')}</span>
+                        <span className="text-xs font-medium">{selected.owner_name}</span>
+                      </div>
+                    )}
+                    {!selected.owner_identifier && selected.mode === 'player-owned' && (
+                      <div className="px-3 py-2 rounded-md bg-orange-500/10">
+                        <span className="text-xs text-orange-400">{t('label_unowned')}</span>
+                      </div>
+                    )}
+                    {!selected.job && (
+                      <div className="px-3 py-2 rounded-md bg-orange-500/10">
+                        <span className="text-xs text-orange-400">{t('label_no_job')}</span>
+                      </div>
+                    )}
+                  </div>
+                  <Separator className="my-3" />
+                  <div className="space-y-0.5">
+                    <SettingsRow icon={<MapPin className="h-4 w-4" />} label={t('label_manage_positions')} onClick={() => { openPositions(selected); setSelected(null) }} />
+                    <SettingsRow icon={<UserRoundCog className="h-4 w-4" />} label={t('admin_transfer_ownership')} onClick={() => {
+                      setAction('transfer')
+                      setInputValue('')
+                      setSelectedPlayer(null)
+                      setPlayerSearch('')
+                      fetchNui<{ source: number; name: string; identifier: string }[]>('adminGetOnlinePlayers', {}).then((res) => {
+                        setOnlinePlayers(Array.isArray(res) ? res : [])
+                      })
+                    }} />
+                    <SettingsRow icon={<DollarSign className="h-4 w-4" />} label={t('admin_set_balance')} value={formatCurrency(selected.balance)} onClick={() => { setAction('balance'); setInputValue(String(selected.balance)) }} />
+                    <SettingsRow icon={<ArrowUpCircle className="h-4 w-4" />} label={t('admin_set_tier')} value={tierLabelKeys[selected.tier] ? t(tierLabelKeys[selected.tier]) : `${selected.tier}`} onClick={() => { setAction('tier'); setInputValue(String(selected.tier)) }} />
+                    <SettingsRow icon={<ToggleLeft className="h-4 w-4" />} label={t('admin_toggle_mode')} value={selected.mode} onClick={() => setAction('toggle')} />
+                    <SettingsRow icon={<ShieldAlert className="h-4 w-4" />} label={t('admin_toggle_seize')} value={selected.seize_enabled ? t('label_enabled') : t('label_disabled')} accent={!!selected.seize_enabled} onClick={() => setAction('seize')} />
+                    <Separator className="my-1" />
+                    <SettingsRow icon={<RotateCcw className="h-4 w-4" />} label={t('admin_reset_dealership')} destructive onClick={() => setAction('reset')} />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* Action sub-dialogs */}
+        <Dialog open={!!action && action !== 'create' && !!selected} onOpenChange={(open) => { if (!open) setAction(null) }}>
+          <DialogContent onClose={() => setAction(null)}>
             <DialogHeader>
               <DialogTitle>
                 {action === 'transfer' && t('admin_transfer_ownership')}
@@ -412,13 +469,13 @@ export default function AdminPage({ data, onClose }: Props) {
                 {action === 'tier' && t('admin_set_tier')}
                 {action === 'reset' && t('admin_reset_dealership')}
                 {action === 'toggle' && t('admin_toggle_mode')}
+                {action === 'seize' && t('admin_toggle_seize')}
               </DialogTitle>
               <DialogDescription>{selected?.name} (ID: {selected?.id})</DialogDescription>
             </DialogHeader>
             <div className="space-y-4 pt-2">
               {action === 'transfer' && (
                 <div className="space-y-3">
-                  {/* Current owner display */}
                   <div>
                     <p className="text-xs text-muted-foreground mb-1">{t('label_current_owner')}</p>
                     {selected?.owner_identifier ? (
@@ -430,8 +487,6 @@ export default function AdminPage({ data, onClose }: Props) {
                       <p className="text-sm text-orange-400">{t('admin_no_owner')}</p>
                     )}
                   </div>
-
-                  {/* Player search dropdown */}
                   <div>
                     <label className="text-sm font-medium">{t('label_transfer_to')}</label>
                     <div className="relative mt-1">
@@ -480,8 +535,9 @@ export default function AdminPage({ data, onClose }: Props) {
               )}
               {action === 'reset' && <p className="text-sm text-destructive">{t('confirm_reset_warning')}</p>}
               {action === 'toggle' && <p className="text-sm">{t('confirm_toggle_mode')} {t('admin_currently')}: <strong>{selected?.mode}</strong></p>}
+              {action === 'seize' && <p className="text-sm">{t('confirm_toggle_seize')} {t('admin_currently')}: <strong>{selected?.seize_enabled ? t('label_enabled') : t('label_disabled')}</strong></p>}
               <div className="flex gap-2">
-                <Button variant="outline" className="flex-1" onClick={() => { setAction(null); setSelected(null) }}>{t('btn_cancel')}</Button>
+                <Button variant="outline" className="flex-1" onClick={() => setAction(null)}>{t('btn_cancel')}</Button>
                 <Button className="flex-1" variant={action === 'reset' ? 'destructive' : 'default'} onClick={handleAction} disabled={action === 'transfer' && !selectedPlayer}>{t('btn_confirm')}</Button>
               </div>
             </div>
@@ -556,6 +612,25 @@ export default function AdminPage({ data, onClose }: Props) {
         {renderContent()}
       </div>
     </div>
+  )
+}
+
+function SettingsRow({ icon, label, value, accent, destructive, onClick }: {
+  icon: React.ReactNode; label: string; value?: string; accent?: boolean; destructive?: boolean; onClick: () => void
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-sm transition-colors hover:bg-muted group ${destructive ? 'text-destructive hover:bg-destructive/10' : ''}`}
+    >
+      <div className={`h-8 w-8 rounded-md flex items-center justify-center shrink-0 ${
+        destructive ? 'bg-destructive/10 text-destructive' : accent ? 'bg-accent/15 text-accent' : 'bg-muted text-muted-foreground group-hover:text-foreground'
+      }`}>
+        {icon}
+      </div>
+      <span className="flex-1 text-left">{label}</span>
+      {value && <span className={`text-xs capitalize ${accent ? 'text-accent font-medium' : 'text-muted-foreground'}`}>{value}</span>}
+    </button>
   )
 }
 

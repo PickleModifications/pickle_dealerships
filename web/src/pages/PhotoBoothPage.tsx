@@ -11,11 +11,6 @@ interface Props {
   onClose: () => void
 }
 
-const KEY_MAP: Record<string, string> = {
-  w: 'forward', s: 'back', a: 'left', d: 'right',
-  shift: 'up', control: 'down',
-}
-
 // Crop area: 50% of viewport, 16:9 aspect ratio, centered
 function getCropRect() {
   const vw = window.innerWidth
@@ -87,7 +82,6 @@ export default function PhotoBoothPage({ data }: Props) {
   const [mode, setMode] = useState<'camera' | 'processing' | 'preview'>('camera')
   const [croppedUrl, setCroppedUrl] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
-  const keysRef = useRef<Set<string>>(new Set())
   const cropRef = useRef(getCropRect())
   const draggingRef = useRef(false)
   const lastMouseRef = useRef<{ x: number; y: number } | null>(null)
@@ -123,62 +117,25 @@ export default function PhotoBoothPage({ data }: Props) {
     }
   })
 
-  // Keyboard input
+  // Mouse drag to orbit, Shift+drag to pan, scroll to zoom
   useEffect(() => {
     if (mode !== 'camera') return
 
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement).tagName === 'INPUT') return
-      const key = e.key.toLowerCase()
-      const action = KEY_MAP[key]
-      if (action && !keysRef.current.has(action)) {
-        keysRef.current.add(action)
-        fetchNui('photoBoothInput', { [action]: true })
-      }
-    }
-
-    const handleKeyUp = (e: KeyboardEvent) => {
-      const key = e.key.toLowerCase()
-      const action = KEY_MAP[key]
-      if (action && keysRef.current.has(action)) {
-        keysRef.current.delete(action)
-        fetchNui('photoBoothInput', { [action]: false })
-      }
-    }
-
-    const handleBlur = () => {
-      keysRef.current.forEach((action) => {
-        fetchNui('photoBoothInput', { [action]: false })
-      })
-      keysRef.current.clear()
-    }
-
-    window.addEventListener('keydown', handleKeyDown)
-    window.addEventListener('keyup', handleKeyUp)
-    window.addEventListener('blur', handleBlur)
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown)
-      window.removeEventListener('keyup', handleKeyUp)
-      window.removeEventListener('blur', handleBlur)
-      handleBlur()
-    }
-  }, [mode])
-
-  // Mouse drag to pan camera position
-  useEffect(() => {
-    if (mode !== 'camera') return
+    const shiftRef = { current: false }
 
     const handleMouseDown = (e: MouseEvent) => {
       if (e.button !== 0) return
       draggingRef.current = true
       lastMouseRef.current = { x: e.clientX, y: e.clientY }
-      fetchNui('photoBoothInput', { dragging: true })
+      shiftRef.current = e.shiftKey
+      fetchNui('photoBoothInput', { dragging: true, panning: e.shiftKey })
     }
 
     const handleMouseUp = () => {
       draggingRef.current = false
       lastMouseRef.current = null
-      fetchNui('photoBoothInput', { dragging: false })
+      shiftRef.current = false
+      fetchNui('photoBoothInput', { dragging: false, panning: false })
     }
 
     const handleMouseMove = (e: MouseEvent) => {
@@ -186,8 +143,33 @@ export default function PhotoBoothPage({ data }: Props) {
       const dx = e.clientX - lastMouseRef.current.x
       const dy = e.clientY - lastMouseRef.current.y
       lastMouseRef.current = { x: e.clientX, y: e.clientY }
+      // Update panning if Shift was toggled mid-drag
+      if (e.shiftKey !== shiftRef.current) {
+        shiftRef.current = e.shiftKey
+        fetchNui('photoBoothInput', { panning: e.shiftKey })
+      }
       if (dx === 0 && dy === 0) return
       fetchNui('photoBoothInput', { lookX: dx, lookY: dy })
+    }
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Shift' && draggingRef.current && !shiftRef.current) {
+        shiftRef.current = true
+        fetchNui('photoBoothInput', { panning: true })
+      }
+    }
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'Shift' && shiftRef.current) {
+        shiftRef.current = false
+        fetchNui('photoBoothInput', { panning: false })
+      }
+    }
+
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault()
+      const zoom = e.deltaY > 0 ? -1 : 1
+      fetchNui('photoBoothInput', { zoom })
     }
 
     const handleContextMenu = (e: MouseEvent) => e.preventDefault()
@@ -195,16 +177,22 @@ export default function PhotoBoothPage({ data }: Props) {
     window.addEventListener('mousedown', handleMouseDown)
     window.addEventListener('mouseup', handleMouseUp)
     window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('keyup', handleKeyUp)
+    window.addEventListener('wheel', handleWheel, { passive: false })
     window.addEventListener('contextmenu', handleContextMenu)
     return () => {
       window.removeEventListener('mousedown', handleMouseDown)
       window.removeEventListener('mouseup', handleMouseUp)
       window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('keyup', handleKeyUp)
+      window.removeEventListener('wheel', handleWheel)
       window.removeEventListener('contextmenu', handleContextMenu)
       if (draggingRef.current) {
         draggingRef.current = false
         lastMouseRef.current = null
-        fetchNui('photoBoothInput', { dragging: false })
+        fetchNui('photoBoothInput', { dragging: false, panning: false })
       }
     }
   }, [mode])
@@ -351,10 +339,9 @@ function PhotoHud({ label, subtitle, onCapture, onCancel }: {
 
       {/* Controls — pushed to center via flex */}
       <div className="flex-1 flex items-center justify-center gap-4 text-xs uppercase tracking-wide text-white/50">
-        <span className="flex items-center"><Kbd>WASD</Kbd> {t('photo_move')}</span>
-        <span className="flex items-center"><Kbd>SHIFT</Kbd> {t('photo_up')}</span>
-        <span className="flex items-center"><Kbd>CTRL</Kbd> {t('photo_down')}</span>
-        <span className="flex items-center text-white/30">{t('photo_drag_to_pan')}</span>
+        <span className="flex items-center text-white/40">{t('photo_drag_to_orbit')}</span>
+        <span className="flex items-center text-white/40">{t('photo_shift_drag_to_pan')}</span>
+        <span className="flex items-center text-white/40">{t('photo_scroll_to_zoom')}</span>
       </div>
 
       {/* Actions */}
@@ -376,10 +363,3 @@ function PhotoHud({ label, subtitle, onCapture, onCancel }: {
   )
 }
 
-function Kbd({ children }: { children: React.ReactNode }) {
-  return (
-    <kbd className="inline-flex items-center justify-center px-1.5 py-0.5 rounded bg-white/10 text-[11px] font-mono font-medium text-white/70 mr-0.5">
-      {children}
-    </kbd>
-  )
-}

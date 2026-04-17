@@ -97,7 +97,7 @@ export default function ShowroomPage({ data }: Props) {
       location: data.location,
     }).then((res) => {
       const items = Array.isArray(res) ? res : (res && 'stock' in res ? res.stock : [])
-      const available = items.filter((s) => !s.sold_at && s.delivered_at && new Date(s.delivered_at) <= new Date())
+      const available = items.filter((s) => !s.sold_at && !s.unlisted && s.delivered_at && new Date(s.delivered_at) <= new Date())
       setAllStock(available)
       const highest = available.reduce((max, s) => Math.max(max, s.retail_price), 0)
       setMaxRetailPrice(highest)
@@ -212,7 +212,7 @@ export default function ShowroomPage({ data }: Props) {
     }).finally(() => setClaimingId(null))
   }, [loadPickups])
 
-  const handleFinanceSign = useCallback((installments: number) => {
+  const handleFinanceSign = useCallback((installments: number, paymentMethod: 'cash' | 'bank') => {
     if (!selected || !financingSettings) return
     setFinancingSigning(true)
     fetchNui('showroomFinance', {
@@ -220,6 +220,7 @@ export default function ShowroomPage({ data }: Props) {
       stockId: selected.id,
       downPayment: Math.floor(selected.retail_price * Math.round(financingSettings.minDownPercent) / 100),
       installments,
+      paymentMethod,
       location: data.location,
     }).finally(() => {
       setFinancingSigning(false)

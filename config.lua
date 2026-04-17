@@ -1,5 +1,5 @@
 Config = {}
-Config.Language = "zh"
+Config.Language = "en"
 Config.Debug = true
 Config.RenderDistance = 100.0
 Config.InteractDistance = 2.0

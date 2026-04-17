@@ -43,6 +43,7 @@ export function t(key: string, ...args: (string | number)[]): string {
   for (const arg of args) {
     str = str.replace('%s', String(arg))
   }
+  str = str.replace(/%%/g, '%')
   return str
 }
 
