@@ -47,10 +47,14 @@ export default function CatalogPage({ data, onClose }: Props) {
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [ordering, setOrdering] = useState<CatalogItem | null>(null)
-  const [retailPrice, setRetailPrice] = useState('')
   const [quantity, setQuantity] = useState('1')
   const [classes, setClasses] = useState<string[]>([])
   const [showFilters, setShowFilters] = useState(false)
+  const [deliveryMode, setDeliveryMode] = useState<'expedited' | 'local'>('expedited')
+  const [costPreview, setCostPreview] = useState<{
+    expedited?: { totalCost: number; deliveryFee: number }
+    local?: { totalCost: number; deliveryFee: number }
+  }>({})
   const searchTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const parentRef = useRef<HTMLDivElement>(null)
 
@@ -127,21 +131,29 @@ export default function CatalogPage({ data, onClose }: Props) {
 
   const handleOrder = () => {
     if (!ordering) return
-    const price = parseInt(retailPrice) || Math.round(ordering.wholesale * 1.3)
     const qty = parseInt(quantity) || 1
     fetchNui('orderVehicle', {
       dealershipId: data.dealershipId,
       location: data.location,
       model: ordering.model,
       wholesale: ordering.wholesale,
-      retailPrice: price,
       quantity: qty,
+      deliveryMode,
     }).then(() => {
       setOrdering(null)
-      setRetailPrice('')
       setQuantity('1')
+      setDeliveryMode('expedited')
     })
   }
+
+  useEffect(() => {
+    if (!ordering) return
+    const qty = parseInt(quantity) || 1
+    fetchNui<typeof costPreview>('previewOrderCost', {
+      model: ordering.model,
+      quantity: qty,
+    }).then((r) => setCostPreview(r || {})).catch(() => {})
+  }, [ordering, quantity])
 
   return (
     <>
@@ -250,7 +262,7 @@ export default function CatalogPage({ data, onClose }: Props) {
                                   <Lock className="h-3 w-3" /> {t('catalog_locked')}
                                 </Badge>
                               ) : (
-                                <Button size="sm" onClick={() => { setOrdering(item); setRetailPrice(String(Math.round(item.wholesale * 1.3))) }}>
+                                <Button size="sm" onClick={() => setOrdering(item)}>
                                   <ShoppingCart className="h-3 w-3" /> {t('btn_order')}
                                 </Button>
                               )}
@@ -272,30 +284,15 @@ export default function CatalogPage({ data, onClose }: Props) {
         </div>
 
         <Dialog open={!!ordering} onOpenChange={(open) => !open && setOrdering(null)}>
-          <DialogContent onClose={() => setOrdering(null)}>
-            <DialogHeader>
+          <DialogContent onClose={() => setOrdering(null)} className="max-h-full !grid-rows-[auto_1fr_auto] !gap-0 p-0 overflow-hidden">
+            <DialogHeader className="p-6 pb-4 border-b border-border">
               <DialogTitle>{t('title_order_vehicle', ordering?.label || '')}</DialogTitle>
               <DialogDescription>{t('title_order_desc')}</DialogDescription>
             </DialogHeader>
-            <div className="space-y-4 pt-2">
+            <div className="space-y-4 px-6 py-4 overflow-y-auto min-h-0">
               <div>
                 <p className="text-sm text-muted-foreground mb-1">{t('label_wholesale_cost')}</p>
                 <p className="text-lg font-bold">{formatCurrency(ordering?.wholesale || 0)}</p>
-              </div>
-              <div>
-                <label className="text-sm font-medium">{t('label_retail_price')}</label>
-                <Input
-                  type="number"
-                  value={retailPrice}
-                  onChange={(e) => setRetailPrice(e.target.value)}
-                  placeholder={t('catalog_set_retail_price')}
-                  className="mt-1"
-                />
-                {retailPrice && ordering && (
-                  <p className="text-xs text-muted-foreground mt-1">
-                    {t('catalog_markup')}: {formatCurrency(parseInt(retailPrice) - ordering.wholesale)} ({Math.round(((parseInt(retailPrice) - ordering.wholesale) / ordering.wholesale) * 100)}%)
-                  </p>
-                )}
               </div>
               <div>
                 <label className="text-sm font-medium">{t('label_quantity')}</label>
@@ -308,15 +305,48 @@ export default function CatalogPage({ data, onClose }: Props) {
                   className="mt-1"
                 />
               </div>
-              <div className="flex items-center justify-between pt-2 border-t border-border">
-                <div>
-                  <p className="text-xs text-muted-foreground">{t('catalog_total_cost_tax')}</p>
-                  <p className="font-bold">{formatCurrency(Math.round((ordering?.wholesale || 0) * 1.1 * (parseInt(quantity) || 1)))}</p>
+              <div className="space-y-2">
+                <p className="text-sm font-medium">{t('delivery_mode_expedited').replace(' Delivery', '')} / {t('delivery_mode_local').replace(' Delivery', '')}</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setDeliveryMode('expedited')}
+                    className={`text-left rounded-md border p-3 transition ${deliveryMode === 'expedited' ? 'border-accent bg-accent/10' : 'border-border hover:border-accent/50'}`}
+                  >
+                    <div className="font-semibold text-sm">{t('delivery_mode_expedited')}</div>
+                    <div className="text-xs text-muted-foreground">{t('delivery_mode_expedited_desc')}</div>
+                    {costPreview.expedited && (
+                      <div className="text-xs font-mono mt-1">{formatCurrency(costPreview.expedited.totalCost)}</div>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDeliveryMode('local')}
+                    className={`text-left rounded-md border p-3 transition ${deliveryMode === 'local' ? 'border-accent bg-accent/10' : 'border-border hover:border-accent/50'}`}
+                  >
+                    <div className="font-semibold text-sm">{t('delivery_mode_local')}</div>
+                    <div className="text-xs text-muted-foreground">{t('delivery_mode_local_desc')}</div>
+                    {costPreview.local && (
+                      <div className="text-xs font-mono mt-1">{formatCurrency(costPreview.local.totalCost)}</div>
+                    )}
+                  </button>
                 </div>
-                <Button onClick={handleOrder} className="gap-2">
-                  <Truck className="h-4 w-4" /> {t('catalog_place_order')}
-                </Button>
               </div>
+            </div>
+            <div className="flex items-center justify-between p-6 pt-4 border-t border-border bg-card">
+              <div>
+                <p className="text-xs text-muted-foreground">{t('catalog_total_cost_tax')}</p>
+                <p className="font-bold">
+                  {formatCurrency(
+                    deliveryMode === 'local'
+                      ? costPreview.local?.totalCost || 0
+                      : costPreview.expedited?.totalCost || Math.round((ordering?.wholesale || 0) * 1.1 * (parseInt(quantity) || 1))
+                  )}
+                </p>
+              </div>
+              <Button onClick={handleOrder} className="gap-2">
+                <Truck className="h-4 w-4" /> {t('catalog_place_order')}
+              </Button>
             </div>
           </DialogContent>
         </Dialog>

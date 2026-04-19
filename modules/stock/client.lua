@@ -283,7 +283,15 @@ RegisterNUICallback("orderVehicle", function(data, cb)
         return
     end
 
-    local success, result = lib.callback.await('pickle_dealerships:orderVehicle', false, location, data.model, data.wholesale, tonumber(data.quantity) or 1)
+    local success, result = lib.callback.await(
+        'pickle_dealerships:orderVehicle',
+        false,
+        location,
+        data.model,
+        data.wholesale,
+        tonumber(data.quantity) or 1,
+        data.deliveryMode
+    )
     if success then
         ShowNotification(_L("stock_order_success"))
         cb({ success = true, stockId = result })
@@ -291,6 +299,11 @@ RegisterNUICallback("orderVehicle", function(data, cb)
         ShowNotification(result or _L("stock_order_failed"))
         cb({ success = false, message = result or _L("stock_order_failed") })
     end
+end)
+
+RegisterNUICallback("previewOrderCost", function(data, cb)
+    local result = lib.callback.await('pickle_dealerships:previewOrderCost', false, data.model, tonumber(data.quantity) or 1)
+    cb(result or {})
 end)
 
 RegisterNUICallback("getPickleFax", function(data, cb)

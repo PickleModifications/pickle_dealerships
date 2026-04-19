@@ -208,6 +208,54 @@ CreateThread(function()
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ]])
 
+        -- Gameplay delivery system: extend dealership_orders for queue/claim flow
+        MySQL.Async.execute([[ ALTER TABLE `dealership_orders` ADD COLUMN IF NOT EXISTS `delivery_mode` VARCHAR(16) NOT NULL DEFAULT 'expedited' AFTER `quantity` ]])
+        MySQL.Async.execute([[ ALTER TABLE `dealership_orders` ADD COLUMN IF NOT EXISTS `route_id` VARCHAR(32) DEFAULT NULL AFTER `delivery_mode` ]])
+        MySQL.Async.execute([[ ALTER TABLE `dealership_orders` ADD COLUMN IF NOT EXISTS `delivery_fee` BIGINT NOT NULL DEFAULT 0 AFTER `route_id` ]])
+        MySQL.Async.execute([[ ALTER TABLE `dealership_orders` ADD COLUMN IF NOT EXISTS `claimed_by` VARCHAR(64) DEFAULT NULL AFTER `delivery_fee` ]])
+        MySQL.Async.execute([[ ALTER TABLE `dealership_orders` ADD COLUMN IF NOT EXISTS `claimed_at` DATETIME DEFAULT NULL AFTER `claimed_by` ]])
+        MySQL.Async.execute([[ ALTER TABLE `dealership_orders` ADD INDEX IF NOT EXISTS `idx_orders_queue` (`delivery_mode`, `claimed_by`, `delivered_at`) ]])
+
+        -- Gameplay delivery system: in-game configurable pickup depots (replaces static Config.DeliveryRoutes)
+        MySQL.Async.execute([[
+            CREATE TABLE IF NOT EXISTS `delivery_depots` (
+                `id`             INT UNSIGNED   NOT NULL AUTO_INCREMENT,
+                `name`           VARCHAR(100)   NOT NULL,
+                `x`              DOUBLE         NOT NULL,
+                `y`              DOUBLE         NOT NULL,
+                `z`              DOUBLE         NOT NULL,
+                `heading`        DOUBLE         NOT NULL DEFAULT 0,
+                `distance_band`  VARCHAR(16)    NOT NULL DEFAULT 'short',
+                `dropoff_radius` DOUBLE         NOT NULL DEFAULT 25.0,
+                `active`         TINYINT(1)     NOT NULL DEFAULT 1,
+                `created_at`     TIMESTAMP      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (`id`),
+                KEY `idx_active_band` (`active`, `distance_band`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ]])
+
+        -- Optional truck-spawn point — if the yard where the truck parks is distinct from where the
+        -- dispatch ped stands, admins can capture a separate location. Null = use the ped coords.
+        MySQL.Async.execute([[ ALTER TABLE `delivery_depots` ADD COLUMN IF NOT EXISTS `spawn_x` DOUBLE NULL ]])
+        MySQL.Async.execute([[ ALTER TABLE `delivery_depots` ADD COLUMN IF NOT EXISTS `spawn_y` DOUBLE NULL ]])
+        MySQL.Async.execute([[ ALTER TABLE `delivery_depots` ADD COLUMN IF NOT EXISTS `spawn_z` DOUBLE NULL ]])
+        MySQL.Async.execute([[ ALTER TABLE `delivery_depots` ADD COLUMN IF NOT EXISTS `spawn_heading` DOUBLE NULL ]])
+
+        -- Gameplay delivery system: per-player driver progression
+        MySQL.Async.execute([[
+            CREATE TABLE IF NOT EXISTS `dealership_driver_progression` (
+                `identifier`         VARCHAR(64)   NOT NULL,
+                `xp`                 INT           NOT NULL DEFAULT 0,
+                `level`              INT           NOT NULL DEFAULT 1,
+                `completed_count`    INT           NOT NULL DEFAULT 0,
+                `failed_count`       INT           NOT NULL DEFAULT 0,
+                `streak`             INT           NOT NULL DEFAULT 0,
+                `lifetime_earnings`  BIGINT        NOT NULL DEFAULT 0,
+                `updated_at`         DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                PRIMARY KEY (`identifier`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ]])
+
         -- wholesale_catalog (admin-managed vehicle catalog)
         MySQL.Async.execute([[
             CREATE TABLE IF NOT EXISTS `wholesale_catalog` (
@@ -300,8 +348,123 @@ CreateThread(function()
 
         -- Load dealerships into cache after tables are ready
         LoadDealerships()
+        LoadDeliveryDepots()
     end)
 end)
+
+-- ─── Delivery Depot Cache ────────────────────────────────────────────────────
+
+DeliveryDepotCache = {}
+
+local function rowToDepot(row)
+    -- NOTE: coord tables are plain Lua (not vector4) so they JSON-serialise cleanly to the NUI.
+    -- Mission code reads .x/.y/.z/.w so the shape is interchangeable with vector4 at call sites.
+    -- `pickupCoords` is where the dispatch ped stands and where drivers interact to start a mission.
+    -- `spawnCoords` is where the truck + trailer rig actually spawns; falls back to pickup if unset
+    -- so existing depots keep working without reconfiguration.
+    local hasSpawn = row.spawn_x and row.spawn_y and row.spawn_z
+    return {
+        id = row.id,
+        name = row.name,
+        label = row.name,
+        pickupCoords = { x = row.x, y = row.y, z = row.z, w = row.heading or 0.0 },
+        spawnCoords = hasSpawn
+            and { x = row.spawn_x, y = row.spawn_y, z = row.spawn_z, w = row.spawn_heading or 0.0 }
+            or nil,
+        active = row.active == 1 or row.active == true,
+    }
+end
+
+function LoadDeliveryDepots()
+    local rows = MySQL.query.await("SELECT * FROM `delivery_depots` WHERE `active` = 1 ORDER BY `id` ASC") or {}
+
+    -- If table is empty, seed from the legacy Config.DeliveryRoutes so existing servers keep working
+    if #rows == 0 and Config.DeliveryRoutes then
+        for _, r in pairs(Config.DeliveryRoutes) do
+            local px, py, pz, pw = r.pickupCoords.x, r.pickupCoords.y, r.pickupCoords.z, r.pickupCoords.w or 0.0
+            MySQL.insert.await(
+                "INSERT INTO `delivery_depots` (`name`, `x`, `y`, `z`, `heading`, `active`) VALUES (?, ?, ?, ?, ?, 1)",
+                { r.label or 'Depot', px, py, pz, pw }
+            )
+        end
+        rows = MySQL.query.await("SELECT * FROM `delivery_depots` WHERE `active` = 1 ORDER BY `id` ASC") or {}
+    end
+
+    DeliveryDepotCache = {}
+    for _, row in ipairs(rows) do
+        DeliveryDepotCache[row.id] = rowToDepot(row)
+    end
+    print(("[pickle_dealerships] Loaded %d delivery depot(s) into cache."):format(#rows))
+end
+
+function GetDeliveryDepots()
+    local out = {}
+    for _, d in pairs(DeliveryDepotCache) do out[#out + 1] = d end
+    return out
+end
+
+function CreateDeliveryDepot(name, x, y, z, heading)
+    if not name or not x or not y or not z then return nil, 'Invalid arguments.' end
+    local id = MySQL.insert.await(
+        "INSERT INTO `delivery_depots` (`name`, `x`, `y`, `z`, `heading`) VALUES (?, ?, ?, ?, ?)",
+        { name, x, y, z, heading or 0.0 }
+    )
+    if id then
+        DeliveryDepotCache[id] = {
+            id = id, name = name, label = name,
+            pickupCoords = { x = x, y = y, z = z, w = heading or 0.0 },
+            spawnCoords = nil, -- set later via SetDeliveryDepotSpawn; falls back to pickup until then
+            active = true,
+        }
+    end
+    return id
+end
+
+--- Sets (or clears, if all coords are nil) the separate truck-spawn point for a depot.
+function SetDeliveryDepotSpawn(id, x, y, z, heading)
+    id = tonumber(id)
+    if not id or not DeliveryDepotCache[id] then return false end
+    if x == nil or y == nil or z == nil then
+        MySQL.update.await(
+            "UPDATE `delivery_depots` SET `spawn_x` = NULL, `spawn_y` = NULL, `spawn_z` = NULL, `spawn_heading` = NULL WHERE `id` = ?",
+            { id }
+        )
+        DeliveryDepotCache[id].spawnCoords = nil
+    else
+        MySQL.update.await(
+            "UPDATE `delivery_depots` SET `spawn_x` = ?, `spawn_y` = ?, `spawn_z` = ?, `spawn_heading` = ? WHERE `id` = ?",
+            { x, y, z, heading or 0.0, id }
+        )
+        DeliveryDepotCache[id].spawnCoords = { x = x, y = y, z = z, w = heading or 0.0 }
+    end
+    return true
+end
+
+function UpdateDeliveryDepot(id, fields)
+    id = tonumber(id)
+    if not id or not DeliveryDepotCache[id] then return false end
+    local allowed = { name = true, active = true }
+    local sets, params = {}, {}
+    for k, v in pairs(fields or {}) do
+        if allowed[k] then
+            sets[#sets + 1] = ("`%s` = ?"):format(k)
+            params[#params + 1] = v
+        end
+    end
+    if #sets == 0 then return false end
+    params[#params + 1] = id
+    MySQL.update.await(("UPDATE `delivery_depots` SET %s WHERE `id` = ?"):format(table.concat(sets, ", ")), params)
+    LoadDeliveryDepots()
+    return true
+end
+
+function DeleteDeliveryDepot(id)
+    id = tonumber(id)
+    if not id then return false end
+    MySQL.update.await("UPDATE `delivery_depots` SET `active` = 0 WHERE `id` = ?", { id })
+    DeliveryDepotCache[id] = nil
+    return true
+end
 
 -- ─── Player Identifier Utilities ─────────────────────────────────────────────
 
@@ -446,4 +609,94 @@ function CanPlayerSell(source, dealershipId)
     if IsPlayerAdmin(source) then return true end
     local role = GetPlayerDealershipRole(source, dealershipId)
     return role == "owner" or role == "manager" or role == "salesperson"
+end
+
+-- ─── Driver Progression ──────────────────────────────────────────────────────
+
+local function ResolveDriverLevel(xp)
+    local levels = Config.DeliveryProgression and Config.DeliveryProgression.levels
+    if not levels then return 1 end
+    local resolved = 1
+    for lvl, def in pairs(levels) do
+        if xp >= (def.xpRequired or 0) and lvl > resolved then
+            resolved = lvl
+        end
+    end
+    return resolved
+end
+
+local function ResolveNextThreshold(level)
+    local levels = Config.DeliveryProgression and Config.DeliveryProgression.levels
+    if not levels then return nil end
+    local next = levels[level + 1]
+    return next and next.xpRequired or nil
+end
+
+function GetDriverProgression(identifier)
+    if not identifier then return nil end
+    local row = MySQL.single.await(
+        "SELECT * FROM `dealership_driver_progression` WHERE `identifier` = ?",
+        { identifier }
+    )
+    if not row then
+        MySQL.insert.await(
+            "INSERT INTO `dealership_driver_progression` (`identifier`) VALUES (?)",
+            { identifier }
+        )
+        row = { identifier = identifier, xp = 0, level = 1, completed_count = 0, failed_count = 0, streak = 0, lifetime_earnings = 0 }
+    end
+    row.level = ResolveDriverLevel(row.xp or 0)
+    row.xp_to_next = ResolveNextThreshold(row.level)
+    return row
+end
+
+function AddDriverXP(identifier, xp)
+    if not identifier or not xp or xp == 0 then return nil end
+    local current = GetDriverProgression(identifier)
+    if not current then return nil end
+    local oldLevel = current.level or 1
+    local newXP = math.max(0, (current.xp or 0) + xp)
+    local newLevel = ResolveDriverLevel(newXP)
+    MySQL.update.await(
+        "UPDATE `dealership_driver_progression` SET `xp` = ?, `level` = ? WHERE `identifier` = ?",
+        { newXP, newLevel, identifier }
+    )
+    return { xp = newXP, level = newLevel, leveledUp = newLevel > oldLevel, oldLevel = oldLevel }
+end
+
+function RecordDriverDelivery(identifier, earnings, success)
+    if not identifier then return end
+    if success then
+        MySQL.update.await(
+            "UPDATE `dealership_driver_progression` SET `completed_count` = `completed_count` + 1, `streak` = `streak` + 1, `lifetime_earnings` = `lifetime_earnings` + ? WHERE `identifier` = ?",
+            { math.max(0, tonumber(earnings) or 0), identifier }
+        )
+    else
+        MySQL.update.await(
+            "UPDATE `dealership_driver_progression` SET `failed_count` = `failed_count` + 1, `streak` = 0 WHERE `identifier` = ?",
+            { identifier }
+        )
+    end
+end
+
+function CanDriverAccessTier(identifier, catalogTier)
+    if not catalogTier then return true end
+    local levels = Config.DeliveryProgression and Config.DeliveryProgression.levels
+    if not levels then return true end
+    local prog = GetDriverProgression(identifier)
+    if not prog then return false end
+    local def = levels[prog.level or 1]
+    if not def or not def.catalogAccess then return false end
+    return def.catalogAccess[catalogTier] == true
+end
+
+function GetDriverStreakMultiplier(identifier)
+    local cfg = Config.Delivery and Config.Delivery.streak
+    if not cfg or not cfg.enabled then return 1.0 end
+    local prog = GetDriverProgression(identifier)
+    if not prog then return 1.0 end
+    local streak = prog.streak or 0
+    local bonus = (cfg.perStreakBonusPct or 0) * streak
+    local cap = (cfg.maxMultiplier or 1.0) - 1.0
+    return 1.0 + math.min(bonus, cap)
 end

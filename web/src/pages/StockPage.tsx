@@ -307,13 +307,25 @@ export default function StockPage({ data, onClose }: Props) {
                           {(item.quantity || 1) > 1 && (
                             <Badge variant="secondary" className="text-xs">x{item.quantity}</Badge>
                           )}
+                          {item.bundle && item.bundle.bundle_size > 1 && (
+                            <Badge variant="outline" className="text-[10px] gap-1">
+                              <Truck className="h-3 w-3" /> +{item.bundle.bundle_size - 1}
+                            </Badge>
+                          )}
                         </div>
                         <p className="text-xs text-muted-foreground capitalize">{item.class || t('label_vehicle')}</p>
+                        {item.bundle && item.bundle.bundle_size > 1 && (
+                          <p className="text-[10px] text-muted-foreground/80 truncate max-w-[260px]">
+                            + {item.bundle.vehicles.slice(1).map((v) => v.label || v.model).join(', ')}
+                          </p>
+                        )}
                       </div>
                     </div>
                     <div className="text-right">
                       {item.delivered_at ? (
                         <p className="text-sm font-mono font-semibold text-amber-400">{getTimeRemaining(item.delivered_at)}</p>
+                      ) : item.bundle && item.bundle.claimed_by ? (
+                        <Badge variant="outline" className="text-amber-400">{t('label_in_transit')}</Badge>
                       ) : (
                         <Badge variant="outline" className="text-muted-foreground">{t('label_pending')}</Badge>
                       )}

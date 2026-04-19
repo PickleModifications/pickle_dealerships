@@ -41,7 +41,7 @@ export function t(key: string, ...args: (string | number)[]): string {
   let str = translations[key]
   if (!str) return key // fallback: show the key itself
   for (const arg of args) {
-    str = str.replace('%s', String(arg))
+    str = str.replace(/%[sd]/, String(arg))
   }
   str = str.replace(/%%/g, '%')
   return str

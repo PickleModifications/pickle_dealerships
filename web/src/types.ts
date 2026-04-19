@@ -21,6 +21,8 @@ export interface DealershipData {
   label?: string
   vehicleClass?: string
   stockId?: number
+  deliveryQueue?: DeliveryQueueData
+  depotId?: number
   uploadConfig?: {
     url: string
     field: string
@@ -71,6 +73,15 @@ export interface StockItem {
   plate?: string | null
   acquired_from?: string | null
   auction_id?: number | null
+  delivery_mode?: 'expedited' | 'local' | string
+  bundle?: {
+    order_ids: number[]
+    vehicles: Array<{ id: number; model: string; label: string; quantity: number }>
+    total_qty: number
+    bundle_size: number
+    claimed_by?: string | null
+    bucket?: string
+  }
 }
 
 export interface VehicleColor {
@@ -221,6 +232,62 @@ export type PageType =
   | 'npcShowroom'
   | 'pickleFax'
   | 'auction'
+  | 'deliveries'
+
+export interface DeliveryOffer {
+  orderId: number
+  orderIds?: number[]
+  dealershipId: number
+  dealershipName: string
+  vehicleModel: string
+  vehicleLabel: string
+  retailPrice: number
+  quantity: number
+  bundleSize?: number
+  vehicles?: Array<{ id: number; model: string; label: string; quantity: number }>
+  baseFee: number
+  projectedPayout: number
+  orderedAt: string
+}
+
+export interface MissionOverlayState {
+  visible: boolean
+  phase?: 'pickup' | 'transport'
+  phaseKey?: string
+  vehicleLabel?: string
+  quantity?: number
+  bundledLines?: number
+  trailerSize?: 'small' | 'medium' | 'enclosed'
+  distanceMeters?: number
+  condition?: number
+  baseFee?: number
+  streakMultiplier?: number
+  damageMultiplier?: number
+  payoutPreview?: number
+}
+
+export interface DeliveryDepot {
+  id: number
+  name: string
+  label?: string
+  active: boolean
+  pickupCoords: { x: number; y: number; z: number; w?: number }
+  spawnCoords?: { x: number; y: number; z: number; w?: number } | null
+}
+
+export interface DeliveryQueueData {
+  local: DeliveryOffer[]
+  premium: DeliveryOffer[]
+  driver: {
+    level: number
+    xp: number
+    xpToNext: number | null
+    streak: number
+    streakMultiplier: number
+    completed: number
+    failed: number
+  }
+}
 
 export type AuctionStatus = 'active' | 'won' | 'cancelled' | 'no_sale'
 

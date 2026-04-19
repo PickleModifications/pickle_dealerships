@@ -122,17 +122,64 @@ lib.callback.register('pickle_dealerships:getStock', function(source, locationKe
         or  'SELECT ds.*, wc.image, wc.class FROM dealership_stock ds LEFT JOIN wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.unlisted = 0 ORDER BY ds.ordered_at DESC'
     local stock = MySQL.query.await(stockQuery, { dealership.id }) or {}
 
-    -- Also include pending orders, formatted like stock items so the UI can render them as in-transit cards
-    local orders = MySQL.query.await(
-        'SELECT dor.*, wc.image, wc.class FROM dealership_orders dor LEFT JOIN wholesale_catalog wc ON wc.model = dor.vehicle_model WHERE dor.dealership_id = ? ORDER BY dor.ordered_at DESC',
-        { dealership.id }
-    ) or {}
+    -- Include pending orders as in-transit stock cards.
+    -- Local orders collapse into trailer-sized bundles (matching the driver queue view) so a dealership
+    -- with 3 Comets + 1 Sultan shows one pending card with "+3 more" rather than four duplicate rows.
+    -- Expedited orders stay individual — they resolve on independent timers.
+    local orders = MySQL.query.await([[
+        SELECT dor.id, dor.dealership_id, dor.vehicle_model, dor.vehicle_label, dor.retail_price,
+               dor.wholesale_cost, dor.quantity, dor.delivery_mode, dor.delivery_fee,
+               dor.ordered_at, dor.delivered_at, dor.claimed_by,
+               wc.image, COALESCE(wc.class, 'sedan') AS class
+          FROM dealership_orders dor
+          LEFT JOIN wholesale_catalog wc ON wc.model = dor.vehicle_model
+         WHERE dor.dealership_id = ?
+         ORDER BY dor.ordered_at DESC
+    ]], { dealership.id }) or {}
 
-    -- Tag orders with a prefix ID so the UI can distinguish them (negative IDs to avoid collision)
+    local localOrders, expeditedOrders = {}, {}
     for _, o in ipairs(orders) do
+        if o.delivery_mode == 'local' then
+            o.dealership_name = dealership.name
+            localOrders[#localOrders + 1] = o
+        else
+            expeditedOrders[#expeditedOrders + 1] = o
+        end
+    end
+
+    -- Group local orders into trailer-load cards (streakMult = 1.0: management view doesn't care about driver streak).
+    for _, g in ipairs(GroupLocalOrders(localOrders, 1.0)) do
+        local row = {
+            is_order = true,
+            is_used = 0,
+            id = -g.primaryOrderId, -- negative ID keeps React keys distinct from real stock
+            vehicle_model = g.primaryModel,
+            vehicle_label = g.primaryLabel,
+            retail_price = g.primaryRetail,
+            wholesale_cost = g.primaryWholesale,
+            quantity = g.totalQty,
+            ordered_at = g.orderedAt,
+            delivered_at = nil, -- local orders have no timer
+            image = g.primaryImage,
+            class = g.primaryClass,
+            delivery_mode = 'local',
+            bundle = {
+                order_ids = g.orderIds,
+                vehicles = g.vehicles,
+                total_qty = g.totalQty,
+                bundle_size = g.bundleSize,
+                claimed_by = g.claimed_by,
+                bucket = g.bucket,
+            },
+        }
+        stock[#stock + 1] = row
+    end
+
+    -- Expedited orders render individually as before
+    for _, o in ipairs(expeditedOrders) do
         o.is_order = true
         o.is_used = 0
-        o.id = -o.id -- negative ID so UI keys don't collide with real stock IDs
+        o.id = -o.id
         o.sold_at = nil
         o.sold_to = nil
         o.sold_by = nil
@@ -245,12 +292,44 @@ lib.callback.register('pickle_dealerships:getShowroomStock', function(source, da
     }
 end)
 
---- Owner/manager orders a vehicle from wholesale catalog
----@param source number
----@param locationKey string
----@param model string
----@param wholesalePrice number
-lib.callback.register('pickle_dealerships:orderVehicle', function(source, locationKey, model, wholesalePrice, orderQuantity)
+--- Normalizes legacy delivery mode names to the current two-mode model.
+local function NormalizeDeliveryMode(mode)
+    if mode == 'trucking' then return 'local' end
+    if mode == 'timed' then return 'expedited' end
+    return mode or 'expedited'
+end
+
+--- Pure cost calculator used both by the stock order flow and by the UI cost-preview callback.
+--- Local mode: dealership pays MSRP (retail). Driver earns `payoutPct` of MSRP — paid from within that total, not on top.
+--- Expedited mode: wholesale + import tax + surcharge. Surcharge sinks to the server (no player receives it).
+--- Returns: { unitCost, totalCost, deliveryFee, retailPrice } (all integers, per-order totals).
+function ResolveOwnerOrderCost(mode, wholesalePrice, retailPrice, qty)
+    mode = NormalizeDeliveryMode(mode)
+    local importTax = Config.ImportTax or 0
+    local cfg = Config.Delivery or {}
+    local unitCost, deliveryFee = wholesalePrice * (1 + importTax), 0
+
+    if mode == 'expedited' then
+        unitCost = unitCost + wholesalePrice * (cfg.expeditedFeePct or 0)
+    elseif mode == 'local' then
+        -- Dealership pays MSRP up front; the driver's fee is a slice of that MSRP.
+        unitCost = retailPrice
+        deliveryFee = math.floor(retailPrice * (cfg.payoutPct or 0))
+    end
+
+    unitCost = math.floor(unitCost)
+    return {
+        unitCost = unitCost,
+        totalCost = unitCost * qty,
+        deliveryFee = deliveryFee,
+        retailPrice = retailPrice,
+    }
+end
+
+--- Owner/manager orders a vehicle from wholesale catalog.
+--- `deliveryMode`: 'expedited' (timed auto-stock) | 'local' (player-delivery queue) | 'instant' (admin only)
+--- Route for local orders is picked at claim time, not at order time.
+lib.callback.register('pickle_dealerships:orderVehicle', function(source, locationKey, model, wholesalePrice, orderQuantity, deliveryMode)
     -- Verify player role
     local identifier = GetIdentifier(source)
     if not identifier then return false, 'Unable to identify player.' end
@@ -294,6 +373,32 @@ lib.callback.register('pickle_dealerships:orderVehicle', function(source, locati
         return false, 'Price mismatch. Please refresh the catalog.'
     end
 
+    -- Resolve delivery mode: explicit arg > dealership default > config default
+    local meta = dealership.metadata
+    if type(meta) == "string" then meta = json.decode(meta) or {} end
+    if type(meta) ~= "table" then meta = {} end
+    local resolvedMode = NormalizeDeliveryMode(
+        deliveryMode
+        or (meta and meta.deliveryMode)
+        or (Config.DealershipDefaults and Config.DealershipDefaults.deliveryMode)
+        or 'expedited'
+    )
+
+    -- For local mode, confirm routes exist globally and the queue isn't over cap
+    if resolvedMode == 'local' then
+        if not next(Config.DeliveryRoutes or {}) then
+            return false, 'No delivery routes configured.'
+        end
+        local cfg = Config.Delivery or {}
+        local openOffers = MySQL.scalar.await(
+            "SELECT COUNT(*) FROM dealership_orders WHERE dealership_id = ? AND delivery_mode = 'local' AND claimed_by IS NULL",
+            { dealership.id }
+        ) or 0
+        if tonumber(openOffers) >= (cfg.maxActiveQueuePerDealership or 10) then
+            return false, 'Too many open local delivery offers. Wait for drivers to complete existing runs.'
+        end
+    end
+
     -- Finalize any delivered orders first so stock counts are accurate
     ProcessDeliveredOrders(dealership.id)
 
@@ -316,43 +421,20 @@ lib.callback.register('pickle_dealerships:orderVehicle', function(source, locati
         return false, 'Stock capacity reached. Sell or remove vehicles first.'
     end
 
-    -- Calculate total cost with import tax (multiplied by quantity)
-    local importTax = Config.ImportTax or 0
-    local unitCost = math.floor(wholesalePrice * (1 + importTax))
-    local totalCost = unitCost * qty
+    -- Shared cost resolver (one source of truth for UI previews and order writes)
+    local retailPrice = math.floor(wholesalePrice * 1.3)
+    local costs = ResolveOwnerOrderCost(resolvedMode, wholesalePrice, retailPrice, qty)
+    local totalCost = costs.totalCost
 
-    -- Check dealership balance
     if dealership.balance < totalCost then
         return false, 'Insufficient dealership funds. Need $' .. totalCost .. ', have $' .. dealership.balance .. '.'
     end
 
-    -- Deduct from dealership balance
-    MySQL.update.await(
-        'UPDATE dealerships SET balance = balance - ? WHERE id = ?',
-        { totalCost, dealership.id }
-    )
-
-    -- Determine delivery time
-    local deliveredAt = nil
-    local meta = dealership.metadata
-    if type(meta) == "string" then meta = json.decode(meta) or {} end
-    if type(meta) ~= "table" then meta = {} end
-    local deliveryMode = (meta and meta.deliveryMode) or (Config.DealershipDefaults and Config.DealershipDefaults.deliveryMode) or 'timed'
-
-    if deliveryMode == 'instant' then
-        deliveredAt = os.date('%Y-%m-%d %H:%M:%S')
-    elseif deliveryMode == 'timed' then
-        local deliveryMinutes = (Config.DeliveryTime or 20) * qty
-        deliveredAt = os.date('%Y-%m-%d %H:%M:%S', os.time() + (deliveryMinutes * 60))
-    end
-    -- For 'trucking' mode, delivered_at stays NULL until delivery mission completes
-
-    local retailPrice = math.floor(wholesalePrice * 1.3)
-    local isInstant = deliveredAt and deliveredAt <= os.date('%Y-%m-%d %H:%M:%S')
+    MySQL.update.await('UPDATE dealerships SET balance = balance - ? WHERE id = ?', { totalCost, dealership.id })
 
     local stockId
-    if isInstant then
-        -- Instant delivery: stack onto existing available stock of this model, or create new stock entry
+    if resolvedMode == 'instant' then
+        -- Admin/testing: stack directly into stock
         local existing = MySQL.single.await(
             'SELECT id FROM dealership_stock WHERE dealership_id = ? AND vehicle_model = ? AND sold_at IS NULL AND display_spot IS NULL AND is_used = 0 AND (`condition` = 100.00 OR `condition` IS NULL) ORDER BY id ASC LIMIT 1',
             { dealership.id, model }
@@ -366,10 +448,12 @@ lib.callback.register('pickle_dealerships:orderVehicle', function(source, locati
                 { dealership.id, model, catalogEntry.label or model, wholesalePrice, retailPrice, qty }
             )
         end
-    else
-        -- Timed delivery: stack onto an existing pending order or create a new one in dealership_orders
+    elseif resolvedMode == 'expedited' then
+        -- Auto-resolves on a timer. Stack into an existing open order or create new.
+        local deliveryMinutes = (Config.DeliveryTime or 20) * qty
+        local deliveredAt = os.date('%Y-%m-%d %H:%M:%S', os.time() + (deliveryMinutes * 60))
         local existingOrder = MySQL.single.await(
-            'SELECT id FROM dealership_orders WHERE dealership_id = ? AND vehicle_model = ? AND (delivered_at IS NULL OR delivered_at > NOW()) ORDER BY id ASC LIMIT 1',
+            "SELECT id FROM dealership_orders WHERE dealership_id = ? AND vehicle_model = ? AND delivery_mode = 'expedited' AND (delivered_at IS NULL OR delivered_at > NOW()) ORDER BY id ASC LIMIT 1",
             { dealership.id, model }
         )
         if existingOrder then
@@ -380,24 +464,44 @@ lib.callback.register('pickle_dealerships:orderVehicle', function(source, locati
             stockId = existingOrder.id
         else
             stockId = MySQL.insert.await(
-                'INSERT INTO dealership_orders (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, quantity, ordered_at, delivered_at) VALUES (?, ?, ?, ?, ?, ?, NOW(), ?)',
+                "INSERT INTO dealership_orders (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, quantity, delivery_mode, ordered_at, delivered_at) VALUES (?, ?, ?, ?, ?, ?, 'expedited', NOW(), ?)",
                 { dealership.id, model, catalogEntry.label or model, wholesalePrice, retailPrice, qty, deliveredAt }
             )
         end
+    else
+        -- Local delivery: order sits in queue for any player to claim. Route is picked at claim time.
+        stockId = MySQL.insert.await(
+            "INSERT INTO dealership_orders (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, quantity, delivery_mode, delivery_fee, ordered_at, delivered_at) VALUES (?, ?, ?, ?, ?, ?, 'local', ?, NOW(), NULL)",
+            { dealership.id, model, catalogEntry.label or model, wholesalePrice, retailPrice, qty, costs.deliveryFee }
+        )
     end
 
     -- Create ledger entry
+    local desc = ('Vehicle order (%s): %s x%d'):format(resolvedMode, model, qty)
     MySQL.insert.await(
         'INSERT INTO dealership_ledger (dealership_id, type, amount, description, identifier, created_at) VALUES (?, ?, ?, ?, ?, NOW())',
-        { dealership.id, 'expense', -totalCost, 'Vehicle order: ' .. model .. ' x' .. qty, identifier }
+        { dealership.id, 'expense', -totalCost, desc, identifier }
     )
 
     ShowNotification(source, _L('stock_ordered_server', qty, model, GetCurrencyString(totalCost)))
-
-    -- Notify clients to refresh display
     TriggerClientEvent('pickle_dealerships:refreshDisplay', -1, locationKey)
+    TriggerClientEvent('pickle_dealerships:deliveryQueueChanged', -1)
 
     return true, stockId
+end)
+
+--- UI cost-preview callback used by the stock ordering dialog.
+--- Returns the total cost + driver fee for each mode, so the owner can compare before confirming.
+lib.callback.register('pickle_dealerships:previewOrderCost', function(source, model, qty)
+    local catalogEntry = MySQL.single.await('SELECT * FROM wholesale_catalog WHERE model = ?', { model })
+    if not catalogEntry then return nil end
+    local q = math.max(1, math.min(100, tonumber(qty) or 1))
+    local wholesale = catalogEntry.wholesale
+    local retail = math.floor(wholesale * 1.3)
+    return {
+        expedited = ResolveOwnerOrderCost('expedited', wholesale, retail, q),
+        ['local'] = ResolveOwnerOrderCost('local', wholesale, retail, q),
+    }
 end)
 
 --- Owner/manager sets the retail price for a stock item

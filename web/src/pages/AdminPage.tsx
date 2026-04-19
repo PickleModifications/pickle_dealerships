@@ -15,7 +15,7 @@ import {
 } from 'lucide-react'
 import { SkeletonList } from '../components/ui/skeleton'
 import { t } from '../lib/locale'
-import type { DealershipData, AdminDealership, DealershipMetadata, PositionData } from '../types'
+import type { DealershipData, AdminDealership, DealershipMetadata, PositionData, DeliveryDepot } from '../types'
 import AdminCatalogPage from './AdminCatalogPage'
 
 interface Props {
@@ -23,7 +23,7 @@ interface Props {
   onClose: () => void
 }
 
-type AdminTab = 'dealerships' | 'catalog' | 'positions'
+type AdminTab = 'dealerships' | 'catalog' | 'positions' | 'depots'
 type AdminAction = 'transfer' | 'balance' | 'tier' | 'reset' | 'toggle' | 'seize' | 'create' | null
 
 export default function AdminPage({ data, onClose }: Props) {
@@ -47,6 +47,56 @@ export default function AdminPage({ data, onClose }: Props) {
   const [onlinePlayers, setOnlinePlayers] = useState<{ source: number; name: string; identifier: string }[]>([])
   const [playerSearch, setPlayerSearch] = useState('')
   const [selectedPlayer, setSelectedPlayer] = useState<{ source: number; name: string; identifier: string } | null>(null)
+
+  // Depot management
+  const [depots, setDepots] = useState<DeliveryDepot[]>([])
+  const [depotLoading, setDepotLoading] = useState(false)
+  const [depotName, setDepotName] = useState('')
+
+  const loadDepots = () => {
+    setDepotLoading(true)
+    fetchNui<DeliveryDepot[]>('adminGetDepots', {}).then((r) => {
+      setDepots(r || [])
+      setDepotLoading(false)
+    }).catch(() => setDepotLoading(false))
+  }
+
+  useEffect(() => { if (tab === 'depots') loadDepots() }, [tab])
+
+  const handleCreateDepot = async () => {
+    if (!depotName.trim()) return
+    const res = await fetchNui<{ ok: boolean; id?: number }>('adminCreateDepot', { name: depotName.trim() })
+    if (res?.ok) {
+      setDepotName('')
+      loadDepots()
+    }
+  }
+
+  const handleDeleteDepot = async (id: number) => {
+    const res = await fetchNui<{ ok: boolean }>('adminDeleteDepot', { id })
+    if (res?.ok) loadDepots()
+  }
+
+  const handleWaypointDepot = (id: number) => {
+    fetchNui('adminWaypointDepot', { id })
+  }
+
+  const handleRenameDepot = async (id: number, name: string) => {
+    const res = await fetchNui<{ ok: boolean }>('adminUpdateDepot', { id, fields: { name } })
+    if (res?.ok) loadDepots()
+  }
+
+  // Opens the gizmo editor so the admin can visually place + rotate the truck-spawn point.
+  // The NUI closes, the gizmo runs (arrow keys to move, G to freeze/unfreeze, E to save, ESC to cancel),
+  // then the panel re-opens automatically on the Depots tab.
+  const handleSetSpawn = (id: number) => {
+    fetchNui('adminStartDepotSpawnGizmo', { id })
+  }
+
+  const handleClearSpawn = async (id: number) => {
+    const res = await fetchNui<{ ok: boolean }>('adminClearDepotSpawn', { id })
+    if (res?.ok) loadDepots()
+  }
 
   // Positions management
   const [positionsDealership, setPositionsDealership] = useState<AdminDealership | null>(null)
@@ -360,6 +410,76 @@ export default function AdminPage({ data, onClose }: Props) {
       return <AdminCatalogPage />
     }
 
+    // Depots tab
+    if (tab === 'depots') {
+      return (
+        <div className="relative flex-1 flex flex-col overflow-hidden">
+          <div className="p-4 border-b border-border space-y-3">
+            <h3 className="font-semibold text-sm flex items-center gap-2">
+              <MapPin className="h-4 w-4 text-accent" /> {t('admin_delivery_depots')}
+            </h3>
+            <p className="text-xs text-muted-foreground">{t('admin_delivery_depots_desc')}</p>
+            <div className="flex gap-2 items-end">
+              <div className="flex-1">
+                <label className="text-xs text-muted-foreground">{t('label_name')}</label>
+                <Input value={depotName} onChange={(e) => setDepotName(e.target.value)} placeholder={t('admin_depot_name_placeholder')} className="mt-1 h-9" />
+              </div>
+              <Button onClick={handleCreateDepot} className="h-9 gap-1" disabled={!depotName.trim()}>
+                <Crosshair className="h-4 w-4" /> {t('admin_depot_add_here')}
+              </Button>
+            </div>
+          </div>
+          <ScrollArea className="flex-1 p-4">
+            {depotLoading ? (
+              <SkeletonList count={3} />
+            ) : depots.length === 0 ? (
+              <div className="flex items-center justify-center h-48 text-muted-foreground text-sm">{t('admin_no_depots')}</div>
+            ) : (
+              <div className="space-y-2">
+                {depots.map((d) => (
+                  <Card key={d.id} className="hover:border-accent/40 transition-colors">
+                    <CardContent className="p-3 flex items-center gap-3">
+                      <div className="flex-1 min-w-0">
+                        <Input
+                          defaultValue={d.name}
+                          onBlur={(e) => { if (e.target.value && e.target.value !== d.name) handleRenameDepot(d.id, e.target.value) }}
+                          className="h-7 text-sm font-semibold max-w-xs"
+                        />
+                        <div className="text-[10px] text-muted-foreground mt-1 font-mono">
+                          {t('admin_depot_ped_label') || 'Ped'}: {d.pickupCoords
+                            ? `${d.pickupCoords.x?.toFixed(1)}, ${d.pickupCoords.y?.toFixed(1)}, ${d.pickupCoords.z?.toFixed(1)}`
+                            : '—'}
+                        </div>
+                        <div className="text-[10px] text-muted-foreground/80 mt-0.5 font-mono">
+                          {t('admin_depot_spawn_label') || 'Truck spawn'}: {d.spawnCoords
+                            ? `${d.spawnCoords.x?.toFixed(1)}, ${d.spawnCoords.y?.toFixed(1)}, ${d.spawnCoords.z?.toFixed(1)}`
+                            : (t('admin_depot_spawn_fallback') || 'same as ped')}
+                        </div>
+                      </div>
+                      <Button variant="ghost" size="sm" onClick={() => handleSetSpawn(d.id)} title={t('admin_depot_set_spawn') || 'Set truck spawn at my position'}>
+                        <Crosshair className="h-4 w-4" />
+                      </Button>
+                      {d.spawnCoords && (
+                        <Button variant="ghost" size="sm" onClick={() => handleClearSpawn(d.id)} title={t('admin_depot_clear_spawn') || 'Clear truck spawn'} className="text-muted-foreground">
+                          <X className="h-4 w-4" />
+                        </Button>
+                      )}
+                      <Button variant="ghost" size="sm" onClick={() => handleWaypointDepot(d.id)} title={t('admin_depot_waypoint')}>
+                        <MapPin className="h-4 w-4" />
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={() => handleDeleteDepot(d.id)} className="text-destructive hover:text-destructive">
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </ScrollArea>
+        </div>
+      )
+    }
+
     // Dealerships tab
     return (
       <div className="relative flex-1 flex flex-col overflow-hidden">
@@ -586,6 +706,7 @@ export default function AdminPage({ data, onClose }: Props) {
         <nav className="p-2 space-y-0.5 flex-1">
           <SidebarButton active={tab === 'dealerships'} icon={<Building2 className="h-4 w-4" />} label={t('admin_dealerships')} onClick={() => setTab('dealerships')} />
           <SidebarButton active={tab === 'catalog'} icon={<BookOpen className="h-4 w-4" />} label={t('admin_vehicle_catalog')} onClick={() => setTab('catalog')} />
+          <SidebarButton active={tab === 'depots'} icon={<MapPin className="h-4 w-4" />} label={t('admin_delivery_depots')} onClick={() => setTab('depots')} />
           {positionsDealership && (
             <>
               <Separator className="my-2" />

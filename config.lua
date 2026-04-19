@@ -1,6 +1,6 @@
 Config = {}
 Config.Language = "en"
-Config.Debug = true
+Config.Debug = false
 Config.RenderDistance = 100.0
 Config.InteractDistance = 2.0
 Config.UseTarget = true
@@ -51,7 +51,108 @@ Config.DefaultCommission = 0.08
 Config.SellbackRate = 0.60
 
 -- Delivery Settings
-Config.DeliveryTime = 0.1 -- Minutes for timed delivery mode
+Config.DeliveryTime = 0.1 -- Minutes per vehicle for expedited (timed) delivery mode
+
+-- Gameplay delivery system
+Config.Delivery = {
+    expeditedFeePct = 0.15,              -- surcharge on wholesale for Expedited mode — makes local strictly cheaper
+    payoutPct = 0.10,                    -- driver earns this % of retail (paid from within the dealership's wholesale+tax total, not on top)
+    failRefundRate = 0.5,                -- % of wholesale returned to the dealership on failed delivery
+    xpPerDelivery = 25,                  -- base XP per successful local delivery
+    xpTierMultiplier = {                 -- scales XP by catalog tier of the delivered vehicle
+        basic = 1.0, expanded = 1.5, full = 2.0, exclusive = 3.0,
+    },
+    failXpPenalty = 0.5,                 -- multiplier applied to would-be XP on fail (also resets streak)
+    streak = {
+        enabled = true,
+        perStreakBonusPct = 0.05,        -- +5% payout per consecutive success
+        maxMultiplier = 1.25,            -- cap at +25%
+    },
+    damagePenalty = {
+        enabled = true,
+        fullPayoutAboveCondition = 90,   -- 100% payout when vehicle arrives at >=90% condition
+        zeroPayoutBelowCondition = 25,   -- total forfeit below this (order still consumed)
+    },
+    maxActiveQueuePerDealership = 10,    -- cap on unclaimed local offers per dealership
+    dealershipRepBonus = 1,              -- +rep granted to destination dealership on successful local delivery
+}
+
+Config.DeliveryProgression = {
+    levels = {
+        [1] = { label = "Rookie",  xpRequired = 0,    catalogAccess = { basic = true } },
+        [2] = { label = "Courier", xpRequired = 500,  catalogAccess = { basic = true, expanded = true } },
+        [3] = { label = "Hauler",  xpRequired = 2000, catalogAccess = { basic = true, expanded = true, full = true } },
+        [4] = { label = "Elite",   xpRequired = 5000, catalogAccess = { basic = true, expanded = true, full = true, exclusive = true } },
+    },
+}
+
+-- Trailer setup for local deliveries. Controls which trailer model gets spawned per delivery type,
+-- which catalog classes map to which "size" bucket, per-trailer capacity, slot fill order, and the
+-- attach offsets for each slot on the tr2 flatbed.
+--
+-- Want to move or add slots? Run `/debug_trailer` in-game, drive the test car to each spot, capture
+-- with `/debug_trailer capture <N>`, then `/debug_trailer print` — paste the printed block into
+-- `tr2Slots` below.
+Config.Trailer = {
+    -- Trailer + towing models used for each delivery type.
+    models = {
+        truck    = 'phantom',   -- tractor that gets spawned hitched to the trailer at depot pickup
+        tr2      = 'tr2',       -- open double-decker car hauler for small/medium vehicles + bikes
+        enclosed = 'trailers',  -- sealed cargo trailer for anything that won't fit on tr2
+    },
+
+    -- NPC model at each depot — the ped the driver talks to in order to start a delivery.
+    depotPedModel = 's_m_y_dockwork_01',
+    depotInteractLabel = 'Start Delivery',
+    depotInteractIcon  = 'fas fa-truck',
+
+    -- Map blip shown at every active depot. The depot's name (from the delivery_depots DB row)
+    -- is used as the label. See https://docs.fivem.net/docs/game-references/blips/ for sprite/colour IDs.
+    depotBlip = {
+        enabled    = true,
+        sprite     = 477,   -- "Delivery" car-hauler icon
+        color      = 5,     -- yellow
+        scale      = 0.8,
+        shortRange = true,  -- only visible when player is nearby (set false for always-on)
+    },
+
+    -- Catalog class → size bucket. Case-insensitive lookup via string.lower on the catalog's `class` column.
+    -- Mediums cap at 4 per trailer and never sit at adjacent slot indexes.
+    -- Smalls/bikes have no index-adjacency rule and fill the gap slots between mediums first.
+    -- Any class NOT listed here routes to the enclosed trailer (no visual attach).
+    classes = {
+        medium = { sedan = true, muscle = true, super = true, ['sports classic'] = true, sports_classic = true, sportsclassic = true, classic = true },
+        small  = { compact = true, coupe = true, sports = true },
+        bike   = { motorcycle = true, motorcycles = true, cycle = true, cycles = true },
+    },
+
+    -- `total` is max vehicles per trailer; `medium` is the subset cap on medium-class vehicles.
+    capacity = {
+        tr2      = { total = 6, medium = 4 },
+        enclosed = { total = 4, medium = 4 },
+    },
+
+    -- Slot indexes in the order they should be filled.
+    -- Medium order picks corners of each deck so two mediums never sit at adjacent indexes.
+    -- Small/bike order picks the centerline "gap" slots first so they tuck between mediums.
+    slotOrder = {
+        medium = { 1, 3, 4, 6 },
+        small  = { 2, 5, 1, 3, 4, 6 },
+    },
+
+    -- Per-slot attach offsets for the tr2 trailer (relative to trailer entity root, bone 0).
+    --   +Y = toward the rear ramp, -Y = toward the hitch
+    --   Lower deck surface ~z=0.75-1.00, upper deck ~z=2.70-2.95
+    --   rotX = pitch (nose up/down), rotY = roll (bank), rotZ = yaw (heading) — all in degrees
+    tr2Slots = {
+        { x =  0.03, y =  4.97, z = 0.94, rotX =  0.10, rotY = -0.02, rotZ =  0.14 }, -- 1: lower-rear   (ramp-side endpoint)
+        { x =  0.03, y =  0.06, z = 1.10, rotX = -3.34, rotY = -0.41, rotZ =  0.05 }, -- 2: lower-middle (centerline gap)
+        { x =  0.02, y = -4.77, z = 1.05, rotX =  4.65, rotY =  0.01, rotZ = -0.17 }, -- 3: lower-front  (hitch-side endpoint)
+        { x = -0.07, y =  4.91, z = 2.91, rotX =  3.26, rotY =  0.01, rotZ = -0.17 }, -- 4: upper-rear
+        { x = -0.04, y =  0.05, z = 2.94, rotX = -3.49, rotY = -0.19, rotZ = -0.11 }, -- 5: upper-middle (centerline gap)
+        { x = -0.00, y = -4.80, z = 3.04, rotX =  1.36, rotY = -0.11, rotZ =  0.26 }, -- 6: upper-front
+    },
+}
 
 -- Test Drive Settings
 Config.TestDriveTime = 120 -- Seconds

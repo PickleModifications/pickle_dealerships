@@ -17,7 +17,9 @@ import ManagementPage from './pages/ManagementPage'
 import PhotoBoothPage from './pages/PhotoBoothPage'
 import ShowroomPage from './pages/ShowroomPage'
 import NpcShowroomPage from './pages/NpcShowroomPage'
+import DeliveryPage from './pages/DeliveryPage'
 import InteractText from './components/InteractText'
+import MissionOverlay from './components/MissionOverlay'
 import { PickleFaxDialog } from './components/PickleFax'
 
 function App() {
@@ -93,6 +95,11 @@ function App() {
     setData(null)
   })
 
+  useNuiEvent('deliveryQueueChanged', () => {
+    // Re-forwarded as a window message so DeliveryPage's useEffect picks it up
+    window.postMessage({ action: 'deliveryQueueChanged' }, '*')
+  })
+
   const handleClose = useCallback(() => {
     setVisible(false)
     setPage(null)
@@ -121,7 +128,7 @@ function App() {
 
   const renderPage = () => {
     if (!visible || !page) return null
-    if (!data && page !== 'negotiation') return null
+    if (!data && page !== 'negotiation' && page !== 'deliveries') return null
 
     const props = { data: data!, onClose: handleClose }
 
@@ -157,6 +164,8 @@ function App() {
         return <ShowroomPage {...props} />
       case 'pickleFax':
         return data?.stockId ? <PickleFaxDialog stockId={data.stockId} mode="customer" onClose={handleClose} /> : null
+      case 'deliveries':
+        return data?.deliveryQueue ? <DeliveryPage queue={data.deliveryQueue} depotId={data.depotId} onClose={handleClose} /> : null
       default:
         return null
     }
@@ -165,6 +174,7 @@ function App() {
   return (
     <>
       <InteractText />
+      <MissionOverlay />
       {visible && page && (
         page === 'photoBooth' || page === 'showroom' || page === 'negotiation' || page === 'npcShowroom' || page === 'pickleFax' ? (
           <div key={openKey} className="fixed inset-0 z-50">
