@@ -254,6 +254,20 @@ local function GetDealershipCoords(dealership)
     return nil
 end
 
+--- Returns the dedicated drop-off point (deliveryPoint) as a plain {x,y,z,w} table, or nil.
+--- Local deliveries require this point — the queue filter + order-placement guard prevent
+--- dealerships without it from participating in local delivery, so by the time a mission is
+--- assembled we can trust it exists.
+local function GetDealershipDropoff(dealership)
+    local meta = dealership.metadata
+    if type(meta) == 'string' then meta = json.decode(meta) or {} end
+    if type(meta) == 'table' and meta.deliveryPoint then
+        local p = meta.deliveryPoint
+        return { x = p.x, y = p.y, z = p.z, w = p.w or 0.0 }
+    end
+    return nil
+end
+
 --- Computes the final payout at completion time (after streak + damage modifiers).
 local function ComputeFinalPayout(baseFee, identifier, condition)
     local cfg = Config.Delivery or {}
@@ -313,6 +327,20 @@ lib.callback.register('pickle_dealerships:getDeliveryQueue', function(source)
          WHERE o.delivery_mode = 'local' AND o.claimed_by IS NULL
          ORDER BY o.ordered_at ASC
     ]]) or {}
+
+    -- Filter out any orders whose dealership has no deliveryPoint set. Without a drop-off point
+    -- there's nowhere to land the trailer, so the offer is hidden from drivers until the owner
+    -- configures one (orders already in the queue for unconfigured dealerships simply stay idle).
+    do
+        local filtered = {}
+        for _, r in ipairs(rows) do
+            local d = GetDealership(r.dealership_id)
+            if d and GetDealershipDropoff(d) then
+                filtered[#filtered + 1] = r
+            end
+        end
+        rows = filtered
+    end
 
     local prog = GetDriverProgression(identifier) or { level = 1, xp = 0, streak = 0, completed_count = 0, failed_count = 0 }
     local streakMult = GetDriverStreakMultiplier(identifier)
@@ -382,16 +410,25 @@ lib.callback.register('pickle_dealerships:getDeliveryDepots', function(source)
     return GetDeliveryDepots() or {}
 end)
 
+--- Creates a depot with both interact (pickup) + truck-spawn coords supplied from the admin
+--- creation dialog. Both are required — the new UX forces the admin to place each point via
+--- gizmo before the Create button enables, so we don't accept the legacy "spawn falls back to
+--- pickup" shape here.
 lib.callback.register('pickle_dealerships:createDeliveryDepot', function(source, payload)
     if not IsPlayerAdmin(source) then return false, 'Admin only.' end
-    if not payload or not payload.name or not payload.coords then return false, 'Invalid payload.' end
-    local c = payload.coords
+    if not payload or not payload.name then return false, 'Invalid payload.' end
+    local p = payload.pickupCoords
+    local s = payload.spawnCoords
+    if not p or not p.x or not p.y or not p.z then return false, 'Missing pickup coords.' end
+    if not s or not s.x or not s.y or not s.z then return false, 'Missing spawn coords.' end
     local id = CreateDeliveryDepot(
         payload.name,
-        tonumber(c.x), tonumber(c.y), tonumber(c.z), tonumber(c.w) or 0.0
+        tonumber(p.x), tonumber(p.y), tonumber(p.z), tonumber(p.w) or 0.0
     )
-    if id then TriggerClientEvent('pickle_dealerships:depotsChanged', -1) end
-    return id ~= nil, id
+    if not id then return false end
+    SetDeliveryDepotSpawn(id, tonumber(s.x), tonumber(s.y), tonumber(s.z), tonumber(s.w) or 0.0)
+    TriggerClientEvent('pickle_dealerships:depotsChanged', -1)
+    return true, id
 end)
 
 lib.callback.register('pickle_dealerships:updateDeliveryDepot', function(source, id, fields)
@@ -408,8 +445,20 @@ lib.callback.register('pickle_dealerships:deleteDeliveryDepot', function(source,
     return ok
 end)
 
---- Admin sets (or clears) the truck-spawn point for a depot. Coords come captured client-side.
---- Pass payload.clear = true to reset to the ped coords fallback.
+--- Admin moves the dispatch-ped (pickup) coords of an existing depot.
+lib.callback.register('pickle_dealerships:setDeliveryDepotPickup', function(source, payload)
+    if not IsPlayerAdmin(source) then return false, 'Admin only.' end
+    if not payload or not payload.id or not payload.coords then return false, 'Invalid payload.' end
+    local c = payload.coords
+    if not c.x or not c.y or not c.z then return false, 'Missing coords.' end
+    local ok = SetDeliveryDepotPickup(payload.id, tonumber(c.x), tonumber(c.y), tonumber(c.z), tonumber(c.w) or 0.0)
+    if ok then TriggerClientEvent('pickle_dealerships:depotsChanged', -1) end
+    return ok
+end)
+
+--- Admin sets the truck-spawn point for a depot. Coords come captured client-side.
+--- The create flow requires both points so legacy "clear to fall back" is no longer exposed in the UI,
+--- but the clear path is kept here for safety / potential future use.
 lib.callback.register('pickle_dealerships:setDeliveryDepotSpawn', function(source, payload)
     if not IsPlayerAdmin(source) then return false, 'Admin only.' end
     if not payload or not payload.id then return false, 'Invalid payload.' end
@@ -641,6 +690,10 @@ lib.callback.register('pickle_dealerships:acceptDelivery', function(source, orde
         route = route,
         vehicles = clientVehicles,
         dealershipCoords = dealerCoords,
+        -- The drop-off point is the dealership's dedicated trailer-delivery zone. Required for
+        -- local deliveries (queue filter + order-placement guard enforce it upstream) — the client
+        -- renders the rectangle + ghost tr2 here and checks trailer unhitch against this coord.
+        dropoffCoords = GetDealershipDropoff(dealership),
         trailerPlan = trailerPlan,
         baseFee = totalFee,
         streakMultiplier = GetDriverStreakMultiplier(identifier),
@@ -648,7 +701,7 @@ lib.callback.register('pickle_dealerships:acceptDelivery', function(source, orde
     })
 
     TriggerClientEvent('pickle_dealerships:deliveryQueueChanged', -1)
-    ShowNotification(source, _L('delivery_mission_started_server', totalQty), 'success')
+    -- Client emits delivery_vehicles_loaded on mission start; no server toast needed.
     return true, deliveryId
 end)
 
@@ -694,7 +747,9 @@ lib.callback.register('pickle_dealerships:completeDelivery', function(source, de
         { deliveryId }
     )
 
-    -- Pay the driver (fee was already escrowed from dealership balance at order time)
+    -- Local delivery is a server-sponsored payout — the dealership contributes $0
+    -- (the incentive for routing orders through real drivers). Paying into the
+    -- player's bank directly acts as a server faucet; no balance ledger to touch.
     if payout > 0 then
         AddMoney(source, payout, 'bank')
     end
@@ -717,7 +772,7 @@ lib.callback.register('pickle_dealerships:completeDelivery', function(source, de
         or (delivery.primaryLabel or '?')
     AddLedgerEntry(
         delivery.dealershipId,
-        'info',
+        'delivery',
         0,
         ('Local delivery completed: %s x%d (driver paid $%d)'):format(bundleDesc, delivery.totalQty or 1, payout),
         delivery.identifier
@@ -731,7 +786,7 @@ lib.callback.register('pickle_dealerships:completeDelivery', function(source, de
         TriggerClientEvent('pickle_dealerships:driverLevelUp', source, xpResult.level)
     end
 
-    ShowNotification(source, _L('delivery_completed_server', delivery.totalQty or 1), 'success')
+    -- Client shows delivery_complete_client + payout toast; skip the dupe.
     return true, {
         payout = payout,
         streakMultiplier = streakMult,
@@ -782,7 +837,7 @@ local function AbandonDelivery(source, reason)
 
     AddLedgerEntry(
         delivery.dealershipId,
-        'info',
+        'delivery',
         0,
         ('Local delivery failed (%s): %d order(s) returned to queue'):format(reason or 'abandoned', #(delivery.orderIds or {})),
         delivery.identifier
@@ -798,10 +853,8 @@ lib.callback.register('pickle_dealerships:failDelivery', function(source, delive
     if not delivery or delivery.deliveryId ~= deliveryId then
         return false, 'No matching active delivery found.'
     end
-    local ok, refund = AbandonDelivery(source, 'player_cancelled')
-    if ok then
-        ShowNotification(source, _L('delivery_failed_server', GetCurrencyString(refund or 0)), 'error')
-    end
+    local ok = AbandonDelivery(source, 'player_cancelled')
+    -- Client shows delivery_cancelled / delivery_failed_died toast; skip the dupe.
     return ok
 end)
 

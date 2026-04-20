@@ -103,9 +103,13 @@ export default function ShowroomPage({ data }: Props) {
       setMaxRetailPrice(highest)
       setPriceRange([0, highest])
       if (available.length > 0) {
-        const first = available[0]
-        setSelected(first)
-        fetchNui('showroomSwapVehicle', { model: first.vehicle_model, stockId: first.is_used ? first.id : undefined })
+        // Spot-view mode: seed the selection with the specific stock the player
+        // walked up to instead of defaulting to the first item in the list.
+        const target = data.spotViewStockId
+          ? available.find((s) => s.id === data.spotViewStockId) ?? available[0]
+          : available[0]
+        setSelected(target)
+        fetchNui('showroomSwapVehicle', { model: target.vehicle_model, stockId: target.is_used ? target.id : undefined })
       }
       setLoading(false)
     }).catch(() => setLoading(false))
@@ -404,7 +408,9 @@ export default function ShowroomPage({ data }: Props) {
 
   return (
     <div className="fixed inset-0 flex">
-      {/* Left sidebar — vehicle grid */}
+      {/* Left sidebar — vehicle grid. Hidden in spot-view mode (customer walked
+          up to a specific display vehicle — no cross-browsing here). */}
+      {!data.spotViewStockId && (
       <div className="w-[340px] shrink-0 bg-black/90 flex flex-col border-r border-white/10 pointer-events-auto">
         {/* Header */}
         <div className="p-3 pb-2">
@@ -760,6 +766,7 @@ export default function ShowroomPage({ data }: Props) {
           </div>
         </div>
       </div>
+      )}
 
       {/* Center — transparent, for 3D vehicle view + orbit drag */}
       <div className="flex-1 relative pointer-events-auto cursor-grab active:cursor-grabbing">
@@ -781,7 +788,7 @@ export default function ShowroomPage({ data }: Props) {
         const bidFloor = nextBidFloor(selectedAuction)
         const endingSoon = isEndingSoon(selectedAuction.ends_at, 30)
         return (
-          <div className="fixed bottom-0 left-[340px] right-0 pointer-events-auto">
+          <div className={`fixed bottom-0 ${data.spotViewStockId ? 'left-0' : 'left-[340px]'} right-0 pointer-events-auto`}>
             <div className="bg-black/90 border-t border-amber-500/30 px-6 py-3 flex items-center gap-4">
               <div className="flex-1 min-w-0">
                 <p className="text-white font-bold text-lg truncate leading-tight">{selectedAuction.vehicle_label || selectedAuction.vehicle_model}</p>
@@ -882,41 +889,59 @@ export default function ShowroomPage({ data }: Props) {
             </div>
             )}
 
-            <Tabs
-              defaultValue="bank"
-              value={paymentMethod}
-              onValueChange={(v) => setPaymentMethod(v as typeof paymentMethod)}
-            >
-              <TabsList className="h-9 bg-white/5 border border-white/10">
-                <TabsTrigger value="bank" className="gap-1.5 text-xs data-[state=active]:bg-white/10">
-                  <CreditCard className="h-3.5 w-3.5" /> {t('label_bank')}
-                </TabsTrigger>
-                <TabsTrigger value="cash" className="gap-1.5 text-xs data-[state=active]:bg-white/10">
-                  <Banknote className="h-3.5 w-3.5" /> {t('label_cash')}
-                </TabsTrigger>
-              </TabsList>
-            </Tabs>
-
-            <Button
-              className="h-9 px-5 gap-2"
-              onClick={handlePurchase}
-              disabled={purchasing}
-            >
-              {purchasing ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                t('btn_purchase')
-              )}
-            </Button>
-
-            {financingSettings?.financingEnabled && !selected.auction_id && (
+            {data.pickerSpotId ? (
               <Button
-                variant="outline"
-                className="h-9 px-4 gap-1.5 border-white/20 text-white/80 hover:bg-white/10 hover:text-white"
-                onClick={() => { if (!selectedInstallments && financingSettings) setSelectedInstallments(financingSettings.installmentOptions[0] ?? 8); setShowContract(true) }}
+                className="h-9 px-5 gap-2"
+                onClick={() => {
+                  fetchNui('setDisplaySpot', {
+                    dealershipId: data.dealershipId,
+                    location: data.location,
+                    stockId: selected.id,
+                    spot: data.pickerSpotId,
+                  }).finally(() => fetchNui('showroomClose', {}))
+                }}
               >
-                <PenLine className="h-3.5 w-3.5" /> {t('btn_finance')}
+                {t('btn_place_here')}
               </Button>
+            ) : (
+              <>
+                <Tabs
+                  defaultValue="bank"
+                  value={paymentMethod}
+                  onValueChange={(v) => setPaymentMethod(v as typeof paymentMethod)}
+                >
+                  <TabsList className="h-9 bg-white/5 border border-white/10">
+                    <TabsTrigger value="bank" className="gap-1.5 text-xs data-[state=active]:bg-white/10">
+                      <CreditCard className="h-3.5 w-3.5" /> {t('label_bank')}
+                    </TabsTrigger>
+                    <TabsTrigger value="cash" className="gap-1.5 text-xs data-[state=active]:bg-white/10">
+                      <Banknote className="h-3.5 w-3.5" /> {t('label_cash')}
+                    </TabsTrigger>
+                  </TabsList>
+                </Tabs>
+
+                <Button
+                  className="h-9 px-5 gap-2"
+                  onClick={handlePurchase}
+                  disabled={purchasing}
+                >
+                  {purchasing ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    t('btn_purchase')
+                  )}
+                </Button>
+
+                {financingSettings?.financingEnabled && !selected.auction_id && (
+                  <Button
+                    variant="outline"
+                    className="h-9 px-4 gap-1.5 border-white/20 text-white/80 hover:bg-white/10 hover:text-white"
+                    onClick={() => { if (!selectedInstallments && financingSettings) setSelectedInstallments(financingSettings.installmentOptions[0] ?? 8); setShowContract(true) }}
+                  >
+                    <PenLine className="h-3.5 w-3.5" /> {t('btn_finance')}
+                  </Button>
+                )}
+              </>
             )}
           </div>
         </div>

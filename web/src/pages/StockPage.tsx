@@ -11,7 +11,7 @@ import { fetchNui, formatCurrency, getVehicleImage } from '../lib/utils'
 import { t } from '../lib/locale'
 import { getCached, setCache, buildKey } from '../lib/cache'
 import { SkeletonCardGrid } from '../components/ui/skeleton'
-import { X, Search, Package, Truck, Clock, Car, Pencil, SlidersHorizontal, FileText, Gavel, EyeOff, Eye, Settings } from 'lucide-react'
+import { X, Search, Package, Truck, Clock, Car, Pencil, SlidersHorizontal, FileText, Gavel, EyeOff, Eye, Settings, Shield } from 'lucide-react'
 import VehicleImg from '../components/VehicleImg'
 import { PickleFaxDialog } from '../components/PickleFax'
 import AuctionListDialog from '../components/AuctionListDialog'
@@ -24,6 +24,18 @@ interface Props {
 
 const COLUMNS = 3
 const GAP = 8
+
+function getStockMinGrade(item: StockItem): number {
+  let meta = item.metadata as unknown
+  if (typeof meta === 'string') {
+    try { meta = JSON.parse(meta) } catch { return 0 }
+  }
+  if (meta && typeof meta === 'object') {
+    const mg = (meta as Record<string, unknown>).minGrade
+    return typeof mg === 'number' ? mg : 0
+  }
+  return 0
+}
 
 function getDeliveryStatus(item: StockItem): 'available' | 'in_transit' | 'pending' {
   if (!item.delivered_at) return 'pending'
@@ -68,6 +80,11 @@ export default function StockPage({ data, onClose }: Props) {
   const [pickleFaxId, setPickleFaxId] = useState<number | null>(null)
   const [auctionListingItem, setAuctionListingItem] = useState<StockItem | null>(null)
   const [selectedItem, setSelectedItem] = useState<StockItem | null>(null)
+  const [editingGrade, setEditingGrade] = useState<StockItem | null>(null)
+  const [gradeInput, setGradeInput] = useState<number>(0)
+  const [factionGrades, setFactionGrades] = useState<{ level: number; label: string }[] | null>(null)
+  const [factionJob, setFactionJob] = useState<string | null>(null)
+  const [factionType, setFactionType] = useState<'job' | 'gang'>('job')
   const parentRef = useRef<HTMLDivElement>(null)
 
   const loadStock = () => {
@@ -116,6 +133,38 @@ export default function StockPage({ data, onClose }: Props) {
     }).then(() => {
       setEditingPrice(null)
       setPriceInput('')
+      loadStock()
+    })
+  }
+
+  const openMinGradeEditor = (item: StockItem) => {
+    setEditingGrade(item)
+    setGradeInput(getStockMinGrade(item))
+    if (factionGrades === null) {
+      fetchNui<{ success: boolean; rates: { job: string | null; factionType?: 'job' | 'gang'; grades: { level: number; label: string }[] } }>('getCommissionRates', {
+        dealershipId: data.dealershipId,
+      }).then((res) => {
+        if (res.success && res.rates) {
+          setFactionGrades(res.rates.grades || [])
+          setFactionJob(res.rates.job)
+          setFactionType(res.rates.factionType === 'gang' ? 'gang' : 'job')
+        } else {
+          setFactionGrades([])
+        }
+      }).catch(() => setFactionGrades([]))
+    }
+  }
+
+  const handleSaveMinGrade = () => {
+    if (!editingGrade) return
+    fetchNui('setStockMinGrade', {
+      dealershipId: data.dealershipId,
+      location: data.location,
+      stockId: editingGrade.id,
+      minGrade: gradeInput,
+    }).then(() => {
+      setEditingGrade(null)
+      setSelectedItem(null)
       loadStock()
     })
   }
@@ -460,7 +509,7 @@ export default function StockPage({ data, onClose }: Props) {
 
       {/* Stock item management modal */}
       {selectedItem && (() => {
-        const hasSubDialog = !!(pickleFaxId || auctionListingItem || editingPrice)
+        const hasSubDialog = !!(pickleFaxId || auctionListingItem || editingPrice || editingGrade)
         return (
         <div style={{ display: hasSubDialog ? 'none' : undefined }}>
           <div className="absolute inset-0 z-40 bg-black/50 rounded-[inherit]" onClick={() => setSelectedItem(null)} />
@@ -533,6 +582,14 @@ export default function StockPage({ data, onClose }: Props) {
                   {canManage && !selectedItem.auction_id && (
                     <StockActionRow icon={<Pencil className="h-4 w-4" />} label={t('title_edit_retail_price')} value={formatCurrency(selectedItem.retail_price)} onClick={() => { setEditingPrice(selectedItem); setPriceInput(String(selectedItem.retail_price)) }} />
                   )}
+                  {canManage && (
+                    <StockActionRow
+                      icon={<Shield className="h-4 w-4" />}
+                      label={t('title_edit_min_rank')}
+                      value={getStockMinGrade(selectedItem) > 0 ? t('label_min_grade_value', String(getStockMinGrade(selectedItem))) : t('label_no_restriction')}
+                      onClick={() => openMinGradeEditor(selectedItem)}
+                    />
+                  )}
                   {selectedItem.is_used && (
                     <StockActionRow icon={<FileText className="h-4 w-4" />} label={t('picklefax_title')} onClick={() => setPickleFaxId(selectedItem.id)} />
                   )}
@@ -554,6 +611,55 @@ export default function StockPage({ data, onClose }: Props) {
         </div>
         )
       })()}
+
+      {/* Edit minimum rank dialog */}
+      <Dialog open={!!editingGrade} onOpenChange={(open) => { if (!open) setEditingGrade(null) }}>
+        <DialogContent onClose={() => setEditingGrade(null)}>
+          <DialogHeader>
+            <DialogTitle>{t('title_edit_min_rank')}</DialogTitle>
+            <DialogDescription>{editingGrade?.vehicle_label || editingGrade?.vehicle_model}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 pt-2">
+            {factionGrades === null ? (
+              <p className="text-sm text-muted-foreground">{t('loading')}</p>
+            ) : !factionJob ? (
+              <div className="rounded-md border border-orange-500/30 bg-orange-500/10 p-3 text-sm text-orange-300">
+                {t('min_rank_no_faction')}
+              </div>
+            ) : factionGrades.length === 0 ? (
+              <div className="rounded-md border border-orange-500/30 bg-orange-500/10 p-3 text-sm text-orange-300">
+                {t('commission_no_grades', factionJob)}
+              </div>
+            ) : (
+              <>
+                <p className="text-xs text-muted-foreground font-mono">{t(factionType === 'gang' ? 'label_gang' : 'label_job')}: {factionJob}</p>
+                <div className="space-y-1">
+                  <button
+                    onClick={() => setGradeInput(0)}
+                    className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm transition-colors ${gradeInput === 0 ? 'bg-accent text-accent-foreground' : 'bg-muted/40 hover:bg-muted'}`}
+                  >
+                    <span>{t('label_no_restriction')}</span>
+                  </button>
+                  {factionGrades.map((g) => (
+                    <button
+                      key={g.level}
+                      onClick={() => setGradeInput(g.level)}
+                      className={`w-full flex items-center justify-between px-3 py-2 rounded-md text-sm transition-colors ${gradeInput === g.level ? 'bg-accent text-accent-foreground' : 'bg-muted/40 hover:bg-muted'}`}
+                    >
+                      <span>{g.label}</span>
+                      <span className="text-xs opacity-70 font-mono">{t('commission_grade_level', String(g.level))}</span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+            <div className="flex gap-2">
+              <Button variant="outline" className="flex-1" onClick={() => setEditingGrade(null)}>{t('btn_cancel')}</Button>
+              <Button className="flex-1" onClick={handleSaveMinGrade}>{t('btn_save')}</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Edit retail price dialog */}
       <Dialog open={!!editingPrice} onOpenChange={(open) => { if (!open) setEditingPrice(null) }}>

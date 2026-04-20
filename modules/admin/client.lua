@@ -2,7 +2,7 @@
 RegisterNetEvent("pickle_dealerships:openAdminPanel", function()
     OpenNui('admin', {
         dealershipId = 0,
-        dealershipName = 'Admin Panel',
+        dealershipName = 'Dealership Panel',
         role = 'admin',
         tier = 4,
     })
@@ -112,12 +112,29 @@ RegisterNUICallback("adminToggleSeize", function(data, cb)
     end
 end)
 
+--- Permanently delete a dealership (confirmation handled in NUI)
+RegisterNUICallback("adminDeleteDealership", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:adminDeleteDealership", false, {
+        dealershipId = data.dealershipId,
+    })
+    if result and result.success then
+        ShowNotification(result.message)
+        cb({ success = true })
+    else
+        ShowNotification(result and result.message or _L("admin_delete_failed"))
+        cb({ success = false, message = result and result.message or _L("admin_delete_failed") })
+    end
+end)
+
 --- Create a new dealership
 RegisterNUICallback("adminCreateDealership", function(data, cb)
     local result = lib.callback.await("pickle_dealerships:adminCreateDealership", false, {
-        label    = data.label,
-        mode     = data.mode,
-        type     = data.type,
+        label         = data.label,
+        mode          = data.mode,
+        type          = data.type,
+        coords        = data.coords,
+        spawnPoint    = data.spawnPoint,
+        deliveryPoint = data.deliveryPoint,
     })
     if result and result.success then
         ShowNotification(result.message)
@@ -128,6 +145,65 @@ RegisterNUICallback("adminCreateDealership", function(data, cb)
     end
 end)
 
+--- DRAFT MODE for the create-dealership dialog. Closes the NUI, runs the appropriate
+--- gizmo for the chosen field, then re-opens the admin panel with a `pendingDealership`
+--- draft so the create dialog can repopulate with the previously entered values plus
+--- the freshly placed coord. Mirrors the depot create flow exactly.
+RegisterNUICallback("adminPlaceDealershipPoint", function(payload, cb)
+    CloseNui()
+
+    local field = payload.field   -- 'coords' | 'spawnPoint' | 'deliveryPoint'
+    local draft = payload.draft or {}
+
+    local result
+    if field == "deliveryPoint" then
+        -- Use a ghost tr2 trailer so the placement shows the exact footprint
+        local model = `tr2`
+        RequestModel(model)
+        local t = GetGameTimer() + 5000
+        while not HasModelLoaded(model) and GetGameTimer() < t do Wait(0) end
+        if HasModelLoaded(model) then
+            local ped = PlayerPedId()
+            local spawn = GetEntityCoords(ped) + GetEntityForwardVector(ped) * 6.0
+            local trailer = CreateVehicle(model, spawn.x, spawn.y, spawn.z, GetEntityHeading(ped), false, false)
+            SetModelAsNoLongerNeeded(model)
+            SetEntityAsMissionEntity(trailer, true, true)
+            SetEntityInvincible(trailer, true)
+            SetEntityCollision(trailer, false, false)
+            SetEntityAlpha(trailer, 160, false)
+            result = StartGizmoEditor({ entity = trailer, enableCancel = true })
+            if DoesEntityExist(trailer) then DeleteEntity(trailer) end
+        end
+    else
+        result = StartGizmoEditor({
+            model = `prop_tennis_ball`,
+            enableCancel = true,
+            deleteEntity = true,
+        })
+    end
+
+    if result and result.position then
+        local coord = {
+            x = result.position.x,
+            y = result.position.y,
+            z = result.position.z,
+            w = result.rotation and result.rotation.z or 0.0,
+        }
+        if field == "coords" then draft.coords = coord
+        elseif field == "spawnPoint" then draft.spawnPoint = coord
+        elseif field == "deliveryPoint" then draft.deliveryPoint = coord end
+    end
+
+    OpenNui('admin', {
+        dealershipId = 0,
+        dealershipName = 'Dealership Panel',
+        role = 'admin',
+        tier = 4,
+        pendingDealership = draft,
+    })
+    cb({ success = result ~= nil and result.position ~= nil })
+end)
+
 --- Start gizmo placement for a dealership position
 --- The NUI closes, player places with gizmo, result is saved to server, NUI re-opens
 RegisterNUICallback("adminStartGizmo", function(data, cb)
@@ -135,14 +211,48 @@ RegisterNUICallback("adminStartGizmo", function(data, cb)
     CloseNui()
 
     local isDisplaySpot = data.field == "displaySpot"
-    local model = isDisplaySpot and `xm_prop_lab_barrier02` or `prop_tennis_ball`
-    local result = StartGizmoEditor({
-        model = model,
-        enableCancel = true,
-        deleteEntity = true,
-        coordsOffset = isDisplaySpot and vector3(0.0, 0.0, -0.03) or nil,
-        rotationOffset = isDisplaySpot and vector3(90.0, 0.0, 0.0) or nil,
-    })
+    local isDeliveryPoint = data.field == "deliveryPoint"
+    local result
+
+    if isDeliveryPoint then
+        -- Delivery point is placed using a ghost tr2 trailer so the admin sees the exact footprint
+        -- drivers will drop their trailer into. Pass the pre-spawned entity to the gizmo so it
+        -- moves the trailer directly instead of a placeholder prop.
+        local model = `tr2`
+        RequestModel(model)
+        local t = GetGameTimer() + 5000
+        while not HasModelLoaded(model) and GetGameTimer() < t do Wait(0) end
+        if not HasModelLoaded(model) then
+            ShowNotification(_L("admin_placement_cancelled"))
+            OpenNui('admin', { dealershipId = 0, dealershipName = 'Dealership Panel', role = 'admin', tier = 4, positionsDealershipId = data.dealershipId })
+            cb({ success = false })
+            return
+        end
+        local ped = PlayerPedId()
+        local spawn = GetEntityCoords(ped) + GetEntityForwardVector(ped) * 6.0
+        local trailer = CreateVehicle(model, spawn.x, spawn.y, spawn.z, GetEntityHeading(ped), false, false)
+        SetModelAsNoLongerNeeded(model)
+        SetEntityAsMissionEntity(trailer, true, true)
+        SetEntityInvincible(trailer, true)
+        SetEntityCollision(trailer, false, false)
+        SetEntityAlpha(trailer, 160, false)
+
+        result = StartGizmoEditor({
+            entity = trailer,
+            enableCancel = true,
+        })
+
+        if DoesEntityExist(trailer) then DeleteEntity(trailer) end
+    else
+        local model = isDisplaySpot and `xm_prop_lab_barrier02` or `prop_tennis_ball`
+        result = StartGizmoEditor({
+            model = model,
+            enableCancel = true,
+            deleteEntity = true,
+            coordsOffset = isDisplaySpot and vector3(0.0, 0.0, -0.03) or nil,
+            rotationOffset = isDisplaySpot and vector3(90.0, 0.0, 0.0) or nil,
+        })
+    end
 
     if result and result.position then
         local position = result.position
@@ -164,7 +274,7 @@ RegisterNUICallback("adminStartGizmo", function(data, cb)
         -- Re-open admin panel on the positions tab
         OpenNui('admin', {
             dealershipId = 0,
-            dealershipName = 'Admin Panel',
+            dealershipName = 'Dealership Panel',
             role = 'admin',
             tier = 4,
             positionsDealershipId = data.dealershipId,
@@ -177,7 +287,7 @@ RegisterNUICallback("adminStartGizmo", function(data, cb)
         -- Player cancelled — re-open UI
         OpenNui('admin', {
             dealershipId = 0,
-            dealershipName = 'Admin Panel',
+            dealershipName = 'Dealership Panel',
             role = 'admin',
             tier = 4,
             positionsDealershipId = data.dealershipId,
@@ -197,8 +307,31 @@ RegisterNUICallback("adminRemovePosition", function(data, cb)
     cb(result or { success = false })
 end)
 
-RegisterNUICallback("adminSetJob", function(data, cb)
-    local result = lib.callback.await("pickle_dealerships:adminSetJob", false, data)
+RegisterNUICallback("adminSetAccess", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:adminSetAccess", false, data)
+    if result and result.success then
+        ShowNotification(result.message)
+    else
+        ShowNotification(result and result.message or "Failed to update access.")
+    end
+    cb(result or { success = false })
+end)
+
+RegisterNUICallback("adminSetAltCurrencies", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:setAcceptedAltCurrencies", false, {
+        dealershipId = data.dealershipId,
+        accepted     = data.accepted,
+    })
+    if result and result.success then
+        ShowNotification(result.message)
+    else
+        ShowNotification(result and result.message or _L("alt_currencies_update_failed"))
+    end
+    cb(result or { success = false })
+end)
+
+RegisterNUICallback("adminSetFaction", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:adminSetFaction", false, data)
     if result and result.success then
         ShowNotification(result.message)
     else
@@ -401,7 +534,7 @@ local function CleanupPhotoBooth()
 
     OpenNui('admin', {
         dealershipId = 0,
-        dealershipName = 'Admin Panel',
+        dealershipName = 'Dealership Panel',
         role = 'admin',
         tier = 4,
         initialTab = 'catalog',

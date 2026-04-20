@@ -11,11 +11,11 @@ import { fetchNui, formatCurrency } from '../lib/utils'
 import {
   X, Settings, UserRoundCog, DollarSign, ArrowUpCircle, RotateCcw,
   ToggleLeft, Plus, MapPin, Check, Car, Crosshair, Store, ParkingSquare,
-  Handshake, Building2, BookOpen, Trash2, Briefcase, Users, ShieldAlert,
+  Handshake, Building2, BookOpen, Trash2, Briefcase, Users, ShieldAlert, Truck,
 } from 'lucide-react'
 import { SkeletonList } from '../components/ui/skeleton'
 import { t } from '../lib/locale'
-import type { DealershipData, AdminDealership, DealershipMetadata, PositionData, DeliveryDepot } from '../types'
+import type { DealershipData, AdminDealership, DealershipMetadata, PositionData, DeliveryDepot, FactionType } from '../types'
 import AdminCatalogPage from './AdminCatalogPage'
 
 interface Props {
@@ -24,7 +24,34 @@ interface Props {
 }
 
 type AdminTab = 'dealerships' | 'catalog' | 'positions' | 'depots'
-type AdminAction = 'transfer' | 'balance' | 'tier' | 'reset' | 'toggle' | 'seize' | 'create' | null
+type AdminAction = 'transfer' | 'balance' | 'tier' | 'reset' | 'toggle' | 'seize' | 'create' | 'delete' | 'faction' | 'access' | 'payments' | null
+
+function parseMeta(d: AdminDealership | null): DealershipMetadata {
+  if (!d) return {}
+  let meta = d.metadata as unknown
+  if (typeof meta === 'string') {
+    try { meta = JSON.parse(meta) } catch { return {} }
+  }
+  return (meta && typeof meta === 'object' ? meta : {}) as DealershipMetadata
+}
+
+function getFactionType(d: AdminDealership | null): FactionType {
+  const ft = parseMeta(d).factionType
+  return ft === 'gang' ? 'gang' : 'job'
+}
+
+function getAccessMode(d: AdminDealership | null): 'public' | 'faction' {
+  return parseMeta(d).accessMode === 'faction' ? 'faction' : 'public'
+}
+
+function getAccessMinGrade(d: AdminDealership | null): number {
+  return parseMeta(d).accessMinGrade ?? 0
+}
+
+function getAcceptedAlt(d: AdminDealership | null): string[] {
+  const list = parseMeta(d).acceptedAltCurrencies
+  return Array.isArray(list) ? list : []
+}
 
 export default function AdminPage({ data, onClose }: Props) {
   const [tab, setTab] = useState<AdminTab>((data.initialTab as AdminTab) || 'dealerships')
@@ -36,22 +63,52 @@ export default function AdminPage({ data, onClose }: Props) {
     if (data.initialTab) setTab(data.initialTab as AdminTab)
   }, [data.initialTab])
   const [selected, setSelected] = useState<AdminDealership | null>(null)
-  const [action, setAction] = useState<AdminAction>(null)
+  const [action, setAction] = useState<AdminAction>(data.pendingDealership ? 'create' : null)
   const [inputValue, setInputValue] = useState('')
+  const [factionTypeInput, setFactionTypeInput] = useState<FactionType>('job')
+  const [accessModeInput, setAccessModeInput] = useState<'public' | 'faction'>('public')
+  const [accessGradeInput, setAccessGradeInput] = useState('0')
+  const [altCurrencyOptions, setAltCurrencyOptions] = useState<{ key: string; label: string; type: string; valuePerUnit: number }[]>([])
+  const [altAcceptedInput, setAltAcceptedInput] = useState<string[]>([])
 
-  const [createLabel, setCreateLabel] = useState('')
-  const [createMode, setCreateMode] = useState('player-owned')
-  const [createType, setCreateType] = useState('car')
+  const [dealershipDraft, setDealershipDraft] = useState<{
+    name: string
+    mode: string
+    type: string
+    coords?: PositionData
+    spawnPoint?: PositionData
+    deliveryPoint?: PositionData
+  }>({
+    name: data.pendingDealership?.name ?? '',
+    mode: data.pendingDealership?.mode ?? 'player-owned',
+    type: data.pendingDealership?.type ?? 'car',
+    coords: data.pendingDealership?.coords,
+    spawnPoint: data.pendingDealership?.spawnPoint,
+    deliveryPoint: data.pendingDealership?.deliveryPoint,
+  })
 
   // Transfer ownership
   const [onlinePlayers, setOnlinePlayers] = useState<{ source: number; name: string; identifier: string }[]>([])
   const [playerSearch, setPlayerSearch] = useState('')
   const [selectedPlayer, setSelectedPlayer] = useState<{ source: number; name: string; identifier: string } | null>(null)
 
-  // Depot management
+  // Depot management — create dialog (draft state + both points placed via gizmo before create)
   const [depots, setDepots] = useState<DeliveryDepot[]>([])
   const [depotLoading, setDepotLoading] = useState(false)
-  const [depotName, setDepotName] = useState('')
+  const [depotCreateOpen, setDepotCreateOpen] = useState<boolean>(!!data.pendingDepot)
+  const [depotDraft, setDepotDraft] = useState<{
+    name: string
+    pickupCoords?: PositionData
+    spawnCoords?: PositionData
+  }>({
+    name: data.pendingDepot?.name ?? '',
+    pickupCoords: data.pendingDepot?.pickupCoords,
+    spawnCoords: data.pendingDepot?.spawnCoords,
+  })
+
+  // Depot edit modal — opens when a depot card is clicked
+  const [editDepot, setEditDepot] = useState<DeliveryDepot | null>(null)
+  const [editDepotName, setEditDepotName] = useState('')
 
   const loadDepots = () => {
     setDepotLoading(true)
@@ -63,18 +120,47 @@ export default function AdminPage({ data, onClose }: Props) {
 
   useEffect(() => { if (tab === 'depots') loadDepots() }, [tab])
 
+  // When the NUI reopens with editDepotId (after editing a point via gizmo), auto-open that depot's modal
+  useEffect(() => {
+    if (data.editDepotId && depots.length > 0) {
+      const d = depots.find((x) => x.id === data.editDepotId)
+      if (d) {
+        setEditDepot(d)
+        setEditDepotName(d.name)
+      }
+    }
+  }, [data.editDepotId, depots])
+
+  const openDepotCreate = () => {
+    setDepotDraft({ name: '', pickupCoords: undefined, spawnCoords: undefined })
+    setDepotCreateOpen(true)
+  }
+
+  const handleDraftPlace = (field: 'pickup' | 'spawn') => {
+    // Hand the current draft to the client so it can repopulate us on re-open
+    fetchNui('adminPlaceDepotPoint', { field, draft: depotDraft })
+  }
+
   const handleCreateDepot = async () => {
-    if (!depotName.trim()) return
-    const res = await fetchNui<{ ok: boolean; id?: number }>('adminCreateDepot', { name: depotName.trim() })
+    if (!depotDraft.name.trim() || !depotDraft.pickupCoords || !depotDraft.spawnCoords) return
+    const res = await fetchNui<{ ok: boolean }>('adminCreateDepot', {
+      name: depotDraft.name.trim(),
+      pickupCoords: depotDraft.pickupCoords,
+      spawnCoords: depotDraft.spawnCoords,
+    })
     if (res?.ok) {
-      setDepotName('')
+      setDepotCreateOpen(false)
+      setDepotDraft({ name: '', pickupCoords: undefined, spawnCoords: undefined })
       loadDepots()
     }
   }
 
   const handleDeleteDepot = async (id: number) => {
     const res = await fetchNui<{ ok: boolean }>('adminDeleteDepot', { id })
-    if (res?.ok) loadDepots()
+    if (res?.ok) {
+      setEditDepot(null)
+      loadDepots()
+    }
   }
 
   const handleWaypointDepot = (id: number) => {
@@ -86,23 +172,15 @@ export default function AdminPage({ data, onClose }: Props) {
     if (res?.ok) loadDepots()
   }
 
-  // Opens the gizmo editor so the admin can visually place + rotate the truck-spawn point.
-  // The NUI closes, the gizmo runs (arrow keys to move, G to freeze/unfreeze, E to save, ESC to cancel),
-  // then the panel re-opens automatically on the Depots tab.
-  const handleSetSpawn = (id: number) => {
-    fetchNui('adminStartDepotSpawnGizmo', { id })
-  }
-
-  const handleClearSpawn = async (id: number) => {
-    const res = await fetchNui<{ ok: boolean }>('adminClearDepotSpawn', { id })
-    if (res?.ok) loadDepots()
+  // Edit an existing depot's pickup or spawn point via the same gizmo flow (seeded at current coord)
+  const handleEditPoint = (id: number, field: 'pickup' | 'spawn') => {
+    fetchNui('adminEditDepotPoint', { id, field })
   }
 
   // Positions management
   const [positionsDealership, setPositionsDealership] = useState<AdminDealership | null>(null)
   const [positionsMeta, setPositionsMeta] = useState<DealershipMetadata>(data.metadata ?? {})
   const [shouldScrollToSpots, setShouldScrollToSpots] = useState(data.scrollToSpots ?? false)
-  const [jobInput, setJobInput] = useState('')
   const spotsEndRef = useRef<HTMLDivElement>(null)
 
   const parseMeta = (meta: DealershipMetadata | string | null | undefined): DealershipMetadata => {
@@ -116,7 +194,6 @@ export default function AdminPage({ data, onClose }: Props) {
   const openPositions = (d: AdminDealership) => {
     setPositionsDealership(d)
     setPositionsMeta(parseMeta(d.metadata))
-    setJobInput(d.job || '')
     setTab('positions')
   }
 
@@ -137,7 +214,6 @@ export default function AdminPage({ data, onClose }: Props) {
       if (d) {
         setPositionsDealership(d)
         setPositionsMeta(data.metadata ? parseMeta(data.metadata) : parseMeta(d.metadata))
-        setJobInput(d.job || '')
         setTab('positions')
       }
     }
@@ -153,16 +229,17 @@ export default function AdminPage({ data, onClose }: Props) {
 
   const handleAction = () => {
     if (action === 'create') {
-      if (!createLabel.trim()) return
+      if (!dealershipDraft.name.trim()) return
       fetchNui<{ success: boolean; dealershipId: number }>('adminCreateDealership', {
-        label: createLabel.trim(),
-        mode: createMode,
-        type: createType,
-      }).then((res) => {
+        label: dealershipDraft.name.trim(),
+        mode: dealershipDraft.mode,
+        type: dealershipDraft.type,
+        coords: dealershipDraft.coords,
+        spawnPoint: dealershipDraft.spawnPoint,
+        deliveryPoint: dealershipDraft.deliveryPoint,
+      }).then(() => {
         setAction(null)
-        setCreateLabel('')
-        setCreateMode('player-owned')
-        setCreateType('car')
+        setDealershipDraft({ name: '', mode: 'player-owned', type: 'car' })
         loadDealerships()
       })
       return
@@ -175,6 +252,24 @@ export default function AdminPage({ data, onClose }: Props) {
       balance: () => fetchNui('adminSetBalance', { dealershipId, amount: parseInt(inputValue) }).then(() => loadDealerships()),
       tier: () => fetchNui('adminSetTier', { dealershipId, tier: parseInt(inputValue) }).then(() => loadDealerships()),
       reset: () => fetchNui('adminResetDealership', { dealershipId }).then(() => loadDealerships()),
+      delete: () => fetchNui('adminDeleteDealership', { dealershipId }).then(() => {
+        setSelected(null)
+        loadDealerships()
+      }),
+      faction: () => fetchNui('adminSetFaction', {
+        dealershipId,
+        name: inputValue.trim(),
+        factionType: factionTypeInput,
+      }).then(() => loadDealerships()),
+      access: () => fetchNui('adminSetAccess', {
+        dealershipId,
+        mode: accessModeInput,
+        minGrade: parseInt(accessGradeInput) || 0,
+      }).then(() => loadDealerships()),
+      payments: () => fetchNui('adminSetAltCurrencies', {
+        dealershipId,
+        accepted: altAcceptedInput,
+      }).then(() => loadDealerships()),
       toggle: () => fetchNui('adminToggleMode', { dealershipId }).then(() => loadDealerships()),
       seize: () => fetchNui('adminToggleSeize', { dealershipId }).then(() => loadDealerships()),
     }
@@ -191,19 +286,6 @@ export default function AdminPage({ data, onClose }: Props) {
           }
         }
       })
-    })
-  }
-
-  const handleSetJob = () => {
-    if (!positionsDealership) return
-    fetchNui('adminSetJob', {
-      dealershipId: positionsDealership.id,
-      job: jobInput.trim(),
-    }).then(() => {
-      if (positionsDealership) {
-        setPositionsDealership({ ...positionsDealership, job: jobInput.trim() || null })
-      }
-      loadDealerships()
     })
   }
 
@@ -243,36 +325,6 @@ export default function AdminPage({ data, onClose }: Props) {
           <Separator className="mt-3" />
           <ScrollArea className="flex-1 p-4">
             <div className="space-y-3">
-              {/* Job Setting */}
-              <Card className={positionsDealership?.job ? 'border-accent/30' : ''}>
-                <CardContent className="p-4">
-                  <div className="flex items-center gap-3 mb-3">
-                    <div className={`h-9 w-9 rounded-md flex items-center justify-center ${positionsDealership?.job ? 'bg-accent/15 text-accent' : 'bg-muted text-muted-foreground'}`}>
-                      <Briefcase className="h-4 w-4" />
-                    </div>
-                    <div>
-                      <p className="font-medium text-sm">{t('admin_framework_job')}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {positionsDealership?.job ? <span className="font-mono">{positionsDealership.job}</span> : t('admin_job_required')}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="flex gap-2">
-                    <Input
-                      value={jobInput}
-                      onChange={(e) => setJobInput(e.target.value)}
-                      placeholder="e.g. pdm, dealership"
-                      className="flex-1 font-mono text-sm"
-                    />
-                    <Button size="sm" onClick={handleSetJob} disabled={jobInput.trim() === (positionsDealership?.job || '')}>
-                      {t('btn_save')}
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Separator />
-
               <PositionRow
                 icon={<Crosshair className="h-4 w-4" />}
                 label={t('label_dealership_center')}
@@ -290,6 +342,15 @@ export default function AdminPage({ data, onClose }: Props) {
                 coords={positionsMeta.spawnPoint}
                 onPlace={() => startGizmo('spawnPoint')}
                 onRemove={() => removePosition('spawnPoint')}
+              />
+              <PositionRow
+                icon={<Truck className="h-4 w-4" />}
+                label={t('label_delivery_point')}
+                description={t('label_delivery_point_desc')}
+                placed={!!positionsMeta.deliveryPoint}
+                coords={positionsMeta.deliveryPoint}
+                onPlace={() => startGizmo('deliveryPoint')}
+                onRemove={() => removePosition('deliveryPoint')}
               />
               <PositionRow
                 icon={<Store className="h-4 w-4" />}
@@ -414,20 +475,16 @@ export default function AdminPage({ data, onClose }: Props) {
     if (tab === 'depots') {
       return (
         <div className="relative flex-1 flex flex-col overflow-hidden">
-          <div className="p-4 border-b border-border space-y-3">
-            <h3 className="font-semibold text-sm flex items-center gap-2">
-              <MapPin className="h-4 w-4 text-accent" /> {t('admin_delivery_depots')}
-            </h3>
-            <p className="text-xs text-muted-foreground">{t('admin_delivery_depots_desc')}</p>
-            <div className="flex gap-2 items-end">
-              <div className="flex-1">
-                <label className="text-xs text-muted-foreground">{t('label_name')}</label>
-                <Input value={depotName} onChange={(e) => setDepotName(e.target.value)} placeholder={t('admin_depot_name_placeholder')} className="mt-1 h-9" />
-              </div>
-              <Button onClick={handleCreateDepot} className="h-9 gap-1" disabled={!depotName.trim()}>
-                <Crosshair className="h-4 w-4" /> {t('admin_depot_add_here')}
-              </Button>
+          <div className="p-4 border-b border-border flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h3 className="font-semibold text-sm flex items-center gap-2">
+                <MapPin className="h-4 w-4 text-accent" /> {t('admin_delivery_depots')}
+              </h3>
+              <p className="text-xs text-muted-foreground mt-1">{t('admin_delivery_depots_desc')}</p>
             </div>
+            <Button size="sm" onClick={openDepotCreate} className="gap-1 shrink-0">
+              <Plus className="h-4 w-4" /> {t('admin_depot_create')}
+            </Button>
           </div>
           <ScrollArea className="flex-1 p-4">
             {depotLoading ? (
@@ -437,45 +494,164 @@ export default function AdminPage({ data, onClose }: Props) {
             ) : (
               <div className="space-y-2">
                 {depots.map((d) => (
-                  <Card key={d.id} className="hover:border-accent/40 transition-colors">
-                    <CardContent className="p-3 flex items-center gap-3">
-                      <div className="flex-1 min-w-0">
-                        <Input
-                          defaultValue={d.name}
-                          onBlur={(e) => { if (e.target.value && e.target.value !== d.name) handleRenameDepot(d.id, e.target.value) }}
-                          className="h-7 text-sm font-semibold max-w-xs"
-                        />
-                        <div className="text-[10px] text-muted-foreground mt-1 font-mono">
-                          {t('admin_depot_ped_label') || 'Ped'}: {d.pickupCoords
-                            ? `${d.pickupCoords.x?.toFixed(1)}, ${d.pickupCoords.y?.toFixed(1)}, ${d.pickupCoords.z?.toFixed(1)}`
-                            : '—'}
+                  <Card
+                    key={d.id}
+                    className="overflow-hidden hover:border-accent/40 transition-colors cursor-pointer"
+                    onClick={() => { setEditDepot(d); setEditDepotName(d.name) }}
+                  >
+                    <CardContent className="p-3">
+                      <div className="flex items-center justify-between">
+                        <div className="min-w-0">
+                          <h3 className="font-semibold text-sm truncate">{d.name}</h3>
+                          <p className="text-[10px] text-muted-foreground mt-0.5 font-mono">
+                            {t('admin_depot_ped_label')}: {d.pickupCoords.x.toFixed(1)}, {d.pickupCoords.y.toFixed(1)}, {d.pickupCoords.z.toFixed(1)}
+                          </p>
+                          <p className="text-[10px] text-muted-foreground/80 font-mono">
+                            {t('admin_depot_spawn_label')}: {d.spawnCoords
+                              ? `${d.spawnCoords.x.toFixed(1)}, ${d.spawnCoords.y.toFixed(1)}, ${d.spawnCoords.z.toFixed(1)}`
+                              : t('admin_depot_spawn_fallback')}
+                          </p>
                         </div>
-                        <div className="text-[10px] text-muted-foreground/80 mt-0.5 font-mono">
-                          {t('admin_depot_spawn_label') || 'Truck spawn'}: {d.spawnCoords
-                            ? `${d.spawnCoords.x?.toFixed(1)}, ${d.spawnCoords.y?.toFixed(1)}, ${d.spawnCoords.z?.toFixed(1)}`
-                            : (t('admin_depot_spawn_fallback') || 'same as ped')}
-                        </div>
+                        <Settings className="h-4 w-4 text-muted-foreground shrink-0 ml-3" />
                       </div>
-                      <Button variant="ghost" size="sm" onClick={() => handleSetSpawn(d.id)} title={t('admin_depot_set_spawn') || 'Set truck spawn at my position'}>
-                        <Crosshair className="h-4 w-4" />
-                      </Button>
-                      {d.spawnCoords && (
-                        <Button variant="ghost" size="sm" onClick={() => handleClearSpawn(d.id)} title={t('admin_depot_clear_spawn') || 'Clear truck spawn'} className="text-muted-foreground">
-                          <X className="h-4 w-4" />
-                        </Button>
-                      )}
-                      <Button variant="ghost" size="sm" onClick={() => handleWaypointDepot(d.id)} title={t('admin_depot_waypoint')}>
-                        <MapPin className="h-4 w-4" />
-                      </Button>
-                      <Button variant="ghost" size="sm" onClick={() => handleDeleteDepot(d.id)} className="text-destructive hover:text-destructive">
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
                     </CardContent>
                   </Card>
                 ))}
               </div>
             )}
           </ScrollArea>
+
+          {/* Create depot dialog — name + both points must be placed before Create enables */}
+          <Dialog open={depotCreateOpen} onOpenChange={(open) => { if (!open) setDepotCreateOpen(false) }}>
+            <DialogContent onClose={() => setDepotCreateOpen(false)}>
+              <DialogHeader>
+                <DialogTitle>{t('admin_depot_create')}</DialogTitle>
+                <DialogDescription>{t('admin_depot_create_desc')}</DialogDescription>
+              </DialogHeader>
+              <div className="space-y-3 pt-2">
+                <div>
+                  <label className="text-sm font-medium">{t('label_name')}</label>
+                  <Input
+                    value={depotDraft.name}
+                    onChange={(e) => setDepotDraft({ ...depotDraft, name: e.target.value })}
+                    placeholder={t('admin_depot_name_placeholder')}
+                    className="mt-1"
+                    maxLength={50}
+                  />
+                </div>
+                <PositionRow
+                  icon={<Users className="h-4 w-4" />}
+                  label={t('admin_depot_interact_location')}
+                  description={t('admin_depot_interact_desc')}
+                  placed={!!depotDraft.pickupCoords}
+                  coords={depotDraft.pickupCoords}
+                  onPlace={() => handleDraftPlace('pickup')}
+                  onRemove={() => setDepotDraft({ ...depotDraft, pickupCoords: undefined })}
+                />
+                <PositionRow
+                  icon={<Truck className="h-4 w-4" />}
+                  label={t('admin_depot_spawn_location')}
+                  description={t('admin_depot_spawn_desc')}
+                  placed={!!depotDraft.spawnCoords}
+                  coords={depotDraft.spawnCoords}
+                  onPlace={() => handleDraftPlace('spawn')}
+                  onRemove={() => setDepotDraft({ ...depotDraft, spawnCoords: undefined })}
+                />
+                <div className="flex gap-2 pt-1">
+                  <Button variant="outline" className="flex-1" onClick={() => setDepotCreateOpen(false)}>{t('btn_cancel')}</Button>
+                  <Button
+                    className="flex-1"
+                    onClick={handleCreateDepot}
+                    disabled={!depotDraft.name.trim() || !depotDraft.pickupCoords || !depotDraft.spawnCoords}
+                  >
+                    <Plus className="h-4 w-4" /> {t('btn_create')}
+                  </Button>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
+
+          {/* Edit depot modal — matches dealership settings-modal pattern */}
+          {editDepot && (
+            <>
+              <div className="absolute inset-0 z-40 bg-black/50 rounded-[inherit]" onClick={() => setEditDepot(null)} />
+              <div className="absolute inset-0 z-50 flex items-center justify-center p-6 pointer-events-none" style={{ overflow: 'hidden' }}>
+                <div className="pointer-events-auto relative flex flex-col w-full border border-border bg-card shadow-lg rounded-lg" style={{ maxWidth: '24rem', maxHeight: 'calc(100% - 2rem)', overflow: 'hidden' }}>
+                  <div className="p-6 pb-3 shrink-0">
+                    <button className="absolute right-4 top-4 rounded-sm opacity-70 transition-opacity hover:opacity-100 focus:outline-none" onClick={() => setEditDepot(null)}>
+                      <X className="h-4 w-4" />
+                    </button>
+                    <h2 className="text-lg font-semibold leading-none tracking-tight">{editDepot.name}</h2>
+                    <p className="text-sm text-muted-foreground mt-1.5">ID: {editDepot.id}</p>
+                  </div>
+                  <div className="flex-1 overflow-y-auto px-6 pb-6" style={{ minHeight: 0 }}>
+                    <div className="space-y-2">
+                      <div>
+                        <label className="text-xs text-muted-foreground">{t('label_name')}</label>
+                        <div className="flex gap-2 mt-1">
+                          <Input
+                            value={editDepotName}
+                            onChange={(e) => setEditDepotName(e.target.value)}
+                            className="flex-1"
+                            maxLength={50}
+                          />
+                          <Button
+                            size="sm"
+                            onClick={() => {
+                              if (editDepotName.trim() && editDepotName !== editDepot.name) {
+                                handleRenameDepot(editDepot.id, editDepotName.trim())
+                                setEditDepot({ ...editDepot, name: editDepotName.trim() })
+                              }
+                            }}
+                            disabled={!editDepotName.trim() || editDepotName === editDepot.name}
+                          >
+                            {t('btn_save')}
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                    <Separator className="my-3" />
+                    <div className="space-y-2">
+                      <PositionRow
+                        icon={<Users className="h-4 w-4" />}
+                        label={t('admin_depot_interact_location')}
+                        description={t('admin_depot_interact_desc')}
+                        placed={!!editDepot.pickupCoords}
+                        coords={editDepot.pickupCoords}
+                        onPlace={() => handleEditPoint(editDepot.id, 'pickup')}
+                        onRemove={() => {}}
+                        hideRemove
+                      />
+                      <PositionRow
+                        icon={<Truck className="h-4 w-4" />}
+                        label={t('admin_depot_spawn_location')}
+                        description={t('admin_depot_spawn_desc')}
+                        placed={!!editDepot.spawnCoords}
+                        coords={editDepot.spawnCoords ?? undefined}
+                        onPlace={() => handleEditPoint(editDepot.id, 'spawn')}
+                        onRemove={() => {}}
+                        hideRemove
+                      />
+                    </div>
+                    <Separator className="my-3" />
+                    <div className="space-y-0.5">
+                      <SettingsRow
+                        icon={<MapPin className="h-4 w-4" />}
+                        label={t('admin_depot_waypoint')}
+                        onClick={() => handleWaypointDepot(editDepot.id)}
+                      />
+                      <SettingsRow
+                        icon={<Trash2 className="h-4 w-4" />}
+                        label={t('admin_depot_delete')}
+                        destructive
+                        onClick={() => handleDeleteDepot(editDepot.id)}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
         </div>
       )
     }
@@ -550,7 +726,7 @@ export default function AdminPage({ data, onClose }: Props) {
                     )}
                     {!selected.job && (
                       <div className="px-3 py-2 rounded-md bg-orange-500/10">
-                        <span className="text-xs text-orange-400">{t('label_no_job')}</span>
+                        <span className="text-xs text-orange-400">{t('label_no_faction')}</span>
                       </div>
                     )}
                   </div>
@@ -566,12 +742,50 @@ export default function AdminPage({ data, onClose }: Props) {
                         setOnlinePlayers(Array.isArray(res) ? res : [])
                       })
                     }} />
+                    <SettingsRow
+                      icon={<Briefcase className="h-4 w-4" />}
+                      label={t('admin_framework_faction')}
+                      value={selected.job ? `${t(getFactionType(selected) === 'gang' ? 'label_gang' : 'label_job')}: ${selected.job}` : t('label_none')}
+                      accent={!!selected.job}
+                      onClick={() => {
+                        setAction('faction')
+                        setInputValue(selected.job || '')
+                        setFactionTypeInput(getFactionType(selected))
+                      }}
+                    />
+                    <SettingsRow
+                      icon={<ShieldAlert className="h-4 w-4" />}
+                      label={t('admin_customer_access')}
+                      value={getAccessMode(selected) === 'faction' ? t('admin_access_faction_only', String(getAccessMinGrade(selected))) : t('admin_access_public')}
+                      accent={getAccessMode(selected) === 'faction'}
+                      onClick={() => {
+                        setAction('access')
+                        setAccessModeInput(getAccessMode(selected))
+                        setAccessGradeInput(String(getAccessMinGrade(selected)))
+                      }}
+                    />
+                    <SettingsRow
+                      icon={<DollarSign className="h-4 w-4" />}
+                      label={t('admin_payment_methods')}
+                      value={String(getAcceptedAlt(selected).length)}
+                      accent={getAcceptedAlt(selected).length > 0}
+                      onClick={() => {
+                        setAction('payments')
+                        setAltAcceptedInput(getAcceptedAlt(selected))
+                        fetchNui<{ success: boolean; available: { key: string; label: string; type: string; valuePerUnit: number }[] }>('getAcceptedAltCurrencies', {
+                          dealershipId: selected.id,
+                        }).then((res) => {
+                          setAltCurrencyOptions(res.available || [])
+                        }).catch(() => setAltCurrencyOptions([]))
+                      }}
+                    />
                     <SettingsRow icon={<DollarSign className="h-4 w-4" />} label={t('admin_set_balance')} value={formatCurrency(selected.balance)} onClick={() => { setAction('balance'); setInputValue(String(selected.balance)) }} />
                     <SettingsRow icon={<ArrowUpCircle className="h-4 w-4" />} label={t('admin_set_tier')} value={tierLabelKeys[selected.tier] ? t(tierLabelKeys[selected.tier]) : `${selected.tier}`} onClick={() => { setAction('tier'); setInputValue(String(selected.tier)) }} />
                     <SettingsRow icon={<ToggleLeft className="h-4 w-4" />} label={t('admin_toggle_mode')} value={selected.mode} onClick={() => setAction('toggle')} />
                     <SettingsRow icon={<ShieldAlert className="h-4 w-4" />} label={t('admin_toggle_seize')} value={selected.seize_enabled ? t('label_enabled') : t('label_disabled')} accent={!!selected.seize_enabled} onClick={() => setAction('seize')} />
                     <Separator className="my-1" />
                     <SettingsRow icon={<RotateCcw className="h-4 w-4" />} label={t('admin_reset_dealership')} destructive onClick={() => setAction('reset')} />
+                    <SettingsRow icon={<Trash2 className="h-4 w-4" />} label={t('admin_delete_dealership')} destructive onClick={() => setAction('delete')} />
                   </div>
                 </div>
               </div>
@@ -588,8 +802,12 @@ export default function AdminPage({ data, onClose }: Props) {
                 {action === 'balance' && t('admin_set_balance')}
                 {action === 'tier' && t('admin_set_tier')}
                 {action === 'reset' && t('admin_reset_dealership')}
+                {action === 'delete' && t('admin_delete_dealership')}
                 {action === 'toggle' && t('admin_toggle_mode')}
                 {action === 'seize' && t('admin_toggle_seize')}
+                {action === 'faction' && t('admin_framework_faction')}
+                {action === 'access' && t('admin_customer_access')}
+                {action === 'payments' && t('admin_payment_methods')}
               </DialogTitle>
               <DialogDescription>{selected?.name} (ID: {selected?.id})</DialogDescription>
             </DialogHeader>
@@ -647,6 +865,98 @@ export default function AdminPage({ data, onClose }: Props) {
               {action === 'balance' && (
                 <div><label className="text-sm font-medium">{t('label_new_balance')}</label><Input type="number" value={inputValue} onChange={(e) => setInputValue(e.target.value)} className="mt-1" /></div>
               )}
+              {action === 'faction' && (
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">{t('admin_framework_faction')}</label>
+                  <p className="text-xs text-muted-foreground">{t('admin_faction_required')}</p>
+                  <div className="flex gap-1">
+                    <button
+                      onClick={() => setFactionTypeInput('job')}
+                      className={`flex-1 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${factionTypeInput === 'job' ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}
+                    >
+                      {t('label_job')}
+                    </button>
+                    <button
+                      onClick={() => setFactionTypeInput('gang')}
+                      className={`flex-1 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${factionTypeInput === 'gang' ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}
+                    >
+                      {t('label_gang')}
+                    </button>
+                  </div>
+                  <Input
+                    value={inputValue}
+                    onChange={(e) => setInputValue(e.target.value)}
+                    placeholder={factionTypeInput === 'gang' ? 'e.g. ballas, vagos' : 'e.g. pdm, police'}
+                    className="mt-1 font-mono"
+                  />
+                </div>
+              )}
+              {action === 'access' && (
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">{t('admin_customer_access')}</label>
+                  <p className="text-xs text-muted-foreground">{t('admin_access_desc')}</p>
+                  <div className="flex gap-1">
+                    <button
+                      onClick={() => setAccessModeInput('public')}
+                      className={`flex-1 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${accessModeInput === 'public' ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}
+                    >
+                      {t('admin_access_public')}
+                    </button>
+                    <button
+                      onClick={() => setAccessModeInput('faction')}
+                      className={`flex-1 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${accessModeInput === 'faction' ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}
+                    >
+                      {t('admin_access_faction')}
+                    </button>
+                  </div>
+                  {accessModeInput === 'faction' && (
+                    <div>
+                      <label className="text-xs text-muted-foreground">{t('admin_access_min_grade')}</label>
+                      <Input
+                        type="number"
+                        min="0"
+                        value={accessGradeInput}
+                        onChange={(e) => setAccessGradeInput(e.target.value)}
+                        className="mt-1"
+                      />
+                      {!selected?.job && (
+                        <p className="text-[10px] text-orange-400 mt-1">{t('admin_access_faction_requires_faction')}</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+              {action === 'payments' && (
+                <div className="space-y-2">
+                  <p className="text-xs text-muted-foreground">{t('admin_payment_methods_desc')}</p>
+                  {altCurrencyOptions.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">{t('alt_payments_none_configured')}</p>
+                  ) : (
+                    <div className="space-y-1">
+                      {altCurrencyOptions.map((cur) => {
+                        const checked = altAcceptedInput.includes(cur.key)
+                        return (
+                          <label
+                            key={cur.key}
+                            className={`flex items-center gap-3 rounded-md border px-3 py-2 cursor-pointer transition-colors ${checked ? 'bg-accent/10 border-accent/40' : 'bg-muted/40 border-border hover:bg-muted'}`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => setAltAcceptedInput((prev) => prev.includes(cur.key) ? prev.filter((k) => k !== cur.key) : [...prev, cur.key])}
+                              className="h-4 w-4 accent-accent"
+                            />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium truncate">{cur.label}</p>
+                              <p className="text-[10px] text-muted-foreground font-mono truncate">{cur.type} &middot; {cur.key}</p>
+                            </div>
+                          </label>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
               {action === 'tier' && (
                 <div><label className="text-sm font-medium">{t('label_tier')}</label>
                   <Select value={inputValue} onValueChange={setInputValue}><SelectTrigger className="mt-1"><SelectValue /></SelectTrigger><SelectContent>
@@ -654,38 +964,82 @@ export default function AdminPage({ data, onClose }: Props) {
                   </SelectContent></Select></div>
               )}
               {action === 'reset' && <p className="text-sm text-destructive">{t('confirm_reset_warning')}</p>}
+              {action === 'delete' && <p className="text-sm text-destructive">{t('confirm_delete_warning')}</p>}
               {action === 'toggle' && <p className="text-sm">{t('confirm_toggle_mode')} {t('admin_currently')}: <strong>{selected?.mode}</strong></p>}
               {action === 'seize' && <p className="text-sm">{t('confirm_toggle_seize')} {t('admin_currently')}: <strong>{selected?.seize_enabled ? t('label_enabled') : t('label_disabled')}</strong></p>}
               <div className="flex gap-2">
                 <Button variant="outline" className="flex-1" onClick={() => setAction(null)}>{t('btn_cancel')}</Button>
-                <Button className="flex-1" variant={action === 'reset' ? 'destructive' : 'default'} onClick={handleAction} disabled={action === 'transfer' && !selectedPlayer}>{t('btn_confirm')}</Button>
+                <Button className="flex-1" variant={(action === 'reset' || action === 'delete') ? 'destructive' : 'default'} onClick={handleAction} disabled={action === 'transfer' && !selectedPlayer}>{t('btn_confirm')}</Button>
               </div>
             </div>
           </DialogContent>
         </Dialog>
 
         <Dialog open={action === 'create'} onOpenChange={(open) => { if (!open) setAction(null) }}>
-          <DialogContent onClose={() => setAction(null)}>
-            <DialogHeader>
+          <DialogContent onClose={() => setAction(null)} className="max-h-[85vh] !grid-rows-[auto_1fr_auto] !gap-0 p-0 overflow-hidden">
+            <DialogHeader className="p-6 pb-4 border-b border-border">
               <DialogTitle>{t('title_create_dealership')}</DialogTitle>
               <DialogDescription>{t('admin_create_desc')}</DialogDescription>
             </DialogHeader>
-            <div className="space-y-4 pt-2">
-              <div><label className="text-sm font-medium">{t('label_dealership_name')}</label><Input value={createLabel} onChange={(e) => setCreateLabel(e.target.value)} placeholder="e.g. Downtown Motors" className="mt-1" maxLength={50} /></div>
+            <div className="space-y-4 px-6 py-4 overflow-y-auto min-h-0">
+              <div><label className="text-sm font-medium">{t('label_dealership_name')}</label>
+                <Input
+                  value={dealershipDraft.name}
+                  onChange={(e) => setDealershipDraft({ ...dealershipDraft, name: e.target.value })}
+                  placeholder="e.g. Downtown Motors"
+                  className="mt-1"
+                  maxLength={50}
+                />
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <div><label className="text-sm font-medium">{t('label_mode')}</label>
-                  <Select value={createMode} onValueChange={setCreateMode}><SelectTrigger className="mt-1"><SelectValue /></SelectTrigger><SelectContent>
+                  <Select value={dealershipDraft.mode} onValueChange={(v) => setDealershipDraft({ ...dealershipDraft, mode: v })}><SelectTrigger className="mt-1"><SelectValue /></SelectTrigger><SelectContent>
                     <SelectItem value="player-owned">{t('label_player_owned')}</SelectItem><SelectItem value="public">{t('label_public')}</SelectItem>
                   </SelectContent></Select></div>
                 <div><label className="text-sm font-medium">{t('label_type')}</label>
-                  <Select value={createType} onValueChange={setCreateType}><SelectTrigger className="mt-1"><SelectValue /></SelectTrigger><SelectContent>
+                  <Select value={dealershipDraft.type} onValueChange={(v) => setDealershipDraft({ ...dealershipDraft, type: v })}><SelectTrigger className="mt-1"><SelectValue /></SelectTrigger><SelectContent>
                     <SelectItem value="car">{t('label_car')}</SelectItem><SelectItem value="boat">{t('label_boat')}</SelectItem><SelectItem value="air">{t('label_aircraft')}</SelectItem><SelectItem value="mixed">{t('label_mixed')}</SelectItem>
                   </SelectContent></Select></div>
               </div>
-              <div className="flex gap-2">
-                <Button variant="outline" className="flex-1" onClick={() => setAction(null)}>{t('btn_cancel')}</Button>
-                <Button className="flex-1" onClick={handleAction}><Plus className="h-4 w-4" /> {t('btn_create')}</Button>
+
+              <Separator />
+
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground">{t('admin_create_positions_hint')}</p>
+                <PositionRow
+                  icon={<MapPin className="h-4 w-4" />}
+                  label={t('label_dealership_center') + ' *'}
+                  description={t('label_dealership_center_desc')}
+                  placed={!!dealershipDraft.coords}
+                  coords={dealershipDraft.coords}
+                  onPlace={() => fetchNui('adminPlaceDealershipPoint', { field: 'coords', draft: dealershipDraft })}
+                  onRemove={() => setDealershipDraft({ ...dealershipDraft, coords: undefined })}
+                />
+                <PositionRow
+                  icon={<Car className="h-4 w-4" />}
+                  label={t('label_spawn_point')}
+                  description={t('label_spawn_point_desc')}
+                  placed={!!dealershipDraft.spawnPoint}
+                  coords={dealershipDraft.spawnPoint}
+                  onPlace={() => fetchNui('adminPlaceDealershipPoint', { field: 'spawnPoint', draft: dealershipDraft })}
+                  onRemove={() => setDealershipDraft({ ...dealershipDraft, spawnPoint: undefined })}
+                />
+                <PositionRow
+                  icon={<Truck className="h-4 w-4" />}
+                  label={t('label_delivery_point')}
+                  description={t('label_delivery_point_desc')}
+                  placed={!!dealershipDraft.deliveryPoint}
+                  coords={dealershipDraft.deliveryPoint}
+                  onPlace={() => fetchNui('adminPlaceDealershipPoint', { field: 'deliveryPoint', draft: dealershipDraft })}
+                  onRemove={() => setDealershipDraft({ ...dealershipDraft, deliveryPoint: undefined })}
+                />
               </div>
+            </div>
+            <div className="flex gap-2 p-6 pt-4 border-t border-border bg-card">
+              <Button variant="outline" className="flex-1" onClick={() => setAction(null)}>{t('btn_cancel')}</Button>
+              <Button className="flex-1" onClick={handleAction} disabled={!dealershipDraft.name.trim() || !dealershipDraft.coords}>
+                <Plus className="h-4 w-4" /> {t('btn_create')}
+              </Button>
             </div>
           </DialogContent>
         </Dialog>
@@ -777,9 +1131,10 @@ interface PositionRowProps {
   coords?: PositionData
   onPlace: () => void
   onRemove: () => void
+  hideRemove?: boolean
 }
 
-function PositionRow({ icon, label, description, placed, coords, onPlace, onRemove }: PositionRowProps) {
+function PositionRow({ icon, label, description, placed, coords, onPlace, onRemove, hideRemove }: PositionRowProps) {
   return (
     <Card className={placed ? 'border-accent/30' : ''}>
       <CardContent className="p-4">
@@ -801,7 +1156,7 @@ function PositionRow({ icon, label, description, placed, coords, onPlace, onRemo
             <Button size="sm" variant={placed ? 'outline' : 'default'} onClick={onPlace} className="gap-1">
               <MapPin className="h-3 w-3" /> {placed ? t('admin_replace') : t('admin_place')}
             </Button>
-            {placed && (
+            {placed && !hideRemove && (
               <Button size="sm" variant="ghost" className="text-destructive" onClick={onRemove}>
                 <Trash2 className="h-3 w-3" />
               </Button>

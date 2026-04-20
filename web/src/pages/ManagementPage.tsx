@@ -9,9 +9,9 @@ import { fetchNui, formatCurrency } from '../lib/utils'
 import { t } from '../lib/locale'
 import {
   X, LayoutDashboard, Package, Truck, Users, LineChart, Ticket,
-  DollarSign, Store, Clock, Percent, CreditCard,
+  DollarSign, Store, Clock, Percent, CreditCard, Shield, Trash2, Plus,
 } from 'lucide-react'
-import type { DealershipData } from '../types'
+import type { DealershipData, SocietyAllowlistEntry, DealershipProgression } from '../types'
 
 import DashboardPage from './DashboardPage'
 import StockPage from './StockPage'
@@ -35,6 +35,7 @@ type ManagementTab =
   | 'coupons'
   | 'commission'
   | 'financing'
+  | 'society'
 
 interface NavItem {
   id: ManagementTab
@@ -53,6 +54,7 @@ const navItems: NavItem[] = [
   { id: 'commission', labelKey: 'tab_commission', icon: <Percent className="h-4 w-4" />, minRole: ['owner', 'admin'] },
   { id: 'coupons', labelKey: 'tab_coupons', icon: <Ticket className="h-4 w-4" />, minRole: ['owner', 'admin'], feature: 'coupons' },
   { id: 'financing', labelKey: 'tab_financing', icon: <CreditCard className="h-4 w-4" />, minRole: ['owner', 'admin'] },
+  { id: 'society', labelKey: 'tab_society_payments', icon: <Shield className="h-4 w-4" />, minRole: ['owner', 'admin'] },
 ]
 
 const tierFeatures: Record<string, number> = {
@@ -65,6 +67,13 @@ export default function ManagementPage({ data, onClose }: Props) {
   const [balance, setBalance] = useState<number | null>(data.initialBalance ?? null)
   const [purchasing, setPurchasing] = useState(false)
   const [isClockedIn, setIsClockedIn] = useState(false)
+  const [progression, setProgression] = useState<DealershipProgression | null>(null)
+
+  const refreshProgression = () => {
+    fetchNui<{ progression: DealershipProgression | null }>('getDealershipProgression', {
+      dealershipId: data.dealershipId,
+    }).then((res) => setProgression(res?.progression ?? null)).catch(() => {})
+  }
 
   const refreshBalance = () => {
     if (data.isOwned !== false) {
@@ -78,6 +87,7 @@ export default function ManagementPage({ data, onClose }: Props) {
 
   useEffect(() => {
     refreshBalance()
+    refreshProgression()
     fetchNui<{ clockedIn: boolean }>('getClockStatus', {
       dealershipId: data.dealershipId,
     }).then((res) => {
@@ -158,6 +168,8 @@ export default function ManagementPage({ data, onClose }: Props) {
         return <CommissionSettings dealershipId={data.dealershipId} />
       case 'financing':
         return <FinancingSettingsPanel dealershipId={data.dealershipId} />
+      case 'society':
+        return <SocietyAllowlistSettings dealershipId={data.dealershipId} />
       default:
         return null
     }
@@ -171,12 +183,34 @@ export default function ManagementPage({ data, onClose }: Props) {
           <h2 className="font-bold text-sm truncate">{data.dealershipName}</h2>
           <div className="flex items-center gap-1.5 mt-1.5">
             <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
-              {t(`tier_${data.tier}`)}
+              {progression?.label || t(`tier_${data.tier}`)}
             </Badge>
             <Badge variant="outline" className="text-[10px] px-1.5 py-0 capitalize">
               {data.role}
             </Badge>
           </div>
+          {progression?.enabled && (
+            <div className="mt-2">
+              {progression.nextLevelXp !== null && !progression.isMaxLevel ? (
+                <>
+                  <div className="flex justify-between text-[9px] text-muted-foreground font-mono mb-0.5">
+                    <span>{progression.xp} XP</span>
+                    <span>{progression.nextLevelXp}</span>
+                  </div>
+                  <div className="h-1 w-full bg-muted rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-accent transition-all"
+                      style={{
+                        width: `${Math.max(0, Math.min(100, Math.round(((progression.xp - progression.currentLevelXp) / Math.max(1, progression.nextLevelXp - progression.currentLevelXp)) * 100)))}%`,
+                      }}
+                    />
+                  </div>
+                </>
+              ) : (
+                <p className="text-[9px] text-muted-foreground font-mono">{t('progression_max_level', String(progression.xp))}</p>
+              )}
+            </div>
+          )}
           {balance !== null && (
             <p className="text-xs font-semibold text-emerald-400 mt-2">
               {formatCurrency(balance)}
@@ -242,30 +276,52 @@ export default function ManagementPage({ data, onClose }: Props) {
   )
 }
 
+interface CommissionPayload {
+  job: string | null
+  factionType?: 'job' | 'gang'
+  grades: { level: number; label: string }[]
+  rates: { level: number; rate: number }[]
+  defaultRate: number
+}
+
 function CommissionSettings({ dealershipId }: { dealershipId: number }) {
-  const [salesperson, setSalesperson] = useState('')
-  const [manager, setManager] = useState('')
+  const [payload, setPayload] = useState<CommissionPayload | null>(null)
+  const [fetchFailed, setFetchFailed] = useState(false)
+  // Keyed by grade level (as string) so the input preserves empty state independently per row.
+  const [rates, setRates] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
-    fetchNui<{ success: boolean; rates: { salesperson: number; manager: number } }>('getCommissionRates', {
+    fetchNui<{ success: boolean; rates: CommissionPayload }>('getCommissionRates', {
       dealershipId,
     }).then((res) => {
       if (res.success && res.rates) {
-        setSalesperson(String(res.rates.salesperson))
-        setManager(String(res.rates.manager))
+        setPayload(res.rates)
+        const next: Record<string, string> = {}
+        const defaultRate = String(res.rates.defaultRate ?? 8)
+        // Seed every grade with the server default so the input never looks empty;
+        // saved rates (including explicit 0) override the default.
+        for (const g of res.rates.grades ?? []) next[String(g.level)] = defaultRate
+        for (const r of res.rates.rates ?? []) next[String(r.level)] = String(r.rate)
+        setRates(next)
+      } else {
+        setFetchFailed(true)
       }
       setLoading(false)
-    }).catch(() => setLoading(false))
+    }).catch(() => { setFetchFailed(true); setLoading(false) })
   }, [dealershipId])
 
   const handleSave = () => {
+    if (!payload) return
     setSaving(true)
+    const outRates = payload.grades.map((g) => ({
+      level: g.level,
+      rate: parseInt(rates[String(g.level)] ?? '') || 0,
+    }))
     fetchNui('setCommissionRates', {
       dealershipId,
-      salesperson: parseInt(salesperson) || 0,
-      manager: parseInt(manager) || 0,
+      rates: outRates,
     }).then(() => setSaving(false)).catch(() => setSaving(false))
   }
 
@@ -277,6 +333,61 @@ function CommissionSettings({ dealershipId }: { dealershipId: number }) {
     )
   }
 
+  // Three distinct bad states: callback failed entirely (permission / server issue),
+  // no faction assigned at all, OR faction assigned but the framework returned no
+  // grades for it. Showing them separately avoids the old "no job linked" catch-all
+  // that hid permission bugs under a data-config message.
+  if (fetchFailed) {
+    return (
+      <div className="p-5 space-y-3">
+        <div>
+          <h2 className="text-lg font-bold">{t('commission_rates')}</h2>
+          <p className="text-sm text-muted-foreground">{t('commission_rates_desc')}</p>
+        </div>
+        <div className="rounded-md border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-300">
+          {t('management_commission_fetch_failed')}
+        </div>
+      </div>
+    )
+  }
+
+  if (!payload || !payload.job) {
+    return (
+      <div className="p-5 space-y-3">
+        <div>
+          <h2 className="text-lg font-bold">{t('commission_rates')}</h2>
+          <p className="text-sm text-muted-foreground">{t('commission_rates_desc')}</p>
+        </div>
+        <div className="rounded-md border border-orange-500/30 bg-orange-500/10 p-3 text-sm text-orange-300">
+          {t('commission_no_job')}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {t('commission_default_fallback', String(payload?.defaultRate ?? 8))}
+        </p>
+      </div>
+    )
+  }
+
+  if (payload.grades.length === 0) {
+    return (
+      <div className="p-5 space-y-3">
+        <div>
+          <h2 className="text-lg font-bold">{t('commission_rates')}</h2>
+          <p className="text-sm text-muted-foreground">{t('commission_rates_desc')}</p>
+          <p className="text-xs text-muted-foreground mt-1 font-mono">
+            {t(payload.factionType === 'gang' ? 'label_gang' : 'label_job')}: {payload.job}
+          </p>
+        </div>
+        <div className="rounded-md border border-orange-500/30 bg-orange-500/10 p-3 text-sm text-orange-300">
+          {t('commission_no_grades', payload.job)}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {t('commission_default_fallback', String(payload.defaultRate ?? 8))}
+        </p>
+      </div>
+    )
+  }
+
   return (
     <div className="p-5 space-y-4">
       <div>
@@ -284,41 +395,138 @@ function CommissionSettings({ dealershipId }: { dealershipId: number }) {
         <p className="text-sm text-muted-foreground">{t('commission_rates_desc')}</p>
       </div>
 
-      <div className="space-y-3 max-w-sm">
-        <div>
-          <label className="text-sm font-medium">{t('role_salesperson')}</label>
-          <div className="flex items-center gap-2 mt-1">
-            <Input
-              type="number"
-              min="0"
-              max="100"
-              value={salesperson}
-              onChange={(e) => setSalesperson(e.target.value)}
-              className="w-24"
-            />
-            <span className="text-sm text-muted-foreground">%</span>
+      <div className="space-y-2 max-w-md">
+        {payload.grades.map((g) => (
+          <div key={g.level} className="flex items-center justify-between gap-3 rounded-md bg-muted/40 px-3 py-2">
+            <div className="min-w-0">
+              <p className="text-sm font-medium truncate">{g.label}</p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <Input
+                type="number"
+                min="0"
+                max="100"
+                value={rates[String(g.level)] ?? ''}
+                onChange={(e) => setRates({ ...rates, [String(g.level)]: e.target.value })}
+                className="w-20 h-8"
+              />
+              <span className="text-sm text-muted-foreground">%</span>
+            </div>
           </div>
-        </div>
-
-        <div>
-          <label className="text-sm font-medium">{t('role_manager')}</label>
-          <div className="flex items-center gap-2 mt-1">
-            <Input
-              type="number"
-              min="0"
-              max="100"
-              value={manager}
-              onChange={(e) => setManager(e.target.value)}
-              className="w-24"
-            />
-            <span className="text-sm text-muted-foreground">%</span>
-          </div>
-        </div>
+        ))}
 
         <Button onClick={handleSave} disabled={saving} className="mt-2">
           {saving ? t('saving') : t('btn_save')}
         </Button>
       </div>
+
+      <p className="text-xs text-muted-foreground">
+        {t('commission_default_fallback', String(payload.defaultRate))}
+      </p>
+    </div>
+  )
+}
+
+function SocietyAllowlistSettings({ dealershipId }: { dealershipId: number }) {
+  const [entries, setEntries] = useState<SocietyAllowlistEntry[]>([])
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    fetchNui<{ success: boolean; allowlist: SocietyAllowlistEntry[] }>('getSocietyAllowlist', {
+      dealershipId,
+    }).then((res) => {
+      if (res.success) setEntries(res.allowlist || [])
+      setLoading(false)
+    }).catch(() => setLoading(false))
+  }, [dealershipId])
+
+  const updateEntry = (idx: number, patch: Partial<SocietyAllowlistEntry>) => {
+    setEntries((prev) => prev.map((e, i) => i === idx ? { ...e, ...patch } : e))
+  }
+
+  const addEntry = () => {
+    setEntries((prev) => [...prev, { type: 'job', name: '', minGrade: 0 }])
+  }
+
+  const removeEntry = (idx: number) => {
+    setEntries((prev) => prev.filter((_, i) => i !== idx))
+  }
+
+  const handleSave = () => {
+    setSaving(true)
+    const cleaned = entries
+      .filter((e) => e.name.trim() !== '')
+      .map((e) => ({ type: e.type, name: e.name.trim(), minGrade: Math.max(0, Math.floor(Number(e.minGrade) || 0)) }))
+    fetchNui('setSocietyAllowlist', {
+      dealershipId,
+      allowlist: cleaned,
+    }).then(() => {
+      setEntries(cleaned)
+      setSaving(false)
+    }).catch(() => setSaving(false))
+  }
+
+  if (loading) {
+    return <div className="flex items-center justify-center h-48 text-muted-foreground">{t('loading')}</div>
+  }
+
+  return (
+    <div className="p-5 space-y-4">
+      <div>
+        <h2 className="text-lg font-bold">{t('tab_society_payments')}</h2>
+        <p className="text-sm text-muted-foreground">{t('society_payments_desc')}</p>
+      </div>
+
+      <div className="space-y-2 max-w-2xl">
+        {entries.length === 0 && (
+          <p className="text-xs text-muted-foreground">{t('society_allowlist_empty')}</p>
+        )}
+        {entries.map((entry, idx) => (
+          <div key={idx} className="flex items-center gap-2 rounded-md bg-muted/40 px-3 py-2">
+            <select
+              value={entry.type}
+              onChange={(e) => updateEntry(idx, { type: e.target.value as 'job' | 'gang' })}
+              className="h-8 rounded-md border border-border bg-background px-2 text-sm"
+            >
+              <option value="job">{t('label_job')}</option>
+              <option value="gang">{t('label_gang')}</option>
+            </select>
+            <Input
+              value={entry.name}
+              onChange={(e) => updateEntry(idx, { name: e.target.value })}
+              placeholder={t('label_faction_name')}
+              className="h-8 flex-1"
+            />
+            <div className="flex items-center gap-1">
+              <span className="text-[10px] text-muted-foreground">{t('label_min_grade_short')}</span>
+              <Input
+                type="number"
+                min="0"
+                value={String(entry.minGrade)}
+                onChange={(e) => updateEntry(idx, { minGrade: parseInt(e.target.value) || 0 })}
+                className="h-8 w-16"
+              />
+            </div>
+            <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => removeEntry(idx)}>
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          </div>
+        ))}
+
+        <div className="flex gap-2 pt-1">
+          <Button variant="outline" onClick={addEntry}>
+            <Plus className="h-4 w-4" /> {t('btn_add_allowlist_entry')}
+          </Button>
+          <Button onClick={handleSave} disabled={saving}>
+            {saving ? t('saving') : t('btn_save')}
+          </Button>
+        </div>
+      </div>
+
+      <p className="text-xs text-muted-foreground max-w-2xl">
+        {t('society_payments_help')}
+      </p>
     </div>
   )
 }

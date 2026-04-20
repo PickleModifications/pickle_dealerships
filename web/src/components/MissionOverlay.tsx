@@ -55,6 +55,11 @@ export default function MissionOverlay() {
                 {state.bundledLines && state.bundledLines > 1 ? ` · +${state.bundledLines - 1} more` : ''}
               </p>
             )}
+            {state.phaseHintKey && (
+              <p className="mt-1 text-[10px] text-white/45 leading-snug">
+                {t(state.phaseHintKey)}
+              </p>
+            )}
           </div>
         </div>
 

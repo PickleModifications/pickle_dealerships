@@ -5,6 +5,7 @@
 
 RegisterNUICallback("hireEmployee", function(data, cb)
     local result = lib.callback.await("pickle_dealerships:hireEmployee", false, data)
+    if result and result.message then ShowNotification(result.message) end
     cb(result)
 end)
 
@@ -12,7 +13,9 @@ RegisterNUICallback("fireEmployee", function(data, cb)
     local result = lib.callback.await("pickle_dealerships:fireEmployee", false, {
         dealershipId = data.dealershipId,
         targetServerId = data.targetServerId or data.serverId,
+        targetIdentifier = data.targetIdentifier or data.identifier,
     })
+    if result and result.message then ShowNotification(result.message) end
     cb(result)
 end)
 
@@ -52,6 +55,15 @@ RegisterNUICallback("setEmployeeRole", function(data, cb)
         dealershipId = data.dealershipId,
         targetServerId = data.targetServerId or data.serverId,
         role = data.role,
+    })
+    cb(result)
+end)
+
+RegisterNUICallback("setEmployeeCommissionOverride", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:setEmployeeCommissionOverride", false, {
+        dealershipId = data.dealershipId,
+        identifier   = data.identifier,
+        rate         = data.rate,
     })
     cb(result)
 end)

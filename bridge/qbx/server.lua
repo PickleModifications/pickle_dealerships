@@ -36,28 +36,85 @@ function GetPlayerCharacterName(source)
     return (info.firstname or "Unknown") .. " " .. (info.lastname or "")
 end
 
+--- Returns all online player source IDs. Modern QBX exposes GetPlayers(); older
+--- versions used GetQBPlayers(). Fall back to fetching from qbx_core or GetPlayers().
+local function GetAllQbxPlayerSources()
+    local ok, result = pcall(function() return exports.qbx_core:GetPlayers() end)
+    if ok and type(result) == "table" then return result end
+    -- Vanilla CFX fallback
+    local players = {}
+    for _, src in ipairs(GetPlayers()) do players[#players + 1] = tonumber(src) end
+    return players
+end
+
+--- Cross-version shared jobs accessor. QBX renamed GetSharedJobs → GetJobs.
+local function GetQbxJobs()
+    local ok, result = pcall(function() return exports.qbx_core:GetJobs() end)
+    if ok and type(result) == "table" then return result end
+    ok, result = pcall(function() return exports.qbx_core:GetSharedJobs() end)
+    if ok and type(result) == "table" then return result end
+    return {}
+end
+
+--- Cross-version shared gangs accessor.
+local function GetQbxGangs()
+    local ok, result = pcall(function() return exports.qbx_core:GetGangs() end)
+    if ok and type(result) == "table" then return result end
+    ok, result = pcall(function() return exports.qbx_core:GetSharedGangs() end)
+    if ok and type(result) == "table" then return result end
+    return {}
+end
+
 function GetEmployees(jobName, cb)
     local employees = {}
-    local sources = exports.qbx_core:GetPlayersOfJob(jobName) or {}
-    for _, src in ipairs(sources) do
+    local seen = {}
+
+    -- Online members first (authoritative source for current grade).
+    for _, src in ipairs(GetAllQbxPlayerSources()) do
         local player = GetPlayer(src)
-        if player and player.PlayerData then
+        if player and player.PlayerData and player.PlayerData.job and player.PlayerData.job.name == jobName then
             local info = player.PlayerData.charinfo or {}
+            local grade = player.PlayerData.job.grade or {}
+            local cid = player.PlayerData.citizenid
+            if cid then seen[cid] = true end
             employees[#employees + 1] = {
                 source = src,
+                identifier = cid,
                 name = (info.firstname or "Unknown") .. " " .. (info.lastname or ""),
-                grade = player.PlayerData.job.grade.level,
-                gradeLabel = player.PlayerData.job.grade.name,
+                grade = grade.level or 0,
+                gradeLabel = grade.name or "",
                 online = true,
             }
         end
     end
+
+    -- Offline members from the players table. QBX stores job as JSON.
+    local rows = MySQL.query.await(
+        "SELECT citizenid, charinfo, job FROM players WHERE JSON_EXTRACT(job, '$.name') = ?",
+        { jobName }
+    ) or {}
+    for _, row in ipairs(rows) do
+        if not seen[row.citizenid] then
+            local info = type(row.charinfo) == "string" and (json.decode(row.charinfo) or {}) or (row.charinfo or {})
+            local job = type(row.job) == "string" and (json.decode(row.job) or {}) or (row.job or {})
+            local grade = job.grade or {}
+            employees[#employees + 1] = {
+                source = nil,
+                identifier = row.citizenid,
+                name = (info.firstname or "Unknown") .. " " .. (info.lastname or ""),
+                grade = tonumber(grade.level) or 0,
+                gradeLabel = grade.name or "",
+                online = false,
+            }
+        end
+    end
+
     if type(cb) == "function" then cb(employees) end
     return employees
 end
 
 function GetJobGrades(jobName)
-    local jobs = exports.qbx_core:GetSharedJobs() or {}
+    local jobs = GetQbxJobs()
     local job = jobs[jobName]
     if not job or not job.grades then return {} end
     local grades = {}
@@ -230,6 +287,108 @@ function SetPlayerJob(source, job, grade)
     exports.qbx_core:SetJob(tonumber(source), job, grade)
 end
 
+function GetPlayerGangName(source)
+    local player = GetPlayer(source)
+    if not player or not player.PlayerData or not player.PlayerData.gang then return nil end
+    return player.PlayerData.gang.name
+end
+
+function GetPlayerGangGrade(source)
+    local player = GetPlayer(source)
+    if not player or not player.PlayerData or not player.PlayerData.gang or not player.PlayerData.gang.grade then return 0 end
+    return player.PlayerData.gang.grade.level or 0
+end
+
+function SetPlayerGang(source, gang, grade)
+    local ok = pcall(function() exports.qbx_core:SetGang(tonumber(source), gang, grade) end)
+    return ok
+end
+
+--- Applies a faction change to a player identified by citizenid. Uses the live
+--- setter if they're online so framework notifications/state fire normally;
+--- otherwise writes directly to the players table so offline hires/fires stick.
+function SetFactionByIdentifier(factionType, identifier, factionName, grade)
+    if not identifier or not factionName then return false end
+    local src = GetSourceFromIdentifier(identifier)
+    if src then
+        if factionType == "gang" then return SetPlayerGang(src, factionName, grade) end
+        SetPlayerJob(src, factionName, grade)
+        return true
+    end
+
+    -- Offline write — update the JSON column directly. Preserves other fields by
+    -- using JSON_SET so we don't clobber unrelated job/gang state.
+    local column = (factionType == "gang") and "gang" or "job"
+    local ok = pcall(function()
+        MySQL.update.await(
+            ("UPDATE players SET %s = JSON_SET(COALESCE(%s, JSON_OBJECT()), '$.name', ?, '$.grade', JSON_OBJECT('level', ?)) WHERE citizenid = ?"):format(column, column),
+            { factionName, tonumber(grade) or 0, identifier }
+        )
+    end)
+    return ok
+end
+
+function GetGangGrades(gangName)
+    local gangs = GetQbxGangs()
+    local gang = gangs[gangName]
+    if not gang or not gang.grades then return {} end
+    local grades = {}
+    for level, grade in pairs(gang.grades) do
+        grades[#grades + 1] = {
+            level = tonumber(level),
+            label = grade.name or ("Grade " .. level),
+        }
+    end
+    table.sort(grades, function(a, b) return a.level < b.level end)
+    return grades
+end
+
+function GetGangMembers(gangName, cb)
+    local members = {}
+    local seen = {}
+
+    for _, src in ipairs(GetAllQbxPlayerSources()) do
+        local player = GetPlayer(src)
+        if player and player.PlayerData and player.PlayerData.gang and player.PlayerData.gang.name == gangName then
+            local info = player.PlayerData.charinfo or {}
+            local grade = player.PlayerData.gang.grade or {}
+            local cid = player.PlayerData.citizenid
+            if cid then seen[cid] = true end
+            members[#members + 1] = {
+                source = src,
+                identifier = cid,
+                name = (info.firstname or "Unknown") .. " " .. (info.lastname or ""),
+                grade = grade.level or 0,
+                gradeLabel = grade.name or "",
+                online = true,
+            }
+        end
+    end
+
+    local rows = MySQL.query.await(
+        "SELECT citizenid, charinfo, gang FROM players WHERE JSON_EXTRACT(gang, '$.name') = ?",
+        { gangName }
+    ) or {}
+    for _, row in ipairs(rows) do
+        if not seen[row.citizenid] then
+            local info = type(row.charinfo) == "string" and (json.decode(row.charinfo) or {}) or (row.charinfo or {})
+            local gang = type(row.gang) == "string" and (json.decode(row.gang) or {}) or (row.gang or {})
+            local grade = gang.grade or {}
+            members[#members + 1] = {
+                source = nil,
+                identifier = row.citizenid,
+                name = (info.firstname or "Unknown") .. " " .. (info.lastname or ""),
+                grade = tonumber(grade.level) or 0,
+                gradeLabel = grade.name or "",
+                online = false,
+            }
+        end
+    end
+
+    if type(cb) == "function" then cb(members) end
+    return members
+end
+
 function IsPlayerAdmin(source)
     source = tonumber(source)
     for i = 1, #Config.AdminGroups do
@@ -348,7 +507,18 @@ CreateThread(function()
         return Inventory.GetInventory(source)
     end)
 
-    local sharedItems = exports.qbx_core:GetSharedItems() or {}
+    -- QBX uses ox_inventory as the canonical item source; qbx_core no longer
+    -- exposes a GetSharedItems export. Prefer ox_inventory, then fall back to
+    -- older QBX builds that still carry the export.
+    local sharedItems = {}
+    if GetResourceState("ox_inventory") == "started" then
+        local ok, items = pcall(function() return exports.ox_inventory:Items() end)
+        if ok and type(items) == "table" then sharedItems = items end
+    end
+    if next(sharedItems) == nil then
+        local ok, items = pcall(function() return exports.qbx_core:GetSharedItems() end)
+        if ok and type(items) == "table" then sharedItems = items end
+    end
     for item, itemData in pairs(sharedItems) do
         Inventory.Items[item] = { label = itemData.label }
     end

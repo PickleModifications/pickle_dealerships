@@ -242,32 +242,39 @@ export default function CatalogPage({ data, onClose }: Props) {
                   >
                     {rowItems.map((item) => {
                       const locked = !canAccessTier(item.tier, data.tier)
+                      const unlockLevel = tierUnlockLevel(item.tier)
                       return (
-                        <Card key={item.model} className={`overflow-hidden transition-colors ${locked ? 'opacity-50' : 'hover:border-accent/50'}`}>
-                          <VehicleImg image={item.image} model={item.model} alt={item.label} className="w-full aspect-video object-contain bg-muted" fallbackClassName="w-full aspect-video bg-muted flex items-center justify-center" iconClassName="h-8 w-8 text-muted-foreground/30" />
-                          <CardContent className="p-3">
-                            <div className="flex items-start justify-between mb-1">
-                              <div>
-                                <h3 className="font-semibold text-sm">{item.label}</h3>
-                                <p className="text-xs text-muted-foreground capitalize">{item.class}</p>
-                              </div>
-                              <Badge className={`${tierColors[item.tier] || ''} border-0 text-xs capitalize`}>
-                                {item.tier}
-                              </Badge>
-                            </div>
-                            <div className="flex items-center justify-between mt-2">
-                              <p className="font-bold text-sm">{formatCurrency(item.wholesale)}</p>
-                              {locked ? (
-                                <Badge variant="outline" className="gap-1 text-muted-foreground">
-                                  <Lock className="h-3 w-3" /> {t('catalog_locked')}
+                        <Card key={item.model} className={`relative overflow-hidden transition-colors ${locked ? '' : 'hover:border-accent/50'}`}>
+                          <div className={locked ? 'opacity-40 grayscale' : ''}>
+                            <VehicleImg image={item.image} model={item.model} alt={item.label} className="w-full aspect-video object-contain bg-muted" fallbackClassName="w-full aspect-video bg-muted flex items-center justify-center" iconClassName="h-8 w-8 text-muted-foreground/30" />
+                            <CardContent className="p-3">
+                              <div className="flex items-start justify-between mb-1">
+                                <div>
+                                  <h3 className="font-semibold text-sm">{item.label}</h3>
+                                  <p className="text-xs text-muted-foreground capitalize">{item.class}</p>
+                                </div>
+                                <Badge className={`${tierColors[item.tier] || ''} border-0 text-xs capitalize`}>
+                                  {item.tier}
                                 </Badge>
-                              ) : (
-                                <Button size="sm" onClick={() => setOrdering(item)}>
-                                  <ShoppingCart className="h-3 w-3" /> {t('btn_order')}
-                                </Button>
-                              )}
+                              </div>
+                              <div className="flex items-center justify-between mt-2">
+                                <p className="font-bold text-sm">{formatCurrency(item.wholesale)}</p>
+                                {!locked && (
+                                  <Button size="sm" onClick={() => setOrdering(item)}>
+                                    <ShoppingCart className="h-3 w-3" /> {t('btn_order')}
+                                  </Button>
+                                )}
+                              </div>
+                            </CardContent>
+                          </div>
+                          {locked && (
+                            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                              <div className="bg-black/70 backdrop-blur-none border border-white/15 rounded-md px-3 py-1.5 flex items-center gap-1.5 text-xs font-medium text-white shadow-lg">
+                                <Lock className="h-3.5 w-3.5" />
+                                {t('catalog_unlocks_at_level', String(unlockLevel))}
+                              </div>
                             </div>
-                          </CardContent>
+                          )}
                         </Card>
                       )
                     })}
@@ -290,10 +297,6 @@ export default function CatalogPage({ data, onClose }: Props) {
               <DialogDescription>{t('title_order_desc')}</DialogDescription>
             </DialogHeader>
             <div className="space-y-4 px-6 py-4 overflow-y-auto min-h-0">
-              <div>
-                <p className="text-sm text-muted-foreground mb-1">{t('label_wholesale_cost')}</p>
-                <p className="text-lg font-bold">{formatCurrency(ordering?.wholesale || 0)}</p>
-              </div>
               <div>
                 <label className="text-sm font-medium">{t('label_quantity')}</label>
                 <Input
@@ -355,7 +358,12 @@ export default function CatalogPage({ data, onClose }: Props) {
   )
 }
 
+const TIER_LEVEL: Record<string, number> = { basic: 1, expanded: 2, full: 3, exclusive: 4 }
+
 function canAccessTier(vehicleTier: string, dealershipTier: number): boolean {
-  const tierMap: Record<string, number> = { basic: 1, expanded: 2, full: 3, exclusive: 4 }
-  return dealershipTier >= (tierMap[vehicleTier] || 1)
+  return dealershipTier >= (TIER_LEVEL[vehicleTier] || 1)
+}
+
+function tierUnlockLevel(vehicleTier: string): number {
+  return TIER_LEVEL[vehicleTier] || 1
 }

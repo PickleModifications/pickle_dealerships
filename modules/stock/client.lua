@@ -27,8 +27,41 @@ local function DeleteGhostVehicles()
         if data.entity and DoesEntityExist(data.entity) then
             DeleteEntity(data.entity)
         end
+        if data.zoneIdx and RemoveTargetZone then
+            RemoveTargetZone(data.zoneIdx)
+        end
     end
     ghostVehicles = {}
+end
+
+--- Removes the ghost+zone for a specific spot if present (surgical).
+local function DeleteGhostAt(spotId)
+    local kept = {}
+    for _, data in ipairs(ghostVehicles) do
+        if data.spotId == spotId then
+            if data.entity and DoesEntityExist(data.entity) then DeleteEntity(data.entity) end
+            if data.zoneIdx and RemoveTargetZone then RemoveTargetZone(data.zoneIdx) end
+        else
+            kept[#kept + 1] = data
+        end
+    end
+    ghostVehicles = kept
+end
+
+--- Removes the display vehicle + its target options for a specific spot (surgical).
+local function DeleteDisplayVehicleAt(spotId)
+    local kept = {}
+    for _, dv in ipairs(displayVehicles) do
+        if dv.displaySpot == spotId then
+            if dv.targetOptions and RemoveTargetPed and dv.entity and DoesEntityExist(dv.entity) then
+                RemoveTargetPed(dv.entity, dv.targetOptions)
+            end
+            if dv.entity and DoesEntityExist(dv.entity) then DeleteEntity(dv.entity) end
+        else
+            kept[#kept + 1] = dv
+        end
+    end
+    displayVehicles = kept
 end
 
 --- Spawn transparent placeholder vehicles on empty display spots (staff only)
@@ -41,6 +74,8 @@ local function SpawnGhostVehicles(locationKey, occupiedSpots)
     -- Check if player has a role at this dealership
     local role = lib.callback.await('pickle_dealerships:getPlayerRole', false, locationKey)
     if not role then return end -- not staff, no ghosts
+
+    local canManage = role == 'owner' or role == 'manager' or role == 'admin'
 
     for _, spot in ipairs(cfg.displaySpots) do
         local spotId = spot.id and tonumber(spot.id)
@@ -55,9 +90,34 @@ local function SpawnGhostVehicles(locationKey, occupiedSpots)
                     SetEntityAlpha(obj, 200, false)
                     SetEntityInvincible(obj, true)
 
+                    -- Walk-up picker: empty spots use a coordinate-based sphere zone
+                    -- instead of an entity target because the ghost prop has no
+                    -- collision (so ox_target's raycast would pass through it).
+                    local zoneIdx
+                    if canManage and AddTargetZone then
+                        local capturedSpotId = spotId
+                        local capturedCoords = { x = x, y = y, z = z, w = w or 0.0 }
+                        zoneIdx = AddTargetZone(
+                            vector3(x, y, z),
+                            1.5,
+                            {
+                                {
+                                    name = 'pickle_dealerships:pickSpot_' .. spotId,
+                                    label = _L('spot_place_vehicle') or 'Place Vehicle',
+                                    icon = 'fas fa-car',
+                                    distance = 3.0,
+                                    onSelect = function()
+                                        TriggerEvent('pickle_dealerships:openSpotPicker', locationKey, capturedSpotId, capturedCoords)
+                                    end,
+                                },
+                            }
+                        )
+                    end
+
                     ghostVehicles[#ghostVehicles + 1] = {
                         entity = obj,
                         spotId = spotId,
+                        zoneIdx = zoneIdx,
                     }
                 end
             end
@@ -69,8 +129,137 @@ end
 
 --- Spawns display vehicles for the current dealership
 ---@param locationKey string
+--- Spawns ONE display vehicle at a given spot. Pushes into displayVehicles and
+--- attaches targets. Used both by the full rebuild and the targeted refresh.
+local function SpawnDisplayVehicleAt(item, spotId, x, y, z, w, locationKey, staffCanManage)
+    local model = item.vehicle_model or item.model
+    local modelHash = type(model) == "string" and joaat(model) or model
+    local veh = CreateVeh(modelHash, vector3(x, y, z), w or 0.0, false)
+    if not veh or not DoesEntityExist(veh) then return nil end
+
+    FreezeEntityPosition(veh, true)
+    SetVehicleDoorsLocked(veh, 2)
+    SetEntityInvincible(veh, true)
+
+    local isUsed = item.is_used == true or tonumber(item.is_used) == 1
+    local props = item.metadata
+    if isUsed and props then
+        if type(props) == 'string' then props = json.decode(props) or {} end
+        if type(props) == 'table' then
+            props.plate = nil
+            lib.setVehicleProperties(veh, props)
+        end
+    end
+
+    SetVehicleNumberPlateText(veh, 'DISPLAY')
+
+    local targetOptions
+    if Config.UseTarget then
+        local capturedStockId = item.id
+        local capturedSpotId = spotId
+        local capturedCoords = { x = x, y = y, z = z, w = w or 0.0 }
+        local capturedLocation = locationKey
+        targetOptions = {}
+
+        -- Primary interaction: open a single-vehicle spot view centered at this
+        -- spot's coords (not the showcase anchor). Customers see only this one
+        -- car with the normal purchase / finance actions; no sidebar browsing.
+        targetOptions[#targetOptions + 1] = {
+            name = 'pickle_dealerships:inspect_' .. item.id,
+            label = _L('interact_view_vehicle') or 'View Vehicle',
+            icon = 'fa-solid fa-magnifying-glass',
+            distance = 3.0,
+            onSelect = function()
+                TriggerEvent('pickle_dealerships:openSpotView', capturedLocation, capturedSpotId, capturedCoords, capturedStockId)
+            end,
+        }
+
+        if isUsed then
+            targetOptions[#targetOptions + 1] = {
+                name = 'pickle_dealerships:pickleFax_' .. item.id,
+                label = 'View PickleFAX',
+                icon = 'fa-solid fa-file-invoice',
+                distance = 3.0,
+                onSelect = function() OpenNui('pickleFax', { stockId = capturedStockId }) end,
+            }
+        end
+
+        if staffCanManage then
+            targetOptions[#targetOptions + 1] = {
+                name = 'pickle_dealerships:swapSpot_' .. spotId,
+                label = _L('spot_swap_vehicle') or 'Swap Vehicle',
+                icon = 'fas fa-arrows-rotate',
+                distance = 3.0,
+                onSelect = function()
+                    TriggerEvent('pickle_dealerships:openSpotPicker', locationKey, capturedSpotId, capturedCoords)
+                end,
+            }
+            targetOptions[#targetOptions + 1] = {
+                name = 'pickle_dealerships:clearSpot_' .. spotId,
+                label = _L('spot_remove_vehicle') or 'Remove From Display',
+                icon = 'fas fa-trash',
+                distance = 3.0,
+                onSelect = function()
+                    lib.callback.await('pickle_dealerships:setDisplaySpot', false, locationKey, capturedStockId, nil)
+                end,
+            }
+        end
+
+        if #targetOptions > 0 then AddTargetPed(veh, targetOptions) end
+    end
+
+    local dv = {
+        entity = veh,
+        stockId = item.id,
+        model = model,
+        retailPrice = item.retail_price,
+        wholesalePrice = item.wholesale_cost,
+        displaySpot = spotId,
+        isUsed = isUsed,
+        targetOptions = targetOptions, -- kept so surgical removal can clean target entries
+    }
+    displayVehicles[#displayVehicles + 1] = dv
+    return dv
+end
+
+--- Spawns ONE ghost + zone at an empty spot (staff only).
+local function SpawnGhostAt(locationKey, spotId, x, y, z, w, canManage)
+    local obj = CreateProp(GHOST_MODEL, x, y, z - 1.26, false, false, false)
+    if not obj or not DoesEntityExist(obj) then return nil end
+
+    SetEntityRotation(obj, 90.0, 0.0, w or 0.0, 2, true)
+    FreezeEntityPosition(obj, true)
+    SetEntityCollision(obj, false, false)
+    SetEntityAlpha(obj, 200, false)
+    SetEntityInvincible(obj, true)
+
+    local zoneIdx
+    if canManage and AddTargetZone then
+        local capturedSpotId = spotId
+        local capturedCoords = { x = x, y = y, z = z, w = w or 0.0 }
+        zoneIdx = AddTargetZone(
+            vector3(x, y, z),
+            1.25,
+            {
+                {
+                    name = 'pickle_dealerships:pickSpot_' .. spotId,
+                    label = _L('spot_place_vehicle') or 'Place Vehicle',
+                    icon = 'fas fa-car',
+                    distance = 3.0,
+                    onSelect = function()
+                        TriggerEvent('pickle_dealerships:openSpotPicker', locationKey, capturedSpotId, capturedCoords)
+                    end,
+                },
+            }
+        )
+    end
+
+    local g = { entity = obj, spotId = spotId, zoneIdx = zoneIdx }
+    ghostVehicles[#ghostVehicles + 1] = g
+    return g
+end
+
 local function SpawnDisplayVehicles(locationKey)
-    -- Clean up existing
     DeleteDisplayVehicles()
     DeleteGhostVehicles()
 
@@ -81,76 +270,22 @@ local function SpawnDisplayVehicles(locationKey)
     if not stock then stock = {} end
 
     local occupiedSpots = {}
+    local role = lib.callback.await('pickle_dealerships:getPlayerRole', false, locationKey)
+    local staffCanManage = role == 'owner' or role == 'manager' or role == 'admin'
 
     for _, item in ipairs(stock) do
         local isDelivered = item.delivered_at and item.delivered_at ~= "" and not item.sold_at
         local isUnlisted = item.unlisted == 1 or item.unlisted == true
         if item.display_spot and isDelivered and not isUnlisted then
             local spotId = tonumber(item.display_spot)
-            -- Find the spot in displaySpots by its unique id
-            local spot = nil
-            local spotArrayIndex = nil
-            for i, s in ipairs(cfg.displaySpots) do
-                if s.id and tonumber(s.id) == spotId then
-                    spot = s
-                    spotArrayIndex = i
-                    break
-                end
+            local spot
+            for _, s in ipairs(cfg.displaySpots) do
+                if s.id and tonumber(s.id) == spotId then spot = s; break end
             end
-
             if spot then
                 local x, y, z, w = ParseSpot(spot)
                 if x and y and z then
-                    local model = item.vehicle_model or item.model
-                    local modelHash = type(model) == "string" and joaat(model) or model
-                    local veh = CreateVeh(modelHash, vector3(x, y, z), w or 0.0, false)
-                    if veh and DoesEntityExist(veh) then
-                        FreezeEntityPosition(veh, true)
-                        SetVehicleDoorsLocked(veh, 2)
-                        SetEntityInvincible(veh, true)
-
-                        -- For pre-owned units, apply captured vehicle properties so the
-                        -- lot displays the exact unit a buyer would receive
-                        local isUsed = item.is_used == true or tonumber(item.is_used) == 1
-                        local props = item.metadata
-                        if isUsed and props then
-                            if type(props) == 'string' then props = json.decode(props) or {} end
-                            if type(props) == 'table' then
-                                props.plate = nil -- keep DISPLAY plate cosmetically
-                                lib.setVehicleProperties(veh, props)
-                            end
-                        end
-
-                        SetVehicleNumberPlateText(veh, 'DISPLAY')
-
-                        displayVehicles[#displayVehicles + 1] = {
-                            entity = veh,
-                            stockId = item.id,
-                            model = model,
-                            retailPrice = item.retail_price,
-                            wholesalePrice = item.wholesale_cost,
-                            displaySpot = spotId,
-                            isUsed = isUsed,
-                        }
-
-                        if isUsed and Config.UseTarget then
-                            local capturedStockId = item.id
-                            AddTargetPed(veh, {
-                                {
-                                    name = 'pickle_dealerships:pickleFax',
-                                    label = 'View PickleFAX',
-                                    icon = 'fa-solid fa-file-invoice',
-                                    distance = 3.0,
-                                    onSelect = function()
-                                        OpenNui('pickleFax', { stockId = capturedStockId })
-                                    end,
-                                    action = function()
-                                        OpenNui('pickleFax', { stockId = capturedStockId })
-                                    end,
-                                },
-                            })
-                        end
-
+                    if SpawnDisplayVehicleAt(item, spotId, x, y, z, w, locationKey, staffCanManage) then
                         occupiedSpots[spotId] = true
                     end
                 end
@@ -158,8 +293,49 @@ local function SpawnDisplayVehicles(locationKey)
         end
     end
 
-    -- Spawn ghosts on empty spots for staff
     SpawnGhostVehicles(locationKey, occupiedSpots)
+end
+
+--- Surgical single-spot refresh. Removes whatever is currently rendered at
+--- `spotId` (vehicle or ghost+zone), then re-queries the server for the stock
+--- currently assigned and re-spawns only what's needed. Prevents the full
+--- teardown-and-rebuild that used to happen on every spot change.
+local function RefreshSingleSpot(locationKey, spotId)
+    if not spotId then return end
+    local cfg = DealershipConfigs[locationKey]
+    if not cfg or not cfg.displaySpots then return end
+
+    local spot
+    for _, s in ipairs(cfg.displaySpots) do
+        if s.id and tonumber(s.id) == spotId then spot = s; break end
+    end
+    if not spot then
+        -- Spot no longer exists; just clean up any renders tied to it.
+        DeleteDisplayVehicleAt(spotId)
+        DeleteGhostAt(spotId)
+        return
+    end
+
+    local x, y, z, w = ParseSpot(spot)
+    if not x then return end
+
+    -- Clean whatever was here.
+    DeleteDisplayVehicleAt(spotId)
+    DeleteGhostAt(spotId)
+
+    local item = lib.callback.await('pickle_dealerships:getStockAtSpot', false, locationKey, spotId)
+
+    if item then
+        local role = lib.callback.await('pickle_dealerships:getPlayerRole', false, locationKey)
+        local staffCanManage = role == 'owner' or role == 'manager' or role == 'admin'
+        SpawnDisplayVehicleAt(item, spotId, x, y, z, w, locationKey, staffCanManage)
+    else
+        local role = lib.callback.await('pickle_dealerships:getPlayerRole', false, locationKey)
+        local canManage = role == 'owner' or role == 'manager' or role == 'admin'
+        if canManage then
+            SpawnGhostAt(locationKey, spotId, x, y, z, w, canManage)
+        end
+    end
 end
 
 --- Deletes all display vehicles
@@ -208,9 +384,35 @@ RegisterNetEvent('pickle_dealerships:exitedDealership', function(locationKey)
     end
 end)
 
---- Listen for stock changes to refresh display
-RegisterNetEvent('pickle_dealerships:refreshDisplay', function(locationKey)
-    if currentDealership == locationKey and isInZone then
+--- Showroom picker opened: hide whatever vehicle is currently rendered at the
+--- target spot so the preview camera isn't pointed at two cars overlapping.
+--- DB is untouched — CleanupShowroom will fire a targeted refresh on close.
+RegisterNetEvent('pickle_dealerships:spotPickerOpened', function(locationKey, spotId)
+    if currentDealership ~= locationKey or not isInZone then return end
+    DeleteDisplayVehicleAt(tonumber(spotId))
+    DeleteGhostAt(tonumber(spotId))
+end)
+
+--- Listen for stock changes to refresh display.
+--- If the server sends specific spot IDs, only those get re-rendered. Otherwise
+--- fall back to a full rebuild (used for stock state that isn't spot-scoped —
+--- delivery arrival, unlist toggle, etc).
+RegisterNetEvent('pickle_dealerships:refreshDisplay', function(locationKey, spotIds)
+    if currentDealership ~= locationKey or not isInZone then return end
+    -- Skip the spot the player is actively previewing in the picker — the
+    -- new vehicle would spawn under the showroom camera while the menu is
+    -- still open. CleanupShowroom fires its own targeted refresh on close
+    -- that reconciles the spot once the camera is gone.
+    local pickerSpot = GetActivePickerSpotId and GetActivePickerSpotId() or nil
+
+    if type(spotIds) == 'table' and #spotIds > 0 then
+        for _, spotId in ipairs(spotIds) do
+            local n = tonumber(spotId)
+            if n and n ~= pickerSpot then
+                RefreshSingleSpot(locationKey, n)
+            end
+        end
+    elseif not pickerSpot then
         SpawnDisplayVehicles(locationKey)
     end
 end)
@@ -353,6 +555,22 @@ RegisterNUICallback("setRetailPrice", function(data, cb)
     else
         ShowNotification(err or _L("stock_retail_price_failed"))
         cb({ success = false, message = err or "Failed." })
+    end
+end)
+
+RegisterNUICallback("setStockMinGrade", function(data, cb)
+    local location = ResolveLocation(data)
+    if not location then
+        cb({ success = false, message = "Could not resolve location." })
+        return
+    end
+
+    local success, result = lib.callback.await('pickle_dealerships:setStockMinGrade', false, location, data.stockId, data.minGrade)
+    if success then
+        cb({ success = true, minGrade = result })
+    else
+        ShowNotification(result or _L("stock_min_grade_failed"))
+        cb({ success = false, message = result or "Failed." })
     end
 end)
 
@@ -577,6 +795,16 @@ CreateThread(function()
     -- Initial fetch of seize dealerships
     RefreshSeizeDealerships()
 
+    -- Display vehicles (spot-placed units) should not expose trade-in / seize
+    -- options — those are for player-driven cars, not the lot inventory itself.
+    local function IsDisplayVehicle(entity)
+        if not entity then return false end
+        for _, d in ipairs(displayVehicles) do
+            if d.entity == entity then return true end
+        end
+        return false
+    end
+
     AddTargetGlobalVehicle({
         {
             name = 'pickle_dealerships:tradeIn',
@@ -585,6 +813,7 @@ CreateThread(function()
             distance = 2.5,
             canInteract = function(entity)
                 if not currentDealership then return false end
+                if IsDisplayVehicle(entity) then return false end
                 -- Hide trade-in if this dealership has seize enabled
                 for _, d in ipairs(seizeDealerships) do
                     if d.location == currentDealership then return false end
@@ -595,10 +824,6 @@ CreateThread(function()
             onSelect = function(data)
                 StartTradeIn(data.entity)
             end,
-            -- qb-target compatibility
-            action = function(entity)
-                StartTradeIn(entity)
-            end,
         },
         {
             name = 'pickle_dealerships:seizeVehicle',
@@ -606,14 +831,11 @@ CreateThread(function()
             icon = 'fa-solid fa-shield-halved',
             distance = 2.5,
             canInteract = function(entity)
+                if IsDisplayVehicle(entity) then return false end
                 return #seizeDealerships > 0
             end,
             onSelect = function(data)
                 StartSeize(data.entity)
-            end,
-            -- qb-target compatibility
-            action = function(entity)
-                StartSeize(entity)
             end,
         },
     })

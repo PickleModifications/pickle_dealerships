@@ -171,6 +171,46 @@ lib.callback.register("pickle_dealerships:adminResetDealership", function(source
     return { success = true, message = _L("admin_dealership_reset_msg") }
 end)
 
+--- Permanently delete a dealership and all related data (employees, stock, orders, coupons,
+--- ledger, financing, deliveries, auctions + bids). Unrecoverable — confirmation is handled client-side.
+lib.callback.register("pickle_dealerships:adminDeleteDealership", function(source, data)
+    if not IsPlayerAdmin(source) then
+        return { success = false, message = _L("admin_no_permission") }
+    end
+
+    local dealershipId = data.dealershipId
+    if not dealershipId then
+        return { success = false, message = _L("admin_missing_dealership_id") }
+    end
+
+    local dealership = GetDealership(dealershipId)
+    if not dealership then
+        return { success = false, message = _L("dealership_not_found") }
+    end
+
+    -- Auction bids reference auctions, not the dealership directly — wipe them first via subquery.
+    MySQL.update.await("DELETE FROM dealership_auction_bids WHERE auction_id IN (SELECT id FROM dealership_auctions WHERE dealership_id = ?)", { dealershipId })
+    MySQL.update.await("DELETE FROM dealership_auctions WHERE dealership_id = ?",   { dealershipId })
+    MySQL.update.await("DELETE FROM dealership_deliveries WHERE dealership_id = ?", { dealershipId })
+    MySQL.update.await("DELETE FROM dealership_financing WHERE dealership_id = ?",  { dealershipId })
+    MySQL.update.await("DELETE FROM dealership_ledger WHERE dealership_id = ?",     { dealershipId })
+    MySQL.update.await("DELETE FROM dealership_coupons WHERE dealership_id = ?",    { dealershipId })
+    MySQL.update.await("DELETE FROM dealership_orders WHERE dealership_id = ?",     { dealershipId })
+    MySQL.update.await("DELETE FROM dealership_stock WHERE dealership_id = ?",      { dealershipId })
+    MySQL.update.await("DELETE FROM dealership_employees WHERE dealership_id = ?",  { dealershipId })
+    MySQL.update.await("DELETE FROM dealerships WHERE id = ?",                      { dealershipId })
+
+    DealershipCache[tonumber(dealershipId)] = nil
+
+    local adminName = GetPlayerCharacterName(source) or GetPlayerName(source)
+    debugPrint("Admin " .. adminName .. " deleted dealership #" .. dealershipId .. " (" .. (dealership.label or "?") .. ")")
+
+    -- Seize-cache refresh covers clients that had this dealership flagged for seizure.
+    TriggerClientEvent('pickle_dealerships:refreshSeizeCache', -1)
+
+    return { success = true, message = _L("admin_dealership_deleted_msg") }
+end)
+
 --- Toggle dealership between public and player-owned mode
 lib.callback.register("pickle_dealerships:adminToggleMode", function(source, data)
     if not IsPlayerAdmin(source) then
@@ -244,9 +284,25 @@ lib.callback.register("pickle_dealerships:adminCreateDealership", function(sourc
     local mode = data.mode or "player-owned"
     local dealershipType = data.type or "car"
 
+    -- Optional positions placed inline in the create dialog (same pattern as depot create).
+    -- Each is { x, y, z, w } or nil. Coords is required for the dealership to be functional,
+    -- but we accept creation without it so admins can still place later on the positions tab.
+    local metadata = {}
+    if type(data.coords) == "table" and data.coords.x then
+        metadata.coords = { x = data.coords.x, y = data.coords.y, z = data.coords.z, w = data.coords.w or 0.0 }
+    end
+    if type(data.spawnPoint) == "table" and data.spawnPoint.x then
+        metadata.spawnPoint = { x = data.spawnPoint.x, y = data.spawnPoint.y, z = data.spawnPoint.z, w = data.spawnPoint.w or 0.0 }
+    end
+    if type(data.deliveryPoint) == "table" and data.deliveryPoint.x then
+        metadata.deliveryPoint = { x = data.deliveryPoint.x, y = data.deliveryPoint.y, z = data.deliveryPoint.z, w = data.deliveryPoint.w or 0.0 }
+    end
+
+    local metaJson = next(metadata) and json.encode(metadata) or nil
+
     local id = MySQL.insert.await(
-        "INSERT INTO dealerships (name, location, type, mode, tier, balance, reputation) VALUES (?, ?, ?, ?, 1, 0, 0)",
-        { data.label, "pending", dealershipType, mode }
+        "INSERT INTO dealerships (name, location, type, mode, tier, balance, reputation, metadata) VALUES (?, ?, ?, ?, 1, 0, 0, ?)",
+        { data.label, "pending", dealershipType, mode, metaJson }
     )
 
     if id then
@@ -293,7 +349,7 @@ lib.callback.register("pickle_dealerships:adminSavePosition", function(source, d
     local field = data.field
     local value = data.value
 
-    if field == "coords" or field == "spawnPoint" then
+    if field == "coords" or field == "spawnPoint" or field == "deliveryPoint" then
         metadata[field] = value
     elseif field == "displaySpot" then
         if not metadata.displaySpots then
@@ -359,7 +415,7 @@ lib.callback.register("pickle_dealerships:adminRemovePosition", function(source,
 
     local field = data.field
 
-    if field == "coords" or field == "spawnPoint" then
+    if field == "coords" or field == "spawnPoint" or field == "deliveryPoint" then
         metadata[field] = nil
     elseif field == "displaySpot" and metadata.displaySpots then
         local spotId = tonumber(data.spotId)
@@ -532,8 +588,10 @@ lib.callback.register("pickle_dealerships:adminRemoveCatalogVehicle", function(s
     return { success = true, message = _L("admin_vehicle_removed") }
 end)
 
---- Set dealership job
-lib.callback.register("pickle_dealerships:adminSetJob", function(source, data)
+--- Set dealership faction (job OR gang). `factionType` must be "job" or "gang".
+--- The faction name is stored in `dealerships.job` (legacy column kept for back-compat);
+--- the type lives in metadata.factionType.
+lib.callback.register("pickle_dealerships:adminSetFaction", function(source, data)
     if not IsPlayerAdmin(source) then
         return { success = false, message = _L("admin_no_permission") }
     end
@@ -548,13 +606,64 @@ lib.callback.register("pickle_dealerships:adminSetJob", function(source, data)
         return { success = false, message = _L("dealership_not_found") }
     end
 
-    local job = data.job
-    if job == "" then job = nil end
+    local factionName = data.name
+    if factionName == "" then factionName = nil end
 
-    MySQL.update.await("UPDATE dealerships SET job = ? WHERE id = ?", { job, dealershipId })
-    UpdateDealershipCache(dealershipId, { job = job })
+    local factionType = data.factionType
+    if factionType ~= "gang" then factionType = "job" end
 
-    return { success = true, message = _L("admin_job_set_to", job or "none") }
+    local meta = dealership.metadata
+    if type(meta) == "string" then meta = json.decode(meta) or {} end
+    if type(meta) ~= "table" then meta = {} end
+    if factionName then
+        meta.factionType = factionType
+    else
+        meta.factionType = nil
+    end
+
+    MySQL.update.await("UPDATE dealerships SET job = ?, metadata = ? WHERE id = ?", { factionName, json.encode(meta), dealershipId })
+    UpdateDealershipCache(dealershipId, { job = factionName, metadata = meta })
+
+    return { success = true, message = _L("admin_faction_set_to", factionType, factionName or "none") }
+end)
+
+
+--- Admin sets customer access rules for a dealership. Stored in metadata.
+--- mode: 'public' | 'faction' (only faction members can enter/purchase)
+--- minGrade: only enforced when mode = 'faction'
+lib.callback.register("pickle_dealerships:adminSetAccess", function(source, data)
+    if not IsPlayerAdmin(source) then
+        return { success = false, message = _L("admin_no_permission") }
+    end
+
+    local dealershipId = data.dealershipId
+    if not dealershipId then
+        return { success = false, message = _L("admin_missing_dealership_id") }
+    end
+
+    local dealership = GetDealership(dealershipId)
+    if not dealership then
+        return { success = false, message = _L("dealership_not_found") }
+    end
+
+    local mode = data.mode
+    if mode ~= "faction" then mode = "public" end
+
+    local meta = dealership.metadata
+    if type(meta) == "string" then meta = json.decode(meta) or {} end
+    if type(meta) ~= "table" then meta = {} end
+
+    meta.accessMode = mode
+    if mode == "faction" then
+        meta.accessMinGrade = math.max(0, math.floor(tonumber(data.minGrade) or 0))
+    else
+        meta.accessMinGrade = nil
+    end
+
+    MySQL.update.await("UPDATE dealerships SET metadata = ? WHERE id = ?", { json.encode(meta), dealershipId })
+    UpdateDealershipCache(dealershipId, { metadata = meta })
+
+    return { success = true, message = _L("admin_access_set_to", mode) }
 end)
 
 -- ─── Photo Booth ────────────────────────────────────────────────────────────

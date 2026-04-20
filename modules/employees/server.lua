@@ -5,35 +5,60 @@
 
 local OnDutyEmployees = {}
 
--- ─── Grade-to-role mapping ─────────────────────────────────────────────────
--- Determines role based on the player's job grade relative to the max grade
+-- ─── Faction helpers ───────────────────────────────────────────────────────
+-- The dealership's faction can be a job or a gang. These helpers dispatch to
+-- the appropriate bridge function so the rest of the module stays agnostic.
 
-local function GradeToRole(grade, maxGrade)
-    if grade >= maxGrade then
-        return 'owner'
-    elseif grade >= math.ceil(maxGrade / 2) then
-        return 'manager'
-    else
-        return 'salesperson'
+local function FactionGetGrades(faction)
+    if not faction or not faction.name or faction.name == "" then return {} end
+    if faction.type == "gang" then
+        return GetGangGrades and GetGangGrades(faction.name) or {}
     end
+    return GetJobGrades and GetJobGrades(faction.name) or {}
 end
 
-local function RoleToGrade(role, jobName)
-    local grades = GetJobGrades(jobName)
-    if not grades or #grades == 0 then return 0 end
-
-    local maxGrade = 0
-    for _, g in ipairs(grades) do
-        if g.level > maxGrade then maxGrade = g.level end
+local function FactionGetMembers(faction)
+    if not faction or not faction.name or faction.name == "" then return {} end
+    if faction.type == "gang" then
+        return GetGangMembers and GetGangMembers(faction.name) or {}
     end
+    return GetEmployees and GetEmployees(faction.name) or {}
+end
 
-    if role == 'owner' then
-        return maxGrade
-    elseif role == 'manager' then
-        return math.ceil(maxGrade / 2)
-    else
-        return 0
+local function PlayerFactionName(source, faction)
+    if faction and faction.type == "gang" then
+        return GetPlayerGangName and GetPlayerGangName(source) or nil
     end
+    return GetPlayerJobName and GetPlayerJobName(source) or nil
+end
+
+local function PlayerFactionGrade(source, faction)
+    if faction and faction.type == "gang" then
+        return GetPlayerGangGrade and GetPlayerGangGrade(source) or 0
+    end
+    return GetPlayerJobGrade and GetPlayerJobGrade(source) or 0
+end
+
+local function SetPlayerFaction(source, faction, grade)
+    if faction and faction.type == "gang" then
+        if SetPlayerGang then return SetPlayerGang(source, faction.name, grade) end
+        return false
+    end
+    if SetPlayerJob then SetPlayerJob(source, faction.name, grade) end
+    return true
+end
+
+-- Employees are identified by their actual framework grade (number) and the
+-- grade label pulled live from the framework. We no longer map grades to
+-- synthetic owner/manager/salesperson roles — those were stale and fought
+-- with per-grade commission configuration.
+
+--- Looks up the framework grade label for `grade` on this faction.
+local function FactionGradeLabel(faction, grade)
+    for _, g in ipairs(FactionGetGrades(faction) or {}) do
+        if tonumber(g.level) == tonumber(grade) then return g.label end
+    end
+    return ("Grade " .. tostring(grade))
 end
 
 -- ─── Hire Employee ──────────────────────────────────────────────────────────
@@ -41,7 +66,7 @@ end
 lib.callback.register("pickle_dealerships:hireEmployee", function(source, data)
     local dealershipId = tonumber(data.dealershipId)
     local targetId = tonumber(data.targetId)
-    local role = data.role or "salesperson"
+    local grade = tonumber(data.grade) or 0
 
     if not dealershipId or not targetId then
         return { success = false, message = _L("invalid_request") }
@@ -56,8 +81,19 @@ lib.callback.register("pickle_dealerships:hireEmployee", function(source, data)
         return { success = false, message = _L("dealership_not_found") }
     end
 
-    if not dealership.job or dealership.job == "" then
+    local faction = GetDealershipFaction(dealership)
+    if not faction.name or faction.name == "" then
         return { success = false, message = _L("dealership_no_job") }
+    end
+
+    -- Validate grade exists on this faction so admins can't hire someone into a
+    -- phantom level that commission rates can't reach.
+    local gradeLabel
+    for _, g in ipairs(FactionGetGrades(faction) or {}) do
+        if tonumber(g.level) == grade then gradeLabel = g.label; break end
+    end
+    if not gradeLabel then
+        return { success = false, message = _L("employees_invalid_grade") }
     end
 
     -- Validate target player exists
@@ -66,21 +102,21 @@ lib.callback.register("pickle_dealerships:hireEmployee", function(source, data)
         return { success = false, message = _L("target_player_not_found") }
     end
 
-    -- Check if target already has this job
-    local targetJob = GetPlayerJobName(targetId)
-    if targetJob == dealership.job then
+    -- Check if target already belongs to this faction
+    local targetFactionName = PlayerFactionName(targetId, faction)
+    if targetFactionName == faction.name then
         return { success = false, message = _L("employee_already_works") }
     end
 
-    -- Set their framework job
-    local grade = RoleToGrade(role, dealership.job)
-    SetPlayerJob(targetId, dealership.job, grade)
+    if not SetPlayerFaction(targetId, faction, grade) then
+        return { success = false, message = _L("faction_set_failed") }
+    end
 
     local charName = GetPlayerCharacterName(targetId)
-    AddLedgerEntry(dealershipId, "employee_hire", 0, ("Hired %s as %s"):format(charName, role), GetIdentifier(targetId))
+    AddLedgerEntry(dealershipId, "employee_hire", 0, ("Hired %s as %s"):format(charName, gradeLabel), GetIdentifier(targetId))
 
-    ShowNotification(source, _L("employee_hired_notify", charName, role))
-    ShowNotification(targetId, _L("employee_hired_target", role, dealership.name))
+    -- The target's framework will already emit its own "you've been assigned X" notification
+    -- when SetPlayerFaction runs; skip ours to avoid the duplicate toast on the new hire.
 
     return { success = true, message = _L("employee_hired_success", charName) }
 end)
@@ -90,8 +126,9 @@ end)
 lib.callback.register("pickle_dealerships:fireEmployee", function(source, data)
     local dealershipId = tonumber(data.dealershipId)
     local targetServerId = tonumber(data.targetServerId)
+    local targetIdentifier = data.targetIdentifier  -- used when target is offline
 
-    if not dealershipId or not targetServerId then
+    if not dealershipId or (not targetServerId and not targetIdentifier) then
         return { success = false, message = _L("invalid_request") }
     end
 
@@ -104,42 +141,66 @@ lib.callback.register("pickle_dealerships:fireEmployee", function(source, data)
         return { success = false, message = _L("dealership_not_found_no_job") }
     end
 
-    -- Verify target has this job
-    local targetJob = GetPlayerJobName(targetServerId)
-    if targetJob ~= dealership.job then
-        return { success = false, message = _L("employee_not_at_dealership") }
-    end
+    local faction = GetDealershipFaction(dealership)
 
     -- Cannot fire yourself
-    if targetServerId == source then
+    if targetServerId and targetServerId == source then
         return { success = false, message = _L("cannot_fire_self") }
     end
 
-    -- Check hierarchy: managers can't fire managers
-    local myGrade = GetPlayerJobGrade(source)
-    local targetGrade = GetPlayerJobGrade(targetServerId)
-    if targetGrade >= myGrade then
-        return { success = false, message = _L("cannot_fire_higher_rank") }
+    -- Resolve identifier + a display name that works for both online and offline targets.
+    local charName, effectiveIdentifier
+    if targetServerId then
+        local targetFactionName = PlayerFactionName(targetServerId, faction)
+        if targetFactionName ~= faction.name then
+            return { success = false, message = _L("employee_not_at_dealership") }
+        end
+
+        local myGrade = PlayerFactionGrade(source, faction)
+        local targetGrade = PlayerFactionGrade(targetServerId, faction)
+        if targetGrade >= myGrade then
+            return { success = false, message = _L("cannot_fire_higher_rank") }
+        end
+
+        charName = GetPlayerCharacterName(targetServerId)
+        effectiveIdentifier = GetIdentifier(targetServerId)
+        if faction.type == "gang" then
+            if SetPlayerGang then SetPlayerGang(targetServerId, 'none', 0) end
+        else
+            SetPlayerJob(targetServerId, 'unemployed', 0)
+        end
+    else
+        effectiveIdentifier = targetIdentifier
+        local row = MySQL.single.await(
+            "SELECT charinfo FROM players WHERE citizenid = ? LIMIT 1",
+            { targetIdentifier }
+        )
+        if row and row.charinfo then
+            local info = type(row.charinfo) == "string" and (json.decode(row.charinfo) or {}) or row.charinfo
+            charName = (info.firstname or "Unknown") .. " " .. (info.lastname or "")
+        else
+            charName = targetIdentifier
+        end
+
+        if SetFactionByIdentifier then
+            SetFactionByIdentifier(faction.type, targetIdentifier, faction.type == "gang" and "none" or "unemployed", 0)
+        end
     end
 
-    local charName = GetPlayerCharacterName(targetServerId)
-    SetPlayerJob(targetServerId, 'unemployed', 0)
-
-    AddLedgerEntry(dealershipId, "employee_fire", 0, ("Fired %s"):format(charName), GetIdentifier(targetServerId))
-    ShowNotification(source, _L("employee_fired_notify", charName))
-    ShowNotification(targetServerId, _L("employee_fired_target"))
+    AddLedgerEntry(dealershipId, "employee_fire", 0, ("Fired %s"):format(charName), effectiveIdentifier)
+    -- Framework notifies online targets via its own job-change flow; skip our duplicate toast.
 
     return { success = true, message = _L("employee_fired_success", charName) }
 end)
 
--- ─── Set Employee Role (change job grade) ──────────────────────────────────
+-- ─── Set Employee Grade (change faction grade directly) ────────────────────
 
-lib.callback.register("pickle_dealerships:setEmployeeRole", function(source, data)
+lib.callback.register("pickle_dealerships:setEmployeeGrade", function(source, data)
     local dealershipId = tonumber(data.dealershipId)
     local targetServerId = tonumber(data.targetServerId)
-    local newRole = data.role
+    local grade = tonumber(data.grade)
 
-    if not dealershipId or not targetServerId or not newRole then
+    if not dealershipId or not targetServerId or grade == nil then
         return { success = false, message = _L("invalid_request") }
     end
 
@@ -148,25 +209,25 @@ lib.callback.register("pickle_dealerships:setEmployeeRole", function(source, dat
         return { success = false, message = _L("dealership_not_found_no_job") }
     end
 
-    -- Only owner/admin can change roles
+    -- Only owner/admin can change grades
     local myRole = GetPlayerDealershipRole(source, dealershipId)
     if myRole ~= "owner" and not IsPlayerAdmin(source) then
         return { success = false, message = _L("only_owner_change_roles") }
     end
 
-    local targetJob = GetPlayerJobName(targetServerId)
-    if targetJob ~= dealership.job then
+    local faction = GetDealershipFaction(dealership)
+    local targetFactionName = PlayerFactionName(targetServerId, faction)
+    if targetFactionName ~= faction.name then
         return { success = false, message = _L("employee_not_at_dealership") }
     end
 
-    local grade = RoleToGrade(newRole, dealership.job)
-    SetPlayerJob(targetServerId, dealership.job, grade)
+    local gradeLabel = FactionGradeLabel(faction, grade)
 
-    local charName = GetPlayerCharacterName(targetServerId)
-    ShowNotification(source, _L("employee_role_changed_notify", charName, newRole))
-    ShowNotification(targetServerId, _L("employee_role_changed_target", newRole))
+    SetPlayerFaction(targetServerId, faction, grade)
 
-    return { success = true, message = _L("employee_role_updated", newRole) }
+    -- Framework handles the target-side "you were promoted" notification.
+
+    return { success = true, message = _L("employee_role_updated", gradeLabel) }
 end)
 
 -- ─── Get Employees (from framework job) ────────────────────────────────────
@@ -178,36 +239,83 @@ lib.callback.register("pickle_dealerships:getEmployees", function(source, data)
     local dealership = GetDealership(dealershipId)
     if not dealership then return { employees = {} } end
 
-    if not dealership.job or dealership.job == "" then
+    local faction = GetDealershipFaction(dealership)
+    if not faction.name or faction.name == "" then
         return { employees = {} }
     end
 
-    -- Get online employees from the framework
-    local jobEmployees = GetEmployees(dealership.job)
-    local grades = GetJobGrades(dealership.job)
-    local maxGrade = 0
-    for _, g in ipairs(grades) do
-        if g.level > maxGrade then maxGrade = g.level end
+    -- Get online members from the appropriate framework source (job or gang)
+    local jobEmployees = FactionGetMembers(faction)
+
+    -- Pull all saved per-employee commission overrides for this dealership in one query and
+    -- index by identifier so we can attach them to the online list without N+1 lookups.
+    local overrideByIdentifier = {}
+    local overrideRows = MySQL.query.await(
+        "SELECT `identifier`, `commission_rate` FROM `dealership_employees` WHERE `dealership_id` = ?",
+        { dealershipId }
+    ) or {}
+    for _, row in ipairs(overrideRows) do
+        overrideByIdentifier[row.identifier] = tonumber(row.commission_rate) or 0
     end
 
     local employees = {}
     for _, emp in ipairs(jobEmployees) do
-        local role = GradeToRole(emp.grade, maxGrade)
+        -- Prefer the identifier the bridge populated (works for both online and
+        -- offline members); fall back to resolving from source for older bridges
+        -- that only set `source`.
+        local identifier = emp.identifier or (emp.source and GetIdentifier(emp.source)) or nil
+        local override = identifier and overrideByIdentifier[identifier] or 0
         employees[#employees + 1] = {
-            id = emp.source, -- use server ID as the identifier
+            id = emp.source or identifier,
             serverId = emp.source,
-            identifier = GetIdentifier(emp.source),
+            identifier = identifier,
             name = emp.name,
-            role = role,
             gradeLabel = emp.gradeLabel,
             grade = emp.grade,
-            commission_rate = Config.DefaultCommission or 0.08,
-            clocked_in = OnDutyEmployees[emp.source] ~= nil,
-            online = true,
+            -- Percentage (0-100). 0 means "no override — use the dealership grade rate".
+            commission_override = override,
+            clocked_in = emp.source and OnDutyEmployees[emp.source] ~= nil or false,
+            online = emp.online ~= false, -- nil defaults to true for back-compat
         }
     end
 
     return { employees = employees }
+end)
+
+--- Owner/manager sets a per-employee commission override (percentage, 0-100). Set to 0 to
+--- clear the override and fall back to the dealership's grade-based rate. Upserts the row
+--- so employees who haven't been "hired" in the DB yet still get their override persisted.
+lib.callback.register("pickle_dealerships:setEmployeeCommissionOverride", function(source, data)
+    local dealershipId = tonumber(data.dealershipId)
+    if not dealershipId then return { success = false, message = "Invalid dealership." } end
+    if not CanPlayerManage(source, dealershipId) then
+        return { success = false, message = "You do not have permission." }
+    end
+
+    local targetIdentifier = data.identifier
+    if not targetIdentifier or targetIdentifier == "" then
+        return { success = false, message = "Missing target identifier." }
+    end
+
+    local rate = math.max(0, math.min(100, tonumber(data.rate) or 0))
+
+    local existing = MySQL.single.await(
+        "SELECT `id` FROM `dealership_employees` WHERE `dealership_id` = ? AND `identifier` = ? LIMIT 1",
+        { dealershipId, targetIdentifier }
+    )
+    if existing and existing.id then
+        MySQL.update.await(
+            "UPDATE `dealership_employees` SET `commission_rate` = ? WHERE `id` = ?",
+            { rate, existing.id }
+        )
+    else
+        MySQL.insert.await(
+            "INSERT INTO `dealership_employees` (`dealership_id`, `identifier`, `role`, `commission_rate`) VALUES (?, ?, ?, ?)",
+            { dealershipId, targetIdentifier, 'salesperson', rate }
+        )
+    end
+
+    return { success = true }
 end)
 
 -- ─── Clock In/Out ──────────────────────────────────────────────────────────
@@ -228,8 +336,9 @@ lib.callback.register("pickle_dealerships:clockIn", function(source, data)
     elseif dealership.owner_identifier and dealership.owner_identifier == GetIdentifier(source) then
         canClockIn = true
     elseif dealership.job then
-        local playerJob = GetPlayerJobName(source)
-        if playerJob == dealership.job then
+        local faction = GetDealershipFaction(dealership)
+        local playerFaction = PlayerFactionName(source, faction)
+        if playerFaction == faction.name then
             canClockIn = true
         end
     else

@@ -29,39 +29,21 @@ lib.callback.register('pickle_dealerships:getCatalog', function(source, data)
         types = { vehicleType }
     end
 
-    -- Get access level for this tier
-    local accessLevel = Config.Tiers[tier] and Config.Tiers[tier].catalogAccess or 'basic'
-    local hierarchy = { basic = 1, expanded = 2, full = 3, exclusive = 4 }
-    local accessNum = hierarchy[accessLevel] or 1
-
-    -- Tiers the dealership can access
-    local allowedTiers = {}
-    for tierName, tierNum in pairs(hierarchy) do
-        if tierNum <= accessNum then
-            allowedTiers[#allowedTiers + 1] = tierName
-        end
-    end
-
-    if #allowedTiers == 0 then return { items = {}, total = 0, page = 1, pageSize = pageSize } end
-
-    -- Build query with placeholders
+    -- Return all tiers the server knows about for this vehicle type. The client
+    -- renders above-tier rows as locked with a "Unlocks at Level N" overlay so
+    -- owners can see what's ahead. Gating for orders still runs server-side in
+    -- orderVehicle, so exposing the list here is safe.
     local typePlaceholders = {}
-    local tierPlaceholders = {}
     local params = {}
 
     for _, t in ipairs(types) do
         typePlaceholders[#typePlaceholders + 1] = '?'
         params[#params + 1] = t
     end
-    for _, t in ipairs(allowedTiers) do
-        tierPlaceholders[#tierPlaceholders + 1] = '?'
-        params[#params + 1] = t
-    end
 
     local where = string.format(
-        'vehicle_type IN (%s) AND tier IN (%s)',
-        table.concat(typePlaceholders, ','),
-        table.concat(tierPlaceholders, ',')
+        'vehicle_type IN (%s)',
+        table.concat(typePlaceholders, ',')
     )
 
     if search ~= '' then
@@ -300,20 +282,23 @@ local function NormalizeDeliveryMode(mode)
 end
 
 --- Pure cost calculator used both by the stock order flow and by the UI cost-preview callback.
---- Local mode: dealership pays MSRP (retail). Driver earns `payoutPct` of MSRP — paid from within that total, not on top.
---- Expedited mode: wholesale + import tax + surcharge. Surcharge sinks to the server (no player receives it).
+--- Local mode: FREE for the dealership — the server foots the driver's payout.
+--- This is the incentive to route orders through real players instead of expedited.
+--- Expedited mode: wholesale + import tax + configurable surcharge (Config.Delivery.expeditedFeePct).
+---                  The surcharge sinks to the server (no player receives it).
 --- Returns: { unitCost, totalCost, deliveryFee, retailPrice } (all integers, per-order totals).
 function ResolveOwnerOrderCost(mode, wholesalePrice, retailPrice, qty)
     mode = NormalizeDeliveryMode(mode)
     local importTax = Config.ImportTax or 0
     local cfg = Config.Delivery or {}
-    local unitCost, deliveryFee = wholesalePrice * (1 + importTax), 0
+    local unitCost, deliveryFee = 0, 0
 
     if mode == 'expedited' then
-        unitCost = unitCost + wholesalePrice * (cfg.expeditedFeePct or 0)
+        unitCost = wholesalePrice * (1 + importTax) + wholesalePrice * (cfg.expeditedFeePct or 0)
     elseif mode == 'local' then
-        -- Dealership pays MSRP up front; the driver's fee is a slice of that MSRP.
-        unitCost = retailPrice
+        -- Dealership pays $0. The driver's payout is still calculated (for display
+        -- and for the driver earnings pipeline) but paid by the server, not the lot.
+        unitCost = 0
         deliveryFee = math.floor(retailPrice * (cfg.payoutPct or 0))
     end
 
@@ -388,6 +373,17 @@ lib.callback.register('pickle_dealerships:orderVehicle', function(source, locati
     if resolvedMode == 'local' then
         if not next(Config.DeliveryRoutes or {}) then
             return false, 'No delivery routes configured.'
+        end
+        -- Local deliveries require the dealership to have a configured drop-off point so the
+        -- driver has somewhere to unhitch the trailer. Block placement otherwise.
+        local dropMeta = meta or {}
+        if type(dealership.metadata) == 'string' then
+            dropMeta = json.decode(dealership.metadata) or {}
+        elseif type(dealership.metadata) == 'table' then
+            dropMeta = dealership.metadata
+        end
+        if not dropMeta.deliveryPoint then
+            return false, 'This dealership has no delivery point configured. Ask an admin to place one before ordering locally.'
         end
         local cfg = Config.Delivery or {}
         local openOffers = MySQL.scalar.await(
@@ -476,14 +472,16 @@ lib.callback.register('pickle_dealerships:orderVehicle', function(source, locati
         )
     end
 
-    -- Create ledger entry
-    local desc = ('Vehicle order (%s): %s x%d'):format(resolvedMode, model, qty)
-    MySQL.insert.await(
-        'INSERT INTO dealership_ledger (dealership_id, type, amount, description, identifier, created_at) VALUES (?, ?, ?, ?, ?, NOW())',
-        { dealership.id, 'expense', -totalCost, desc, identifier }
-    )
+    -- Ledger entry only for paid orders — local mode is free to the dealership.
+    if totalCost > 0 then
+        local desc = ('Vehicle order (%s): %s x%d'):format(resolvedMode, model, qty)
+        MySQL.insert.await(
+            'INSERT INTO dealership_ledger (dealership_id, type, amount, description, identifier, created_at) VALUES (?, ?, ?, ?, ?, NOW())',
+            { dealership.id, 'expense', -totalCost, desc, identifier }
+        )
+    end
 
-    ShowNotification(source, _L('stock_ordered_server', qty, model, GetCurrencyString(totalCost)))
+    -- Success toast is delivered by the NUI wrapper; avoid double-notifying.
     TriggerClientEvent('pickle_dealerships:refreshDisplay', -1, locationKey)
     TriggerClientEvent('pickle_dealerships:deliveryQueueChanged', -1)
 
@@ -551,6 +549,49 @@ lib.callback.register('pickle_dealerships:setRetailPrice', function(source, loca
     return true
 end)
 
+--- Owner/manager sets the minimum faction grade required to purchase a stock item.
+--- Grade is scoped to the dealership's assigned job/gang (dealership.job). A minGrade
+--- of 0 or nil removes the restriction. The value is persisted in dealership_stock.metadata.
+---@param locationKey string
+---@param stockId number
+---@param minGrade number|nil
+lib.callback.register('pickle_dealerships:setStockMinGrade', function(source, locationKey, stockId, minGrade)
+    local identifier = GetIdentifier(source)
+    if not identifier then return false, 'Unable to identify player.' end
+
+    local dealership = MySQL.single.await(
+        'SELECT * FROM dealerships WHERE location = ?',
+        { locationKey }
+    )
+    if not dealership then return false, 'Dealership not found.' end
+    if not CanPlayerManage(source, dealership.id) then return false, 'You do not have permission.' end
+
+    local stock = MySQL.single.await(
+        'SELECT id, metadata, vehicle_label FROM dealership_stock WHERE id = ? AND dealership_id = ? AND sold_at IS NULL',
+        { stockId, dealership.id }
+    )
+    if not stock then return false, 'Stock item not found.' end
+
+    local meta = stock.metadata
+    if type(meta) == 'string' then meta = json.decode(meta) or {} end
+    if type(meta) ~= 'table' then meta = {} end
+
+    local clamped = tonumber(minGrade)
+    if not clamped or clamped <= 0 then
+        meta.minGrade = nil
+    else
+        meta.minGrade = math.floor(clamped)
+    end
+
+    MySQL.update.await(
+        'UPDATE dealership_stock SET metadata = ? WHERE id = ?',
+        { json.encode(meta), stockId }
+    )
+
+    ShowNotification(source, _L('stock_min_grade_updated', stock.vehicle_label or 'Vehicle'), 'success')
+    return true, meta.minGrade or 0
+end)
+
 --- Owner/manager toggles the unlisted flag on a stock item
 lib.callback.register('pickle_dealerships:toggleUnlisted', function(source, locationKey, stockId)
     local identifier = GetIdentifier(source)
@@ -606,6 +647,30 @@ end)
 ---@param locationKey string
 ---@param stockId number
 ---@param spot number|nil
+--- Returns the stock row currently assigned to `spotId` at this dealership, or nil.
+--- Used by the client's targeted single-spot refresh to avoid re-fetching the
+--- whole stock list when only one spot changed.
+lib.callback.register('pickle_dealerships:getStockAtSpot', function(_, locationKey, spotId)
+    if not locationKey or not spotId then return nil end
+    local dealership = MySQL.single.await('SELECT id FROM dealerships WHERE location = ?', { locationKey })
+    if not dealership then return nil end
+
+    local row = MySQL.single.await([[
+        SELECT ds.*, wc.image, wc.class
+        FROM dealership_stock ds
+        LEFT JOIN wholesale_catalog wc ON wc.model = ds.vehicle_model
+        WHERE ds.dealership_id = ?
+          AND ds.display_spot = ?
+          AND ds.sold_at IS NULL
+          AND ds.delivered_at IS NOT NULL
+          AND ds.delivered_at <= NOW()
+          AND (ds.unlisted IS NULL OR ds.unlisted = 0)
+        LIMIT 1
+    ]], { dealership.id, tonumber(spotId) })
+
+    return row
+end)
+
 lib.callback.register('pickle_dealerships:setDisplaySpot', function(source, locationKey, stockId, spot)
     local identifier = GetIdentifier(source)
     if not identifier then return false, 'Unable to identify player.' end
@@ -636,6 +701,17 @@ lib.callback.register('pickle_dealerships:setDisplaySpot', function(source, loca
     if not stock then return false, 'Stock item not found.' end
     if spot and (stock.unlisted == 1 or stock.unlisted == true) then return false, 'Cannot display an unlisted vehicle.' end
 
+    -- Track every spot that changed so the clients can do a surgical re-render
+    -- instead of tearing down + rebuilding the whole lot.
+    local affectedSpots = {}
+    local function markSpot(s)
+        s = tonumber(s)
+        if s then affectedSpots[s] = true end
+    end
+
+    -- The stock item's current spot (if any) is about to be vacated.
+    if stock.display_spot then markSpot(stock.display_spot) end
+
     if spot then
         -- Check if spot is already occupied by another vehicle
         local existing = MySQL.single.await(
@@ -655,6 +731,7 @@ lib.callback.register('pickle_dealerships:setDisplaySpot', function(source, loca
             'UPDATE dealership_stock SET display_spot = ? WHERE id = ?',
             { spot, stockId }
         )
+        markSpot(spot)
     else
         MySQL.update.await(
             'UPDATE dealership_stock SET display_spot = NULL WHERE id = ?',
@@ -662,9 +739,12 @@ lib.callback.register('pickle_dealerships:setDisplaySpot', function(source, loca
         )
     end
 
-    -- Notify clients to refresh display
-    TriggerClientEvent('pickle_dealerships:refreshDisplay', -1, locationKey)
+    local spotList = {}
+    for s in pairs(affectedSpots) do spotList[#spotList + 1] = s end
 
+    -- Notify clients: pass the affected spot IDs so only those re-render.
+    TriggerClientEvent('pickle_dealerships:refreshDisplay', -1, locationKey, spotList)
+    
     ShowNotification(source, spot and _L('stock_display_spot_set', spot) or _L('stock_display_removed_server'), 'success')
     return true
 end)

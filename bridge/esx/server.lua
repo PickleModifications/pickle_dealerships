@@ -196,6 +196,45 @@ function GetPlayerJobGrade(source)
     return xPlayer.job.grade or 0
 end
 
+function GetPlayerGangName(_)
+    -- ESX has no native gang concept; frameworks extending ESX can override this bridge.
+    return nil
+end
+
+function GetPlayerGangGrade(_)
+    return 0
+end
+
+function SetPlayerGang(_, _, _)
+    return false
+end
+
+--- ESX doesn't natively track gangs; fallback to job only.
+function SetFactionByIdentifier(factionType, identifier, factionName, grade)
+    if factionType == "gang" or not identifier or not factionName then return false end
+    local src = GetSourceFromIdentifier(identifier)
+    if src then
+        SetPlayerJob(src, factionName, grade)
+        return true
+    end
+    local ok = pcall(function()
+        MySQL.update.await(
+            "UPDATE users SET job = ?, job_grade = ? WHERE identifier = ?",
+            { factionName, tonumber(grade) or 0, identifier }
+        )
+    end)
+    return ok
+end
+
+function GetGangGrades(_)
+    return {}
+end
+
+function GetGangMembers(_, cb)
+    if type(cb) == "function" then cb({}) end
+    return {}
+end
+
 function SetPlayerJob(source, job, grade)
     local xPlayer = ESX.GetPlayerFromId(tonumber(source))
     if not xPlayer then return end

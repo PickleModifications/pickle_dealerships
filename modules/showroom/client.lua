@@ -155,6 +155,12 @@ local function CleanupShowroom(skipFadeIn)
     if not ShowroomState then return end
 
     local locationKey = ShowroomState.locationKey
+    -- Picker mode: we hid the original vehicle when opening and setDisplaySpot
+    -- may or may not have run. Fire a targeted single-spot refresh on close so
+    -- whichever state the DB holds (new vehicle placed, or original restored
+    -- because the user cancelled) ends up rendered — without thrashing the
+    -- rest of the lot.
+    local pickerSpotId = ShowroomState.pickerSpotId
 
     ShowroomCamThread = nil
     CloseNui()
@@ -175,7 +181,10 @@ local function CleanupShowroom(skipFadeIn)
 
     -- Restore player
     local ped = PlayerPedId()
-    SetEntityCoords(ped, ShowroomState.savedCoords.x, ShowroomState.savedCoords.y, ShowroomState.savedCoords.z, false, false, false, false)
+    -- Place the ped 1u below the saved Z so physics pushes them up onto the
+    -- actual ground as collision streams in, instead of spawning slightly in
+    -- the air and visibly dropping on fade-in.
+    SetEntityCoords(ped, ShowroomState.savedCoords.x, ShowroomState.savedCoords.y, ShowroomState.savedCoords.z - 1.0, false, false, false, false)
     SetEntityHeading(ped, ShowroomState.savedHeading)
     FreezeEntityPosition(ped, false)
     SetEntityVisible(ped, true, false)
@@ -191,8 +200,15 @@ local function CleanupShowroom(skipFadeIn)
         while not IsScreenFadedIn() do Wait(0) end
     end
 
-    -- Refresh display vehicles in case a purchase was made
-    TriggerEvent('pickle_dealerships:refreshDisplay', locationKey)
+    -- Picker mode: re-render just the affected spot so whatever the DB holds
+    -- (new placement or restored original on cancel) comes back without
+    -- thrashing the whole lot. Regular showroom: do the full refresh so any
+    -- purchase-driven stock changes propagate.
+    if pickerSpotId then
+        TriggerEvent('pickle_dealerships:refreshDisplay', locationKey, { pickerSpotId })
+    else
+        TriggerEvent('pickle_dealerships:refreshDisplay', locationKey)
+    end
 end
 
 --- Main entry point: opens the immersive showroom
@@ -264,6 +280,155 @@ function StartShowroom(locationKey, dealershipData)
 
     DoScreenFadeIn(500)
 end
+
+--- Public helper: returns the spot id the picker is currently previewing, or nil.
+--- Other modules (stock/client.lua) use this to suppress the display-spot
+--- re-render that fires when setDisplaySpot broadcasts — otherwise the new
+--- vehicle spawns behind the camera while the player is still in the menu.
+function GetActivePickerSpotId()
+    return ShowroomState and ShowroomState.pickerSpotId or nil
+end
+
+--- Customer-facing spot view: centers the camera on the spot's own coords and
+--- opens the showroom seeded with the specific stock item on that spot. No
+--- sidebar (single-vehicle view); the normal purchase / finance flow is still
+--- available through the bottom action bar.
+RegisterNetEvent('pickle_dealerships:openSpotView', function(locationKey, spotId, spotCoords, stockId)
+    if ShowroomState then return end
+    if not locationKey or not spotCoords or not spotCoords.x then return end
+
+    local dealershipData = lib.callback.await('pickle_dealerships:getDealershipData', false, locationKey)
+    if not dealershipData then return end
+
+    local spawnCoords = vector4(spotCoords.x, spotCoords.y, spotCoords.z, spotCoords.w or 0.0)
+
+    local ped = PlayerPedId()
+    local savedCoords = GetEntityCoords(ped)
+    local savedHeading = GetEntityHeading(ped)
+
+    DoScreenFadeOut(500)
+    while not IsScreenFadedOut() do Wait(0) end
+
+    FreezeEntityPosition(ped, true)
+    SetEntityVisible(ped, false, false)
+    DisplayRadar(false)
+    DisplayHud(false)
+
+    local initAngle = math.rad(225.0)
+    local defaultRadius = 6.0
+    local center = vector3(spawnCoords.x, spawnCoords.y, spawnCoords.z + 0.5)
+    local cam = CreateCam("DEFAULT_SCRIPTED_CAMERA", true)
+    SetCamCoord(cam, center.x + defaultRadius * math.cos(initAngle), center.y + defaultRadius * math.sin(initAngle), center.z)
+    PointCamAtCoord(cam, center.x, center.y, center.z)
+    SetCamActive(cam, true)
+    RenderScriptCams(true, false, 0, true, true)
+
+    local role = lib.callback.await('pickle_dealerships:getPlayerRole', false, locationKey) or 'customer'
+
+    ShowroomState = {
+        vehicle = nil,
+        cam = cam,
+        locationKey = locationKey,
+        spawnCoords = spawnCoords,
+        savedCoords = savedCoords,
+        savedHeading = savedHeading,
+        currentModel = nil,
+        orbitAngle = initAngle,
+        orbitPitch = 0.0,
+        orbitRadius = defaultRadius,
+        targetCenter = center,
+        spotViewStockId = stockId,
+        spotViewSpotId = spotId,
+    }
+
+    StartShowroomCamThread()
+
+    -- Hide the actual display vehicle (if any) so the showroom's preview
+    -- vehicle isn't stacked on top of it.
+    TriggerEvent('pickle_dealerships:spotPickerOpened', locationKey, spotId)
+
+    OpenNui('showroom', {
+        dealershipId = dealershipData.id,
+        dealershipName = dealershipData.name,
+        role = role,
+        tier = dealershipData.tier,
+        location = locationKey,
+        spotViewStockId = stockId,
+    })
+
+    DoScreenFadeIn(500)
+end)
+
+--- Walk-up display-spot picker: reuses the showroom camera/UI but centers on
+--- the spot's own coords so the owner can preview each vehicle exactly where
+--- it'll sit. Confirming writes the stock→spot assignment via setDisplaySpot.
+RegisterNetEvent('pickle_dealerships:openSpotPicker', function(locationKey, spotId, spotCoords)
+    if ShowroomState then return end
+    if not locationKey or not spotId or not spotCoords or not spotCoords.x then return end
+
+    local dealershipData = lib.callback.await('pickle_dealerships:getDealershipData', false, locationKey)
+    if not dealershipData then return end
+
+    local spawnCoords = vector4(spotCoords.x, spotCoords.y, spotCoords.z, spotCoords.w or 0.0)
+
+    local ped = PlayerPedId()
+    local savedCoords = GetEntityCoords(ped)
+    local savedHeading = GetEntityHeading(ped)
+
+    DoScreenFadeOut(500)
+    while not IsScreenFadedOut() do Wait(0) end
+
+    FreezeEntityPosition(ped, true)
+    SetEntityVisible(ped, false, false)
+    DisplayRadar(false)
+    DisplayHud(false)
+
+    local initAngle = math.rad(225.0)
+    local defaultRadius = 6.0
+    local center = vector3(spawnCoords.x, spawnCoords.y, spawnCoords.z + 0.5)
+    local camX = center.x + defaultRadius * math.cos(initAngle)
+    local camY = center.y + defaultRadius * math.sin(initAngle)
+    local camZ = center.z
+    local cam = CreateCam("DEFAULT_SCRIPTED_CAMERA", true)
+    SetCamCoord(cam, camX, camY, camZ)
+    PointCamAtCoord(cam, center.x, center.y, center.z)
+    SetCamActive(cam, true)
+    RenderScriptCams(true, false, 0, true, true)
+
+    ShowroomState = {
+        vehicle = nil,
+        cam = cam,
+        locationKey = locationKey,
+        spawnCoords = spawnCoords,
+        savedCoords = savedCoords,
+        savedHeading = savedHeading,
+        currentModel = nil,
+        orbitAngle = initAngle,
+        orbitPitch = 0.0,
+        orbitRadius = defaultRadius,
+        targetCenter = center,
+        pickerSpotId = spotId, -- flag so the NUI renders the Place Here button
+    }
+
+    -- Hide whatever is currently rendered at this spot (if any) so the showroom
+    -- camera isn't pointed at two cars stacked on each other. stock/client.lua
+    -- listens for this event and surgically deletes the display vehicle without
+    -- touching the DB. CleanupShowroom will restore or replace it on close.
+    TriggerEvent('pickle_dealerships:spotPickerOpened', locationKey, spotId)
+
+    StartShowroomCamThread()
+
+    OpenNui('showroom', {
+        dealershipId = dealershipData.id,
+        dealershipName = dealershipData.name,
+        role = 'admin',
+        tier = dealershipData.tier,
+        location = locationKey,
+        pickerSpotId = spotId,
+    })
+
+    DoScreenFadeIn(500)
+end)
 
 -- ─── NUI Callbacks ──────────────────────────────────────────────────────────
 

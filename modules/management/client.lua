@@ -1,3 +1,8 @@
+RegisterNUICallback("getDealershipProgression", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:getDealershipProgression", false, data.dealershipId)
+    cb({ progression = result })
+end)
+
 RegisterNUICallback("getDealershipFinances", function(data, cb)
     local result = lib.callback.await("pickle_dealerships:getDealershipFinances", false, data.dealershipId)
     if result then
@@ -109,8 +114,7 @@ end)
 RegisterNUICallback("setCommissionRates", function(data, cb)
     local result = lib.callback.await("pickle_dealerships:setCommissionRates", false, {
         dealershipId = data.dealershipId,
-        salesperson  = data.salesperson,
-        manager      = data.manager,
+        rates        = data.rates, -- [{ level, rate }, ...]
     })
     if result and result.success then
         ShowNotification(result.message)
@@ -119,6 +123,57 @@ RegisterNUICallback("setCommissionRates", function(data, cb)
         ShowNotification(result and result.message or _L("management_commission_update_failed"))
         cb({ success = false, message = result and result.message or _L("management_commission_update_failed") })
     end
+end)
+
+RegisterNUICallback("getAcceptedAltCurrencies", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:getAcceptedAltCurrencies", false, data.dealershipId)
+    if result then
+        cb({ success = true, available = result.available or {}, accepted = result.accepted or {} })
+    else
+        cb({ success = false, available = {}, accepted = {} })
+    end
+end)
+
+RegisterNUICallback("setAcceptedAltCurrencies", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:setAcceptedAltCurrencies", false, {
+        dealershipId = data.dealershipId,
+        accepted     = data.accepted,
+    })
+    if result and result.success then
+        ShowNotification(result.message)
+        cb({ success = true })
+    else
+        ShowNotification(result and result.message or _L("alt_currencies_update_failed"))
+        cb({ success = false, message = result and result.message or _L("alt_currencies_update_failed") })
+    end
+end)
+
+RegisterNUICallback("getSocietyAllowlist", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:getSocietyAllowlist", false, data.dealershipId)
+    if result then
+        cb({ success = true, allowlist = result.allowlist or {} })
+    else
+        cb({ success = false, message = _L("management_society_fetch_failed") })
+    end
+end)
+
+RegisterNUICallback("setSocietyAllowlist", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:setSocietyAllowlist", false, {
+        dealershipId = data.dealershipId,
+        allowlist    = data.allowlist,
+    })
+    if result and result.success then
+        ShowNotification(result.message)
+        cb({ success = true })
+    else
+        ShowNotification(result and result.message or _L("management_society_update_failed"))
+        cb({ success = false, message = result and result.message or _L("management_society_update_failed") })
+    end
+end)
+
+RegisterNUICallback("canUseSocietyFunds", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:canUseSocietyFunds", false, data.dealershipId)
+    cb({ match = result })
 end)
 
 RegisterNUICallback("getDashboardStats", function(data, cb)

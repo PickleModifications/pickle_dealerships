@@ -92,7 +92,10 @@ export default function DashboardPage({ data, onClose }: Props) {
                   </CardHeader>
                   <CardContent>
                     <p className="text-lg font-bold">{stats.topSeller.name}</p>
-                    <p className="text-sm text-muted-foreground">{stats.topSeller.sales} {t('label_sales')}</p>
+                    <p className="text-sm text-muted-foreground">
+                      {stats.topSeller.sales} {t('label_sales')}
+                      {stats.topSeller.revenue ? ` · ${formatCurrency(stats.topSeller.revenue)}` : ''}
+                    </p>
                   </CardContent>
                 </Card>
               )}
@@ -121,11 +124,8 @@ export default function DashboardPage({ data, onClose }: Props) {
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="flex justify-between text-sm mb-2">
-                    <span>{stats.employeeCount} / {stats.employeeCapacity}</span>
-                    <span className="text-muted-foreground">{Math.round((stats.employeeCount / stats.employeeCapacity) * 100)}%</span>
-                  </div>
-                  <Progress value={(stats.employeeCount / stats.employeeCapacity) * 100} />
+                  <p className="text-2xl font-bold">{stats.employeeCount}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">{t('dashboard_employees_on_roster')}</p>
                 </CardContent>
               </Card>
             </div>

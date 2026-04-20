@@ -33,6 +33,50 @@ Config.TargetIcons = {
     kiosk = "fas fa-tablet-alt",
 }
 
+-- Dealership progression. Each sale awards XP to the dealership; crossing the
+-- xpRequired threshold of the next level automatically bumps `tier`, which the
+-- catalog access logic already uses to gate higher-wholesale vehicles.
+-- Set `enabled = false` to freeze tier at whatever admins set manually.
+Config.DealershipProgression = {
+    enabled              = true,
+    xpPerSale            = 10,      -- flat XP per vehicle sold
+    xpPerSaleRevenueRate = 0.001,   -- bonus XP = retail_price * this (so bigger sales matter more)
+    xpPerNpcSale         = 5,       -- NPC customer sales give less than real-player sales
+    levels = {
+        [1] = { xpRequired = 0,     label = "Starter Lot" },
+        [2] = { xpRequired = 500,   label = "Established" },
+        [3] = { xpRequired = 2500,  label = "Premium" },
+        [4] = { xpRequired = 10000, label = "Enterprise" },
+    },
+}
+
+-- Alternative payment methods (beyond cash/bank). Dealership owners pick which
+-- of these are accepted at their lot. Each entry registers through the
+-- alt_currencies bridge (bridge/alt_currencies/registry/server.lua).
+--
+-- Entry shape:
+--   enabled       — master toggle for the server
+--   label         — display name in the UI
+--   type          — 'pickle_store' | 'item' | 'custom'
+--   valuePerUnit  — how many $ one native unit is worth (e.g. 1 coin = $1, 1 item = $1000)
+--   item          — inventory item name (type = 'item' only)
+Config.AltCurrencies = {
+    pickle_store = {
+        enabled      = false,
+        label        = "Store Coins",
+        type         = "pickle_store",
+        valuePerUnit = 1,
+    },
+    -- Example item currency — duplicate and adjust per server.
+    -- crypto = {
+    --     enabled      = true,
+    --     label        = "Cryptocoin",
+    --     type         = "item",
+    --     item         = "cryptostick",
+    --     valuePerUnit = 1000,
+    -- },
+}
+
 Config.FrameworkSettings = {
     dirtyMoney = "DEFAULT",
     society = "qb-management",

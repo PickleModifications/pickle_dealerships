@@ -307,6 +307,11 @@ end
 
 --- Opens the sales point — immersive showroom if a showroom position is set, otherwise sales tablet
 function OpenSalesTablet(locationKey)
+    if not lib.callback.await('pickle_dealerships:canAccessDealership', false, locationKey) then
+        ShowNotification(_L("error_access_denied"))
+        return
+    end
+
     local data = lib.callback.await('pickle_dealerships:getDealershipData', false, locationKey)
     if not data then return end
 
@@ -338,6 +343,11 @@ function OpenKiosk(locationKey)
     local cfg = DealershipConfigs[locationKey]
     if cfg and not cfg.selfService then
         ShowNotification(_L("showroom_self_service_unavailable"))
+        return
+    end
+
+    if not lib.callback.await('pickle_dealerships:canAccessDealership', false, locationKey) then
+        ShowNotification(_L("error_access_denied"))
         return
     end
 

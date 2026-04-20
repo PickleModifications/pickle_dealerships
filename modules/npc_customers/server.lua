@@ -401,7 +401,7 @@ lib.callback.register("pickle_dealerships:completeNPCSale", function(source, dat
     local commission = math.floor(adjustedAmount * commissionRate)
     if commission > 0 then
         AddMoney(source, commission, "bank")
-        ShowNotification(source, _L("npc_commission_earned", GetCurrencyString(commission)))
+        -- Success toast is delivered by the NUI wrapper via result.message; no server dupe.
     end
 
     -- Satisfaction bonus reputation
@@ -436,6 +436,12 @@ lib.callback.register("pickle_dealerships:completeNPCSale", function(source, dat
     -- Add ledger entry
     local playerName = GetPlayerCharacterName(source) or "Unknown"
     AddLedgerEntry(dealershipId, "npc_sale", adjustedAmount, "NPC sale by " .. playerName .. " (Commission: " .. GetCurrencyString(commission) .. ")", identifier)
+
+    -- Progression XP for the dealership (NPC sales are worth less than real-player sales).
+    if AwardDealershipXP then
+        local cfg = Config.DealershipProgression or {}
+        AwardDealershipXP(dealershipId, cfg.xpPerNpcSale or 0)
+    end
 
     return {
         success    = true,

@@ -292,9 +292,14 @@ lib.callback.register("pickle_dealerships:validateCoupon", function(source, data
     }
 end)
 
---- Get commission rates per role
+--- Get commission rates indexed by real framework grade level. Returns both the grade list
+--- (pulled live from the framework via the bridge so labels always reflect the server's actual
+--- job definition) and the saved rate table keyed by numeric grade. Dealerships with no job
+--- configured return an empty grades list and rely solely on Config.DefaultCommission.
 lib.callback.register("pickle_dealerships:getCommissionRates", function(source, dealershipId)
+    print(("[pickle_dealerships] getCommissionRates called: source=%s dealershipId=%s"):format(tostring(source), tostring(dealershipId)))
     if not CanPlayerManage(source, dealershipId) then
+        print("[pickle_dealerships] getCommissionRates: CanPlayerManage=false")
         return nil
     end
 
@@ -305,14 +310,203 @@ lib.callback.register("pickle_dealerships:getCommissionRates", function(source, 
     if type(meta) == "string" then meta = json.decode(meta) or {} end
     if type(meta) ~= "table" then meta = {} end
 
-    local defaultRate = math.floor((Config.DefaultCommission or 0.08) * 100)
+    local faction = GetDealershipFaction(dealership)
+    local grades = {}
+    if faction.name and faction.name ~= "" then
+        if faction.type == "gang" and GetGangGrades then
+            grades = GetGangGrades(faction.name) or {}
+        elseif GetJobGrades then
+            grades = GetJobGrades(faction.name) or {}
+        end
+    end
+
+    print(("[pickle_dealerships] getCommissionRates: dealership=%s faction=%s:%s grades=%d"):format(
+        tostring(dealershipId), tostring(faction.type), tostring(faction.name), #grades))
+
+    -- JSON serialisation collapses integer-keyed tables to arrays with holes; normalise the
+    -- stored map into a { level = rate } list so the NUI can find each grade by level reliably.
+    local rates = {}
+    if type(meta.commissionRates) == "table" then
+        for k, v in pairs(meta.commissionRates) do
+            local lvl = tonumber(k)
+            if lvl then rates[#rates + 1] = { level = lvl, rate = tonumber(v) or 0 } end
+        end
+    end
+
     return {
-        salesperson = meta.commissionRates and meta.commissionRates.salesperson or defaultRate,
-        manager = meta.commissionRates and meta.commissionRates.manager or defaultRate,
+        job = faction.name or nil,
+        factionType = faction.type,
+        grades = grades,                                                   -- [{ level, label }, ...]
+        rates = rates,                                                     -- [{ level, rate }, ...]
+        defaultRate = math.floor((Config.DefaultCommission or 0.08) * 100),
     }
 end)
 
---- Set commission rates per role
+--- Returns the list of server-wide alt currencies along with the subset this dealership accepts.
+lib.callback.register("pickle_dealerships:getAcceptedAltCurrencies", function(source, dealershipId)
+    if not CanPlayerManage(source, dealershipId) then return nil end
+    local dealership = GetDealership(dealershipId)
+    if not dealership then return nil end
+
+    local meta = dealership.metadata
+    if type(meta) == "string" then meta = json.decode(meta) or {} end
+    if type(meta) ~= "table" then meta = {} end
+
+    local accepted = {}
+    if type(meta.acceptedAltCurrencies) == "table" then
+        for _, k in ipairs(meta.acceptedAltCurrencies) do
+            if type(k) == "string" then accepted[#accepted + 1] = k end
+        end
+    end
+
+    local available = ListAltCurrencies and ListAltCurrencies() or {}
+    return { available = available, accepted = accepted }
+end)
+
+--- Admin-only update of the dealership's accepted alt currencies. Silently drops unknown keys.
+--- Owners can VIEW their enabled methods (getAcceptedAltCurrencies) but cannot change them —
+--- which payment rails are available is a server-operator decision.
+lib.callback.register("pickle_dealerships:setAcceptedAltCurrencies", function(source, data)
+    if not IsPlayerAdmin(source) then
+        return { success = false, message = _L("no_permission") }
+    end
+
+    local dealershipId = data and data.dealershipId
+    if not dealershipId then return { success = false, message = "Invalid request." } end
+
+    local dealership = GetDealership(dealershipId)
+    if not dealership then return { success = false, message = "Dealership not found." } end
+
+    local meta = dealership.metadata
+    if type(meta) == "string" then meta = json.decode(meta) or {} end
+    if type(meta) ~= "table" then meta = {} end
+
+    local cleaned = {}
+    if type(data.accepted) == "table" then
+        for _, k in ipairs(data.accepted) do
+            if type(k) == "string" and GetAltCurrency and GetAltCurrency(k) then
+                cleaned[#cleaned + 1] = k
+            end
+        end
+    end
+    meta.acceptedAltCurrencies = cleaned
+
+    MySQL.update.await("UPDATE dealerships SET metadata = ? WHERE id = ?", { json.encode(meta), dealershipId })
+    UpdateDealershipCache(dealershipId, { metadata = meta })
+
+    return { success = true, message = _L("alt_currencies_updated") }
+end)
+
+--- Returns the dealership's society-funds allowlist and the faction (job/gang) it maps to.
+--- Allowlist entries: { type = 'job'|'gang', name = string, minGrade = number }
+lib.callback.register("pickle_dealerships:getSocietyAllowlist", function(source, dealershipId)
+    if not CanPlayerManage(source, dealershipId) then return nil end
+    local dealership = GetDealership(dealershipId)
+    if not dealership then return nil end
+
+    local meta = dealership.metadata
+    if type(meta) == "string" then meta = json.decode(meta) or {} end
+    if type(meta) ~= "table" then meta = {} end
+
+    local allowlist = {}
+    if type(meta.societyAllowlist) == "table" then
+        for _, entry in ipairs(meta.societyAllowlist) do
+            if entry and entry.type and entry.name then
+                allowlist[#allowlist + 1] = {
+                    type = tostring(entry.type),
+                    name = tostring(entry.name),
+                    minGrade = tonumber(entry.minGrade) or 0,
+                }
+            end
+        end
+    end
+
+    return { allowlist = allowlist }
+end)
+
+--- Owner-only update of the society allowlist. Entries with invalid type/name are skipped.
+lib.callback.register("pickle_dealerships:setSocietyAllowlist", function(source, data)
+    local dealershipId = data and data.dealershipId
+    if not dealershipId then return { success = false, message = "Invalid request." } end
+
+    local identifier = GetIdentifier(source)
+    if not identifier then return { success = false, message = "Unable to identify player." } end
+
+    local dealership = GetDealership(dealershipId)
+    if not dealership then return { success = false, message = "Dealership not found." } end
+
+    local isOwner = dealership.owner_identifier == identifier
+    if not isOwner and not IsPlayerAdmin(source) then
+        return { success = false, message = "Only the owner can change society payment rules." }
+    end
+
+    local meta = dealership.metadata
+    if type(meta) == "string" then meta = json.decode(meta) or {} end
+    if type(meta) ~= "table" then meta = {} end
+
+    local cleaned = {}
+    if type(data.allowlist) == "table" then
+        for _, entry in ipairs(data.allowlist) do
+            local t = entry and entry.type
+            local n = entry and entry.name
+            if (t == "job" or t == "gang") and type(n) == "string" and n ~= "" then
+                cleaned[#cleaned + 1] = {
+                    type = t,
+                    name = n,
+                    minGrade = math.max(0, math.floor(tonumber(entry.minGrade) or 0)),
+                }
+            end
+        end
+    end
+    meta.societyAllowlist = cleaned
+
+    MySQL.update.await("UPDATE dealerships SET metadata = ? WHERE id = ?", { json.encode(meta), dealershipId })
+    UpdateDealershipCache(dealershipId, { metadata = meta })
+
+    return { success = true, message = _L("society_allowlist_updated") }
+end)
+
+--- Returns the matched allowlist entry for the calling player, or nil if they are
+--- not permitted to use society funds at this dealership. Called by the sales UI
+--- to decide whether to show the "Pay with Society Funds" tab.
+lib.callback.register("pickle_dealerships:canUseSocietyFunds", function(source, dealershipId)
+    local dealership = GetDealership(dealershipId)
+    if not dealership then return nil end
+
+    local meta = dealership.metadata
+    if type(meta) == "string" then meta = json.decode(meta) or {} end
+    if type(meta) ~= "table" then return nil end
+
+    local allowlist = meta.societyAllowlist
+    if type(allowlist) ~= "table" or #allowlist == 0 then return nil end
+
+    local jobName = GetPlayerJobName and GetPlayerJobName(source) or nil
+    local jobGrade = GetPlayerJobGrade and GetPlayerJobGrade(source) or 0
+    local gangName = GetPlayerGangName and GetPlayerGangName(source) or nil
+    local gangGrade = GetPlayerGangGrade and GetPlayerGangGrade(source) or 0
+
+    for _, entry in ipairs(allowlist) do
+        local minGrade = tonumber(entry.minGrade) or 0
+        if entry.type == "job" and entry.name == jobName and jobGrade >= minGrade then
+            return { type = entry.type, name = entry.name, minGrade = minGrade }
+        elseif entry.type == "gang" and entry.name == gangName and gangGrade >= minGrade then
+            return { type = entry.type, name = entry.name, minGrade = minGrade }
+        end
+    end
+    return nil
+end)
+
+--- Returns the live progression snapshot (current level, xp, next threshold).
+--- Any caller with access to the dealership can read this — it's not sensitive.
+lib.callback.register("pickle_dealerships:getDealershipProgression", function(_, dealershipId)
+    local dealership = GetDealership(dealershipId)
+    if not dealership then return nil end
+    return GetDealershipProgression(dealership)
+end)
+
+--- Set commission rates. Accepts `rates = [{ level, rate }, ...]`; any grade not in the payload
+--- is cleared. Rates are clamped to 0-100. Only levels that exist on the dealership's current
+--- job (per the framework) are persisted — we never store rates for phantom grades.
 lib.callback.register("pickle_dealerships:setCommissionRates", function(source, data)
     local dealershipId = data.dealershipId
     if not CanPlayerManage(source, dealershipId) then
@@ -326,10 +520,31 @@ lib.callback.register("pickle_dealerships:setCommissionRates", function(source, 
     if type(meta) == "string" then meta = json.decode(meta) or {} end
     if type(meta) ~= "table" then meta = {} end
 
-    meta.commissionRates = {
-        salesperson = math.max(0, math.min(100, tonumber(data.salesperson) or 0)),
-        manager = math.max(0, math.min(100, tonumber(data.manager) or 0)),
-    }
+    local validLevels = {}
+    local faction = GetDealershipFaction(dealership)
+    local factionGrades = {}
+    if faction.name and faction.name ~= "" then
+        if faction.type == "gang" and GetGangGrades then
+            factionGrades = GetGangGrades(faction.name) or {}
+        elseif GetJobGrades then
+            factionGrades = GetJobGrades(faction.name) or {}
+        end
+    end
+    for _, g in ipairs(factionGrades) do
+        validLevels[tonumber(g.level)] = true
+    end
+
+    local nextRates = {}
+    if type(data.rates) == "table" then
+        for _, entry in ipairs(data.rates) do
+            local lvl = tonumber(entry.level)
+            local rate = tonumber(entry.rate) or 0
+            if lvl and validLevels[lvl] then
+                nextRates[tostring(lvl)] = math.max(0, math.min(100, rate))
+            end
+        end
+    end
+    meta.commissionRates = nextRates
 
     MySQL.update.await("UPDATE dealerships SET metadata = ? WHERE id = ?", { json.encode(meta), dealershipId })
     UpdateDealershipCache(dealershipId, { metadata = meta })
@@ -365,9 +580,10 @@ lib.callback.register("pickle_dealerships:getDashboardStats", function(source, d
     ) or 0
     local totalProfit = totalRevenue - totalCost
 
-    -- Total commission paid (from ledger)
+    -- Total commission paid (from ledger). Commission is stored as a negative
+    -- expense; present it as a positive amount so the dashboard reads naturally.
     local totalCommission = MySQL.scalar.await(
-        "SELECT COALESCE(SUM(amount), 0) FROM dealership_ledger WHERE dealership_id = ? AND type = 'commission'",
+        "SELECT COALESCE(ABS(SUM(amount)), 0) FROM dealership_ledger WHERE dealership_id = ? AND type = 'commission'",
         { dealershipId }
     ) or 0
 
@@ -382,11 +598,43 @@ lib.callback.register("pickle_dealerships:getDashboardStats", function(source, d
         { dealershipId }
     ) or 0
 
-    -- Top seller
-    local topSellerRow = MySQL.single.await(
-        "SELECT sold_by, COUNT(*) AS sales FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NOT NULL AND sold_by IS NOT NULL GROUP BY sold_by ORDER BY sales DESC LIMIT 1",
-        { dealershipId }
-    )
+    -- Top seller. Join against `players` so offline sellers still get their
+    -- character name (rather than a bare citizenid). Works on QB/QBX — ESX
+    -- servers that don't have a `players` table will hit the COALESCE fallback
+    -- and show the raw identifier.
+    local topSellerRow = MySQL.single.await([[
+        SELECT
+            ds.sold_by AS identifier,
+            COUNT(*) AS sales,
+            COALESCE(SUM(ds.retail_price), 0) AS revenue,
+            p.charinfo AS charinfo
+        FROM dealership_stock ds
+        LEFT JOIN players p ON p.citizenid = ds.sold_by
+        WHERE ds.dealership_id = ?
+          AND ds.sold_at IS NOT NULL
+          AND ds.sold_by IS NOT NULL
+        GROUP BY ds.sold_by
+        ORDER BY sales DESC
+        LIMIT 1
+    ]], { dealershipId })
+
+    local topSeller = nil
+    if topSellerRow then
+        local displayName = topSellerRow.identifier
+        if topSellerRow.charinfo then
+            local info = type(topSellerRow.charinfo) == "string"
+                and (json.decode(topSellerRow.charinfo) or {})
+                or topSellerRow.charinfo
+            if info.firstname or info.lastname then
+                displayName = ((info.firstname or "") .. " " .. (info.lastname or "")):gsub("^%s+", ""):gsub("%s+$", "")
+            end
+        end
+        topSeller = {
+            name = displayName,
+            sales = tonumber(topSellerRow.sales) or 0,
+            revenue = tonumber(topSellerRow.revenue) or 0,
+        }
+    end
 
     -- Current stock & employee counts
     local stockCount = MySQL.scalar.await(
@@ -406,7 +654,7 @@ lib.callback.register("pickle_dealerships:getDashboardStats", function(source, d
         totalCommission  = totalCommission,
         salesThisWeek    = salesThisWeek,
         revenueThisWeek  = revenueThisWeek,
-        topSeller        = topSellerRow and { name = topSellerRow.sold_by, sales = topSellerRow.sales } or nil,
+        topSeller        = topSeller,
         stockCount       = stockCount,
         stockCapacity    = tierCfg and tierCfg.stockCap or 20,
         employeeCount    = employeeCount,

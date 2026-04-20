@@ -9,6 +9,11 @@ local depotPeds = {}
 local depotInteractions = {}
 local depotBlips = {}
 
+-- Drop-off visuals spawned per mission and torn down on completion/cancel.
+local dropoffGhost = nil       -- translucent no-collide tr2 at the delivery point for alignment
+local dropoffRenderThread = false -- draws the rectangle each frame while the mission is active
+local dropoffFootprint = nil   -- { halfX, halfY } half-extents of the tr2 bounding box for the polyzone
+
 --- Loads a model synchronously (short-circuit return nil on timeout).
 local function LoadModel(modelHash)
     if not IsModelInCdimage(modelHash) then return false end
@@ -62,7 +67,8 @@ local function PushMissionOverlay(phase, distanceMeters, condition, damageMult)
         state = {
             visible = true,
             phase = phase,
-            phaseKey = phase == 'pickup' and 'hud_delivery_drive_to_pickup' or 'hud_delivery_transport',
+            phaseKey = phase == 'pickup' and 'hud_delivery_phase_pickup' or 'hud_delivery_phase_dropoff',
+            phaseHintKey = phase == 'pickup' and 'hud_delivery_hint_pickup' or 'hud_delivery_hint_dropoff',
             vehicleLabel = primaryLabel,
             quantity = totalQty > 0 and totalQty or 1,
             bundledLines = bundledLines, -- the UI can show "+N more" when this is > 1
@@ -161,12 +167,17 @@ RegisterNetEvent('pickle_dealerships:startDeliveryMission', function(data)
         return
     end
 
+    -- Drop-off coord prefers the dealership's dedicated deliveryPoint (sent as dropoffCoords)
+    -- and falls back to the dealership center only for legacy mission flows that don't supply one.
+    local dropoffCoords = data.dropoffCoords or data.dealershipCoords
+
     activeMission = {
         deliveryId = data.deliveryId,
         locationKey = data.locationKey,
         pickupCoords = pickupCoords,
         vehicles = data.vehicles,
         dealershipCoords = data.dealershipCoords,
+        dropoffCoords = dropoffCoords,
         trailerPlan = data.trailerPlan or { trailerModel = 'trailers', size = 'enclosed', slots = {} },
         baseFee = data.baseFee or 0,
         streakMultiplier = data.streakMultiplier or 1.0,
@@ -174,10 +185,10 @@ RegisterNetEvent('pickle_dealerships:startDeliveryMission', function(data)
     }
 
     SpawnMissionRig(pickupCoords, activeMission.trailerPlan, activeMission.vehicles)
+    SpawnDropoffVisuals(dropoffCoords)
 
-    -- Dealership dropoff blip/waypoint
-    local dealerCoords = data.dealershipCoords
-    missionBlip = AddBlipForCoord(dealerCoords.x, dealerCoords.y, dealerCoords.z or 0.0)
+    -- Blip/waypoint routed to the drop-off point so drivers navigate straight to the trailer zone.
+    missionBlip = AddBlipForCoord(dropoffCoords.x, dropoffCoords.y, dropoffCoords.z or 0.0)
     SetBlipSprite(missionBlip, 326)
     SetBlipColour(missionBlip, 2)
     SetBlipScale(missionBlip, 0.9)
@@ -186,17 +197,107 @@ RegisterNetEvent('pickle_dealerships:startDeliveryMission', function(data)
     BeginTextCommandSetBlipName('STRING')
     AddTextComponentSubstringPlayerName(_L('blip_dealership_dropoff'))
     EndTextCommandSetBlipName(missionBlip)
-    SetNewWaypoint(dealerCoords.x, dealerCoords.y)
+    SetNewWaypoint(dropoffCoords.x, dropoffCoords.y)
 
     ShowNotification(_L('delivery_vehicles_loaded'), 'success')
     CreateThread(MissionMonitorLoop)
 end)
 
---- Main mission loop: track distance to dealership, push live overlay, trigger drop-off.
+--- Spawns a translucent no-collide tr2 at the drop-off point and starts the overlay rectangle
+--- thread. The ghost gives the driver a visible target to back up into; the rectangle is sized
+--- from the tr2 model's bounding box so it matches the actual footprint exactly.
+function SpawnDropoffVisuals(coords)
+    if not coords or not coords.x then return end
+    local model = `tr2`
+    RequestModel(model)
+    local t = GetGameTimer() + 5000
+    while not HasModelLoaded(model) and GetGameTimer() < t do Wait(0) end
+    if HasModelLoaded(model) then
+        -- GetModelDimensions returns min/max in local space; half-extents feed the polyzone size.
+        local minV, maxV = GetModelDimensions(model)
+        dropoffFootprint = {
+            halfX = (maxV.x - minV.x) * 0.5,
+            halfY = (maxV.y - minV.y) * 0.5,
+        }
+
+        dropoffGhost = CreateVehicle(model, coords.x, coords.y, coords.z, coords.w or 0.0, false, false)
+        SetModelAsNoLongerNeeded(model)
+        if DoesEntityExist(dropoffGhost) then
+            SetEntityAsMissionEntity(dropoffGhost, true, true)
+            SetEntityInvincible(dropoffGhost, true)
+            SetEntityCollision(dropoffGhost, false, false)
+            FreezeEntityPosition(dropoffGhost, true)
+            SetEntityAlpha(dropoffGhost, 120, false)
+            SetVehicleDoorsLocked(dropoffGhost, 4)
+        end
+    end
+
+    if not dropoffRenderThread then
+        dropoffRenderThread = true
+        CreateThread(function()
+            while activeMission and dropoffRenderThread do
+                local c = activeMission.dropoffCoords
+                local fp = dropoffFootprint
+                if c and fp then
+                    -- Marker type 1 draws an axis-aligned box on the ground. Rotated fill isn't
+                    -- supported by the native, so we approximate the rotated rectangle by drawing
+                    -- four thin boxes along the tr2's rotated perimeter. Cheap, readable, and
+                    -- aligned with the ghost trailer behind it.
+                    local heading = math.rad(c.w or 0.0)
+                    local cosH, sinH = math.cos(heading), math.sin(heading)
+                    local hx, hy = fp.halfX, fp.halfY
+                    local corners = {
+                        { x =  hx, y =  hy },
+                        { x = -hx, y =  hy },
+                        { x = -hx, y = -hy },
+                        { x =  hx, y = -hy },
+                    }
+                    -- Rotate into world space
+                    local world = {}
+                    for i, p in ipairs(corners) do
+                        world[i] = {
+                            x = c.x + (p.x * cosH - p.y * sinH),
+                            y = c.y + (p.x * sinH + p.y * cosH),
+                        }
+                    end
+                    for i = 1, 4 do
+                        local a, b = world[i], world[(i % 4) + 1]
+                        DrawLine(a.x, a.y, c.z + 0.05, b.x, b.y, c.z + 0.05, 80, 220, 80, 200)
+                        DrawLine(a.x, a.y, c.z + 1.5,  b.x, b.y, c.z + 1.5,  80, 220, 80, 180)
+                    end
+                    -- Ground highlight (axis-aligned box scaled to roughly fit the tr2 footprint).
+                    DrawMarker(1, c.x, c.y, (c.z or 0.0) - 1.0, 0, 0, 0, 0, 0, 0,
+                        fp.halfX * 2.0, fp.halfY * 2.0, 1.0,
+                        80, 220, 80, 50, false, false, 2, false, nil, nil, false)
+                end
+                Wait(0)
+            end
+            dropoffRenderThread = false
+        end)
+    end
+end
+
+--- Tears down the drop-off ghost trailer + render thread; safe to call multiple times.
+function ClearDropoffVisuals()
+    dropoffRenderThread = false
+    if dropoffGhost and DoesEntityExist(dropoffGhost) then
+        DeleteEntity(dropoffGhost)
+    end
+    dropoffGhost = nil
+    dropoffFootprint = nil
+end
+
+--- Main mission loop: track distance to dealership, push live overlay, and watch for the
+--- drop-off trigger — player unhitches the trailer while inside the dealership dropoff zone,
+--- which starts a 2s cooldown before the mission completes. If the trailer gets re-hitched or
+--- the trailer leaves the zone during the cooldown, it cancels.
+local DROPOFF_ZONE_RADIUS = 30.0
+local DROPOFF_COOLDOWN_MS = 2000
 function MissionMonitorLoop()
+    local unhitchStartedAt = nil
     while activeMission do
         local playerCoords = GetEntityCoords(PlayerPedId())
-        local d = activeMission.dealershipCoords
+        local d = activeMission.dropoffCoords or activeMission.dealershipCoords
         local target = vector3(d.x, d.y, d.z or playerCoords.z)
         local dist = #(playerCoords - target)
 
@@ -204,38 +305,44 @@ function MissionMonitorLoop()
         local damageMult = ComputeDamageMult(condition)
         PushMissionOverlay('transport', math.floor(dist), condition, damageMult)
 
-        if dist < 25.0 then OnArriveAtDealership() end
+        -- Arrival condition: trailer exists, trailer is inside the zone, and trailer is NOT hitched.
+        local trailerOk = trailerEntity and DoesEntityExist(trailerEntity)
+        local trailerInZone, unhitched = false, false
+        if trailerOk then
+            local trailerCoords = GetEntityCoords(trailerEntity)
+            trailerInZone = #(trailerCoords - target) < DROPOFF_ZONE_RADIUS
+            -- GetVehicleTrailerVehicle returns (found, trailerEntity). If the truck no longer
+            -- has our trailer hitched, the trailer has been dropped.
+            if truckEntity and DoesEntityExist(truckEntity) then
+                local hasTrailer, currentTrailer = GetVehicleTrailerVehicle(truckEntity)
+                unhitched = not hasTrailer or currentTrailer ~= trailerEntity
+            else
+                unhitched = true -- no truck = definitely not hitched
+            end
+        end
 
-        Wait(500)
+        if trailerInZone and unhitched then
+            if not unhitchStartedAt then
+                unhitchStartedAt = GetGameTimer()
+                ShowNotification(_L('delivery_dropoff_confirming'), 'info')
+            elseif GetGameTimer() - unhitchStartedAt >= DROPOFF_COOLDOWN_MS then
+                OnArriveAtDealership()
+                return
+            end
+        else
+            unhitchStartedAt = nil
+        end
+
+        Wait(250)
     end
 end
 
---- Called when the player arrives at the dealership with the trailer
+--- Completes the delivery server-side and cleans up local state.
 function OnArriveAtDealership()
     if not activeMission then return end
 
-    -- Check if player is in or near a vehicle (should be driving the trailer)
-    local ped = PlayerPedId()
-    local currentVehicle = GetVehiclePedIsIn(ped, false)
-
-    if currentVehicle == 0 then
-        -- Player is on foot, check if trailer is nearby
-        if trailerEntity and DoesEntityExist(trailerEntity) then
-            local trailerCoords = GetEntityCoords(trailerEntity)
-            local playerCoords = GetEntityCoords(ped)
-            local dist = #(playerCoords - trailerCoords)
-
-            if dist > 30.0 then
-                return -- Trailer is too far
-            end
-        else
-            return
-        end
-    end
-
     ShowNotification(_L('delivery_arriving'), 'info')
 
-    -- Shared sampler handles both tr2-cargo and enclosed-trailer fallbacks.
     local condition = SampleVehicleCondition()
     local result, err = lib.callback.await('pickle_dealerships:completeDelivery', false, activeMission.deliveryId, condition)
     if result then
@@ -250,30 +357,51 @@ function OnArriveAtDealership()
     CleanupMission()
 end
 
---- Cleans up all mission entities and state
+--- Cleans up mission state. Blip/overlay/active-mission are cleared immediately so the driver
+--- can start a new run, but the truck + trailer + cargo linger for 5s so the player has time
+--- to step out and watch them despawn (less jarring than the rig vanishing under them).
 function CleanupMission()
     if missionBlip then
         RemoveBlip(missionBlip)
         missionBlip = nil
     end
 
-    for _, veh in ipairs(missionVehicles) do
-        if DoesEntityExist(veh) then DeleteEntity(veh) end
+    -- Force the player out of the truck (or whatever mission vehicle they're in) before the
+    -- despawn timer starts so they don't ragdoll when entities delete.
+    local ped = PlayerPedId()
+    local currentVeh = GetVehiclePedIsIn(ped, false)
+    if currentVeh ~= 0 then
+        local isMissionVeh = currentVeh == truckEntity or currentVeh == trailerEntity
+        if not isMissionVeh then
+            for _, v in ipairs(missionVehicles) do
+                if v == currentVeh then isMissionVeh = true; break end
+            end
+        end
+        if isMissionVeh then
+            TaskLeaveVehicle(ped, currentVeh, 0)
+        end
     end
+
+    -- Capture the entities locally so later missions can re-use the globals immediately.
+    local pendingVehicles = missionVehicles
+    local pendingTrailer  = trailerEntity
+    local pendingTruck    = truckEntity
     missionVehicles = {}
+    trailerEntity = nil
+    truckEntity = nil
 
-    if trailerEntity and DoesEntityExist(trailerEntity) then
-        DeleteEntity(trailerEntity)
-        trailerEntity = nil
-    end
-
-    if truckEntity and DoesEntityExist(truckEntity) then
-        DeleteEntity(truckEntity)
-        truckEntity = nil
-    end
+    ClearDropoffVisuals()
 
     activeMission = nil
     HideMissionOverlay()
+
+    SetTimeout(5000, function()
+        for _, veh in ipairs(pendingVehicles) do
+            if DoesEntityExist(veh) then DeleteEntity(veh) end
+        end
+        if pendingTrailer and DoesEntityExist(pendingTrailer) then DeleteEntity(pendingTrailer) end
+        if pendingTruck and DoesEntityExist(pendingTruck) then DeleteEntity(pendingTruck) end
+    end)
 end
 
 --- Cancel/fail delivery via command or event
@@ -356,7 +484,7 @@ local function SpawnDepotPeds()
         local c = d.pickupCoords
         if c and c.x and c.y and c.z then
             -- CreateNPC handles model load + entity tracking; falls back to a_m_m_skater_01 if model is bad.
-            local ped = CreateNPC(pedModel, c.x, c.y, c.z - 1.0, c.w or 0.0)
+            local ped = CreateNPC(pedModel, c.x, c.y, c.z, c.w or 0.0)
             if ped and DoesEntityExist(ped) then
                 SetBlockingOfNonTemporaryEvents(ped, true)
                 SetEntityInvincible(ped, true)
@@ -672,6 +800,54 @@ AddEventHandler('onResourceStop', function(res)
     if res == GetCurrentResourceName() then dbgClear() end
 end)
 
+--- /debug_vtp — teleports the active delivery rig (truck + trailer, with the player still
+--- in the driver seat) to the destination dealership. Useful for skipping the drive when
+--- testing drop-off logic.
+RegisterCommand('debug_vtp', function()
+    if not activeMission then
+        TriggerEvent('chat:addMessage', { args = { '[debug_vtp]', 'No active delivery.' } })
+        return
+    end
+    local dest = activeMission.dropoffCoords or activeMission.dealershipCoords
+    if not dest or not dest.x then
+        TriggerEvent('chat:addMessage', { args = { '[debug_vtp]', 'No destination coords on active mission.' } })
+        return
+    end
+    if not truckEntity or not DoesEntityExist(truckEntity) then
+        TriggerEvent('chat:addMessage', { args = { '[debug_vtp]', 'Truck entity missing.' } })
+        return
+    end
+
+    local ped = PlayerPedId()
+    local ground, z = GetGroundZFor_3dCoord(dest.x + 0.0, dest.y + 0.0, (dest.z or 0.0) + 50.0, false)
+    local tz = ground and z or (dest.z or 0.0)
+
+    -- Detach the trailer momentarily so teleporting the truck doesn't fight the physics link,
+    -- then re-hitch at the new location.
+    if trailerEntity and DoesEntityExist(trailerEntity) then
+        DetachVehicleFromTrailer(truckEntity)
+    end
+
+    SetEntityCoords(truckEntity, dest.x, dest.y, tz, false, false, false, false)
+    SetEntityHeading(truckEntity, dest.w or 0.0)
+    SetVehicleOnGroundProperly(truckEntity)
+
+    if trailerEntity and DoesEntityExist(trailerEntity) then
+        local behind = GetOffsetFromEntityInWorldCoords(truckEntity, 0.0, -10.0, 0.0)
+        SetEntityCoords(trailerEntity, behind.x, behind.y, tz, false, false, false, false)
+        SetEntityHeading(trailerEntity, dest.w or 0.0)
+        SetVehicleOnGroundProperly(trailerEntity)
+        AttachVehicleToTrailer(truckEntity, trailerEntity, 20.0)
+    end
+
+    -- Pull the player into the driver seat if they aren't already, so they land in the cab.
+    if GetVehiclePedIsIn(ped, false) ~= truckEntity then
+        SetPedIntoVehicle(ped, truckEntity, -1)
+    end
+
+    TriggerEvent('chat:addMessage', { args = { '[debug_vtp]', 'Teleported to destination.' } })
+end, false)
+
 -- ─── Admin: Depot Management NUI bridges ─────────────────────────────────────
 -- Depots are managed from the /dealership admin panel; these wire up the React UI to the server.
 RegisterNUICallback('adminGetDepots', function(_, cb)
@@ -679,14 +855,13 @@ RegisterNUICallback('adminGetDepots', function(_, cb)
     cb(depots)
 end)
 
---- Captures the caller's current position and creates a depot at that coord.
+--- Creates a depot once both points have been placed via the draft-mode gizmo.
+--- The UI enforces that both `pickupCoords` and `spawnCoords` are present.
 RegisterNUICallback('adminCreateDepot', function(payload, cb)
-    local ped = PlayerPedId()
-    local coords = GetEntityCoords(ped)
-    local heading = GetEntityHeading(ped)
     local ok, id = lib.callback.await('pickle_dealerships:createDeliveryDepot', false, {
         name = payload.name or 'Depot',
-        coords = { x = coords.x, y = coords.y, z = coords.z, w = heading },
+        pickupCoords = payload.pickupCoords,
+        spawnCoords = payload.spawnCoords,
     })
     cb({ ok = ok, id = id })
 end)
@@ -720,55 +895,163 @@ RegisterNUICallback('adminClearDepotSpawn', function(payload, cb)
     cb({ ok = ok })
 end)
 
---- Opens the gizmo editor so the admin can place a truck-spawn point visually. Mirrors the
---- dealership display-spot flow — spawns a lab barrier prop at either the current spawn point
---- (if one's set) or the admin's position, lets them nudge/rotate it with arrow keys + G/E/ESC,
---- then saves on confirm and re-opens the admin panel on the Depots tab.
-RegisterNUICallback('adminStartDepotSpawnGizmo', function(payload, cb)
+-- ─── Depot point-placement gizmo ────────────────────────────────────────────
+-- Shared helper used by both draft-mode (creation flow) and edit-mode (existing depot).
+-- `field` is 'pickup' or 'spawn'.
+--   pickup → CreateGizmoPed with the depot ped model so the admin sees exactly what'll stand there.
+--   spawn  → rigs a translucent phantom + tr2 trailer (attached rigidly so the pair moves together)
+--            and lets the admin position it as one unit; proves the rig actually fits the spot.
+--
+-- Returns (coords|nil, rotZ|nil). `coords` is nil if the admin cancelled.
+local function RunDepotPointGizmo(field, initialCoords, initialRot)
+    if field == 'pickup' then
+        local cfg = (Config and Config.Trailer) or {}
+        local pedModel = cfg.depotPedModel or 's_m_y_dockwork_01'
+        local result = StartGizmoEditor({
+            model = pedModel,
+            isPed = true,
+            enableCancel = true,
+            coords = initialCoords,
+            rotation = initialRot,
+        })
+        if result and result.position then
+            return result.position, result.rotation and result.rotation.z or 0.0
+        end
+        return nil
+    end
+
+    if field == 'spawn' then
+        -- Spawn truck + tr2 trailer as translucent, no-collide, frozen ghosts. Truck is the
+        -- gizmo entity; trailer is rigidly attached so rotating/moving the truck moves both.
+        local cfg = (Config and Config.Trailer) or {}
+        local truckModelName = (cfg.models and cfg.models.truck) or 'phantom'
+        local truckHash = joaat(truckModelName)
+        local trailerHash = `tr2` -- always tr2 regardless of config — it's the largest rig
+
+        if not LoadModel(truckHash) or not LoadModel(trailerHash) then
+            return nil
+        end
+
+        local ped = PlayerPedId()
+        local seedCoords = initialCoords or (GetEntityCoords(ped) + GetEntityForwardVector(ped) * 6.0)
+        local seedHeading = initialRot and initialRot.z or GetEntityHeading(ped)
+
+        local truck = CreateVeh(truckHash, seedCoords, seedHeading, true)
+        if not truck or not DoesEntityExist(truck) then
+            SetModelAsNoLongerNeeded(truckHash); SetModelAsNoLongerNeeded(trailerHash)
+            return nil
+        end
+        SetEntityAsMissionEntity(truck, true, true)
+        SetEntityInvincible(truck, true)
+        SetEntityCollision(truck, false, false)
+        SetEntityAlpha(truck, 160, false)
+        SetVehicleEngineOn(truck, false, true, true)
+
+        local trailer = CreateVeh(trailerHash, seedCoords, seedHeading, true)
+        if trailer and DoesEntityExist(trailer) then
+            SetEntityAsMissionEntity(trailer, true, true)
+            SetEntityInvincible(trailer, true)
+            SetEntityCollision(trailer, false, false)
+            SetEntityAlpha(trailer, 160, false)
+            -- Rigid attach behind the truck at approximate hitch offset so the pair tracks
+            -- as one body during gizmo movement (AttachVehicleToTrailer is a physics link
+            -- that SetEntityCoords doesn't carry along, so we use a rigid parent-child attach instead).
+            AttachEntityToEntity(trailer, truck, 0, 0.0, -9.5, 0.5, 0.0, 0.0, 0.0, false, false, false, false, 2, true)
+        end
+
+        SetModelAsNoLongerNeeded(truckHash)
+        SetModelAsNoLongerNeeded(trailerHash)
+
+        local result = StartGizmoEditor({
+            entity = truck,
+            enableCancel = true,
+            coords = seedCoords,
+            rotation = vector3(0.0, 0.0, seedHeading),
+        })
+
+        -- Clean up both entities regardless of outcome.
+        if trailer and DoesEntityExist(trailer) then
+            DetachEntity(trailer, false, false)
+            DeleteEntity(trailer)
+        end
+        if DoesEntityExist(truck) then DeleteEntity(truck) end
+
+        if result and result.position then
+            return result.position, result.rotation and result.rotation.z or 0.0
+        end
+        return nil
+    end
+
+    return nil
+end
+
+--- Re-opens the admin panel on the Depots tab, optionally with a pending-create draft and/or
+--- an auto-opened edit modal. Draft state survives gizmo invocations this way.
+local function ReopenAdminDepots(extra)
+    local data = {
+        dealershipId = 0,
+        dealershipName = 'Dealership Panel',
+        role = 'admin',
+        tier = 4,
+        initialTab = 'depots',
+    }
+    for k, v in pairs(extra or {}) do data[k] = v end
+    OpenNui('admin', data)
+end
+
+--- DRAFT MODE: admin is in the create dialog and clicked "Place" on one of the two point rows.
+--- We close the NUI, run the gizmo for that field, and re-open the admin panel with the updated
+--- draft so the create dialog can repopulate with both the previous values AND the freshly placed one.
+RegisterNUICallback('adminPlaceDepotPoint', function(payload, cb)
     CloseNui()
 
-    -- Seed the gizmo at the existing spawn point if the depot already has one set.
+    local field = payload.field -- 'pickup' or 'spawn'
+    local draft = payload.draft or {}
+
+    local pos, rotZ = RunDepotPointGizmo(field, nil, nil)
+    if pos then
+        local coord = { x = pos.x, y = pos.y, z = pos.z, w = rotZ or 0.0 }
+        if field == 'pickup' then draft.pickupCoords = coord
+        elseif field == 'spawn' then draft.spawnCoords = coord end
+    end
+
+    ReopenAdminDepots({ pendingDepot = draft })
+    cb({ ok = pos ~= nil })
+end)
+
+--- EDIT MODE: admin is in the edit modal for an existing depot and clicked "Place" on a point row.
+--- Runs the gizmo seeded at the current coord and writes the new coord straight through to the server.
+RegisterNUICallback('adminEditDepotPoint', function(payload, cb)
+    CloseNui()
+
     local depotId = tonumber(payload.id)
+    local field = payload.field
+
     local initialCoords, initialRot
     local depots = lib.callback.await('pickle_dealerships:getDeliveryDepots', false) or {}
     for _, d in ipairs(depots) do
-        if d.id == depotId and d.spawnCoords then
-            initialCoords = vector3(d.spawnCoords.x, d.spawnCoords.y, d.spawnCoords.z)
-            initialRot    = vector3(0.0, 0.0, d.spawnCoords.w or 0.0)
+        if d.id == depotId then
+            local c = field == 'pickup' and d.pickupCoords or d.spawnCoords
+            if c then
+                initialCoords = vector3(c.x, c.y, c.z)
+                initialRot    = vector3(0.0, 0.0, c.w or 0.0)
+            end
             break
         end
     end
 
-    local result = StartGizmoEditor({
-        model = `xm_prop_lab_barrier02`,
-        enableCancel = true,
-        deleteEntity = true,
-        coords = initialCoords,
-        rotation = initialRot,
-        coordsOffset = vector3(0.0, 0.0, -0.03),
-        rotationOffset = vector3(90.0, 0.0, 0.0),
-    })
-
+    local pos, rotZ = RunDepotPointGizmo(field, initialCoords, initialRot)
     local saved = false
-    if result and result.position then
-        local pos = result.position
-        local rot = result.rotation
-        saved = lib.callback.await('pickle_dealerships:setDeliveryDepotSpawn', false, {
+    if pos then
+        local event = field == 'pickup' and 'pickle_dealerships:setDeliveryDepotPickup'
+                                         or 'pickle_dealerships:setDeliveryDepotSpawn'
+        saved = lib.callback.await(event, false, {
             id = depotId,
-            coords = { x = pos.x, y = pos.y, z = pos.z, w = rot and rot.z or 0.0 },
+            coords = { x = pos.x, y = pos.y, z = pos.z, w = rotZ or 0.0 },
         }) and true or false
     end
 
-    -- Re-open the admin panel on the Depots tab whether saved or cancelled, so the admin can
-    -- verify the placement on the depot list without running /dealership again.
-    OpenNui('admin', {
-        dealershipId = 0,
-        dealershipName = 'Admin Panel',
-        role = 'admin',
-        tier = 4,
-        initialTab = 'depots',
-    })
-
+    ReopenAdminDepots({ editDepotId = depotId })
     cb({ ok = saved })
 end)
 

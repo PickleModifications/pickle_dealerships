@@ -151,7 +151,7 @@ export default function FinancesPage({ data, onClose }: Props) {
                           <p className="text-sm truncate">{entry.description}</p>
                           <p className="text-xs text-muted-foreground">
                             {new Date(entry.created_at).toLocaleDateString()} &mdash;
-                            <Badge variant="outline" className="ml-1 text-[10px] capitalize">{entry.type}</Badge>
+                            <Badge variant="outline" className="ml-1 text-[10px]">{t('ledger_type_' + entry.type) !== 'ledger_type_' + entry.type ? t('ledger_type_' + entry.type) : entry.type.replace(/_/g, ' ')}</Badge>
                           </p>
                         </div>
                         <p className={`font-medium text-sm ml-3 ${entry.amount >= 0 ? 'text-emerald-400' : (ledgerTypeColors[entry.type] || 'text-red-400')}`}>

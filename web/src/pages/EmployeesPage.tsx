@@ -6,11 +6,12 @@ import { ScrollArea } from '../components/ui/scroll-area'
 import { Separator } from '../components/ui/separator'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog'
+import { Input } from '../components/ui/input'
 import { fetchNui } from '../lib/utils'
 import { getCached, setCache, buildKey } from '../lib/cache'
 import { SkeletonList } from '../components/ui/skeleton'
 import { t } from '../lib/locale'
-import { X, UserPlus, UserX, Clock, Shield, Briefcase, Users, MapPin } from 'lucide-react'
+import { X, UserPlus, UserX, Clock, Briefcase, Users, MapPin } from 'lucide-react'
 import type { DealershipData, Employee } from '../types'
 
 interface Props {
@@ -30,12 +31,18 @@ export default function EmployeesPage({ data, onClose }: Props) {
   const [employees, setEmployees] = useState<Employee[]>(cached ?? [])
   const [loading, setLoading] = useState(!cached)
   const [hireDialogOpen, setHireDialogOpen] = useState(false)
-  const [hireRole, setHireRole] = useState<string>('salesperson')
+  const [hireGrade, setHireGrade] = useState<string>('')
   const [nearbyPlayers, setNearbyPlayers] = useState<NearbyPlayer[]>([])
   const [loadingPlayers, setLoadingPlayers] = useState(false)
   const [selectedPlayer, setSelectedPlayer] = useState<string>('')
   const [isClockedIn, setIsClockedIn] = useState(false)
-  const [commissionRates, setCommissionRates] = useState<Record<string, number>>({})
+  // Grade level (numeric key) → configured rate (%). Populated from dealership metadata.
+  const [gradeRates, setGradeRates] = useState<Record<number, number>>({})
+  const [defaultRate, setDefaultRate] = useState<number>(8)
+  // Framework grades for this dealership's faction — drives the hire/role dropdown.
+  const [factionGrades, setFactionGrades] = useState<{ level: number; label: string }[]>([])
+  // Inline-edit state for per-employee commission overrides, keyed by identifier.
+  const [overrideDraft, setOverrideDraft] = useState<Record<string, string>>({})
 
   const loadEmployees = () => {
     if (!getCached(cacheKey)) setLoading(true)
@@ -51,17 +58,23 @@ export default function EmployeesPage({ data, onClose }: Props) {
 
   useEffect(() => {
     loadEmployees()
-    fetchNui<{ success: boolean; rates: Record<string, number> }>('getCommissionRates', {
+    fetchNui<{ success: boolean; rates: { grades: { level: number; label: string }[]; rates: { level: number; rate: number }[]; defaultRate: number } }>('getCommissionRates', {
       dealershipId: data.dealershipId,
     }).then((res) => {
-      if (res.success && res.rates) setCommissionRates(res.rates)
+      if (res.success && res.rates) {
+        const map: Record<number, number> = {}
+        for (const r of res.rates.rates ?? []) map[r.level] = r.rate
+        setGradeRates(map)
+        setDefaultRate(res.rates.defaultRate ?? 8)
+        setFactionGrades(res.rates.grades ?? [])
+      }
     }).catch(() => {})
   }, [data.dealershipId])
 
   const openHireDialog = () => {
     setHireDialogOpen(true)
     setSelectedPlayer('')
-    setHireRole('salesperson')
+    setHireGrade(factionGrades[0] ? String(factionGrades[0].level) : '0')
     setLoadingPlayers(true)
     fetchNui<{ players: NearbyPlayer[] }>('getNearbyPlayers', {}).then((res) => {
       setNearbyPlayers(res.players || [])
@@ -74,7 +87,7 @@ export default function EmployeesPage({ data, onClose }: Props) {
     fetchNui('hireEmployee', {
       dealershipId: data.dealershipId,
       targetId: parseInt(selectedPlayer),
-      role: hireRole,
+      grade: parseInt(hireGrade) || 0,
     }).then(() => {
       setHireDialogOpen(false)
       setSelectedPlayer('')
@@ -82,19 +95,37 @@ export default function EmployeesPage({ data, onClose }: Props) {
     })
   }
 
-  const handleFire = (serverId: number) => {
+  const handleFire = (emp: Employee) => {
     fetchNui('fireEmployee', {
       dealershipId: data.dealershipId,
-      targetServerId: serverId,
+      targetServerId: emp.online ? (emp.serverId ?? emp.id) : undefined,
+      targetIdentifier: emp.identifier,
     }).then(() => loadEmployees())
   }
 
-  const handleSetRole = (serverId: number, role: string) => {
-    fetchNui('setEmployeeRole', {
+  // Resolves the commission % shown for an employee: per-employee override → grade rate → default.
+  const resolvedCommission = (emp: Employee): number => {
+    if (emp.commission_override && emp.commission_override > 0) return emp.commission_override
+    if (emp.grade !== undefined && gradeRates[emp.grade] !== undefined) return gradeRates[emp.grade]
+    return defaultRate
+  }
+
+  const handleSaveOverride = (emp: Employee) => {
+    const raw = overrideDraft[emp.identifier]
+    if (raw === undefined) return
+    const rate = Math.max(0, Math.min(100, parseInt(raw) || 0))
+    fetchNui('setEmployeeCommissionOverride', {
       dealershipId: data.dealershipId,
-      targetServerId: serverId,
-      role,
-    }).then(() => loadEmployees())
+      identifier: emp.identifier,
+      rate,
+    }).then(() => {
+      setOverrideDraft((prev) => {
+        const next = { ...prev }
+        delete next[emp.identifier]
+        return next
+      })
+      loadEmployees()
+    })
   }
 
   const canManage = data.role === 'owner' || data.role === 'admin'
@@ -164,18 +195,17 @@ export default function EmployeesPage({ data, onClose }: Props) {
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
                       <div className="h-10 w-10 rounded-full bg-muted flex items-center justify-center">
-                        {emp.role === 'manager' ? (
-                          <Shield className="h-5 w-5 text-accent" />
-                        ) : (
-                          <Briefcase className="h-5 w-5 text-muted-foreground" />
-                        )}
+                        <Briefcase className="h-5 w-5 text-muted-foreground" />
                       </div>
                       <div>
                         <p className="font-semibold">{emp.name || emp.identifier}</p>
                         <div className="flex items-center gap-2">
-                          <Badge variant={emp.role === 'manager' ? 'default' : 'secondary'} className="text-xs capitalize">
-                            {emp.role}
-                          </Badge>
+                          {emp.gradeLabel && (
+                            <Badge variant="secondary" className="text-xs">{emp.gradeLabel}</Badge>
+                          )}
+                          {emp.online === false && (
+                            <Badge variant="outline" className="text-xs text-muted-foreground">{t('employees_offline')}</Badge>
+                          )}
                           {emp.clocked_in && (
                             <Badge variant="outline" className="gap-1 text-xs text-emerald-400 border-emerald-400/50">
                               <Clock className="h-3 w-3" /> {t('employees_on_duty')}
@@ -186,30 +216,42 @@ export default function EmployeesPage({ data, onClose }: Props) {
                     </div>
 
                     <div className="flex items-center gap-3">
-                      <div className="text-right">
+                      <div className="text-right min-w-[64px]">
                         <p className="text-xs text-muted-foreground">{t('tab_commission')}</p>
-                        <p className="text-sm font-medium">{commissionRates[emp.role] ?? Math.round(emp.commission_rate * 100)}%</p>
+                        <p className="text-sm font-medium">
+                          {resolvedCommission(emp)}%
+                          {(emp.commission_override ?? 0) > 0 && (
+                            <span className="ml-1 text-[10px] text-accent">*</span>
+                          )}
+                        </p>
                       </div>
 
                       {canManage && (
-                        <div className="flex gap-1">
-                          <Select
-                            value={emp.role}
-                            onValueChange={(val) => handleSetRole(emp.serverId ?? emp.id, val)}
+                        <div className="flex items-center gap-1">
+                          <Input
+                            type="number"
+                            min="0"
+                            max="100"
+                            placeholder={String(emp.commission_override ?? 0)}
+                            value={overrideDraft[emp.identifier] ?? ''}
+                            onChange={(e) => setOverrideDraft({ ...overrideDraft, [emp.identifier]: e.target.value })}
+                            className="w-16 h-8 text-xs"
+                            title={t('employees_commission_override_hint')}
+                          />
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-8 px-2 text-xs"
+                            onClick={() => handleSaveOverride(emp)}
+                            disabled={overrideDraft[emp.identifier] === undefined}
                           >
-                            <SelectTrigger className="w-[120px] h-8 text-xs">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="salesperson">{t('role_salesperson')}</SelectItem>
-                              <SelectItem value="manager">{t('role_manager')}</SelectItem>
-                            </SelectContent>
-                          </Select>
+                            {t('btn_save')}
+                          </Button>
                           <Button
                             variant="ghost"
                             size="icon"
                             className="h-8 w-8 text-destructive hover:text-destructive"
-                            onClick={() => handleFire(emp.serverId ?? emp.id)}
+                            onClick={() => handleFire(emp)}
                           >
                             <UserX className="h-4 w-4" />
                           </Button>
@@ -264,16 +306,21 @@ export default function EmployeesPage({ data, onClose }: Props) {
               )}
             </div>
             <div>
-              <label className="text-sm font-medium">{t('employees_role')}</label>
-              <Select value={hireRole} onValueChange={setHireRole}>
-                <SelectTrigger className="mt-1">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="salesperson">{t('role_salesperson')}</SelectItem>
-                  <SelectItem value="manager">{t('role_manager')}</SelectItem>
-                </SelectContent>
-              </Select>
+              <label className="text-sm font-medium">{t('employees_grade')}</label>
+              {factionGrades.length === 0 ? (
+                <p className="mt-1 text-xs text-orange-400">{t('employees_no_grades_available')}</p>
+              ) : (
+                <Select value={hireGrade} onValueChange={setHireGrade}>
+                  <SelectTrigger className="mt-1">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {factionGrades.map((g) => (
+                      <SelectItem key={g.level} value={String(g.level)}>{g.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
             </div>
             <Button className="w-full" onClick={handleHire} disabled={!selectedPlayer || loadingPlayers}>
               <UserPlus className="h-4 w-4" /> {t('employees_hire_title')}

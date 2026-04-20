@@ -110,6 +110,15 @@ lib.callback.register('pickle_dealerships:getDealerships', function(source)
     return dealerships
 end)
 
+--- Access gate: returns true if the caller may browse/purchase at this location.
+--- Used by the client openers (OpenKiosk / OpenSalesTablet) to short-circuit
+--- with a notification before even fetching data.
+lib.callback.register('pickle_dealerships:canAccessDealership', function(source, locationKey)
+    local cached = GetCachedByLocation(locationKey)
+    if not cached then return true end
+    return PlayerCanAccessDealership(source, cached)
+end)
+
 --- Returns full dealership data for a specific location
 ---@param source number
 ---@param locationKey string

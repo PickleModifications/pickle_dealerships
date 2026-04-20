@@ -153,6 +153,14 @@ RegisterNUICallback("getStockDetails", function(data, cb)
     cb(result or {})
 end)
 
+RegisterNUICallback("getAltPaymentOptions", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:getAltPaymentOptions", false, {
+        dealershipId = data.dealershipId,
+        price = data.price,
+    })
+    cb({ options = result or {} })
+end)
+
 -- ─── Test Drive System ──────────────────────────────────────────────────────
 
 local function EndTestDrive()

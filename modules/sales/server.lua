@@ -71,9 +71,70 @@ local function AddDealershipBalance(dealershipId, amount)
     end
 end
 
+--- Returns the matched allowlist entry for this player against the dealership's
+--- society allowlist, or nil if they do not qualify.
+local function MatchSocietyAllowlist(source, dealership)
+    local meta = dealership and dealership.metadata
+    if type(meta) == "string" then meta = json.decode(meta) or {} end
+    if type(meta) ~= "table" then return nil end
+
+    local allowlist = meta.societyAllowlist
+    if type(allowlist) ~= "table" or #allowlist == 0 then return nil end
+
+    local jobName = GetPlayerJobName and GetPlayerJobName(source) or nil
+    local jobGrade = GetPlayerJobGrade and GetPlayerJobGrade(source) or 0
+    local gangName = GetPlayerGangName and GetPlayerGangName(source) or nil
+    local gangGrade = GetPlayerGangGrade and GetPlayerGangGrade(source) or 0
+
+    for _, entry in ipairs(allowlist) do
+        local minGrade = tonumber(entry.minGrade) or 0
+        if entry.type == "job" and entry.name and entry.name == jobName and jobGrade >= minGrade then
+            return entry
+        elseif entry.type == "gang" and entry.name and entry.name == gangName and gangGrade >= minGrade then
+            return entry
+        end
+    end
+    return nil
+end
+
+--- Returns true if the player meets the stock item's min-grade requirement.
+--- Grade is matched against the dealership's configured faction (job or gang).
+local function PlayerMeetsMinGrade(source, dealership, stockItem)
+    local stockMeta = stockItem and stockItem.metadata
+    if type(stockMeta) == "string" then stockMeta = json.decode(stockMeta) or {} end
+    if type(stockMeta) ~= "table" then return true end
+
+    local minGrade = tonumber(stockMeta.minGrade)
+    if not minGrade or minGrade <= 0 then return true end
+
+    local faction = GetDealershipFaction(dealership)
+    if not faction.name or faction.name == "" then return true end
+
+    if faction.type == "gang" then
+        local gangName = GetPlayerGangName and GetPlayerGangName(source) or nil
+        if gangName ~= faction.name then return false end
+        return (GetPlayerGangGrade and GetPlayerGangGrade(source) or 0) >= minGrade
+    else
+        local jobName = GetPlayerJobName and GetPlayerJobName(source) or nil
+        if jobName ~= faction.name then return false end
+        return (GetPlayerJobGrade and GetPlayerJobGrade(source) or 0) >= minGrade
+    end
+end
+
 local function ProcessSale(source, dealershipId, stockItem, paymentMethod, couponCode, soldByCitizenid)
     local identifier = GetIdentifier(source)
     if not identifier then return false, "Could not identify player." end
+
+    local dealership = GetDealership(dealershipId)
+    if not dealership then return false, "Dealership not found." end
+
+    if not PlayerCanAccessDealership(source, dealership) then
+        return false, _L("error_access_denied")
+    end
+
+    if not PlayerMeetsMinGrade(source, dealership, stockItem) then
+        return false, _L("error_grade_too_low")
+    end
 
     local price = stockItem.retail_price
     local discount = 0
@@ -82,20 +143,68 @@ local function ProcessSale(source, dealershipId, stockItem, paymentMethod, coupo
     end
     local finalPrice = math.max(0, price - discount)
 
-    -- Determine currency
-    local currency = "money"
-    if paymentMethod == "bank" then
-        currency = "bank"
-    end
+    local societyEntry = nil
+    local altCurrencyUsed = nil -- populated when paymentMethod begins with "alt:"
+    if type(paymentMethod) == "string" and paymentMethod:sub(1, 4) == "alt:" then
+        local key = paymentMethod:sub(5)
+        local def = GetAltCurrency and GetAltCurrency(key) or nil
+        if not def then
+            return false, _L("error_alt_currency_unavailable")
+        end
 
-    -- Check funds
-    local playerMoney = GetMoney(source, currency)
-    if playerMoney < finalPrice then
-        return false, "Insufficient funds."
-    end
+        -- Dealership must opt into this currency.
+        local meta = dealership.metadata
+        if type(meta) == "string" then meta = json.decode(meta) or {} end
+        local accepted = type(meta) == "table" and meta.acceptedAltCurrencies or {}
+        local ok = false
+        for _, k in ipairs(accepted) do if k == key then ok = true; break end end
+        if not ok then
+            return false, _L("error_alt_currency_not_accepted")
+        end
 
-    -- Deduct money
-    RemoveMoney(source, finalPrice, currency)
+        local native = AltCurrencyNativeAmount(def, finalPrice)
+        local balance = tonumber(def.get(source)) or 0
+        if balance < native then
+            return false, _L("error_alt_currency_insufficient", def.label or key)
+        end
+        if not def.remove(source, native) then
+            return false, _L("error_alt_currency_insufficient", def.label or key)
+        end
+        altCurrencyUsed = { key = key, label = def.label or key, native = native }
+    elseif paymentMethod == "society" then
+        societyEntry = MatchSocietyAllowlist(source, dealership)
+        if not societyEntry then
+            return false, _L("error_not_in_allowlist")
+        end
+
+        local societyName = societyEntry.name
+        local balance = 0
+        local done = false
+        GetSocietyBalance(societyName, function(b) balance = tonumber(b) or 0; done = true end)
+        local waited = 0
+        while not done and waited < 3000 do
+            Wait(25); waited = waited + 25
+        end
+        if balance < finalPrice then
+            return false, _L("error_society_insufficient")
+        end
+        RemoveSocietyMoney(societyName, finalPrice)
+    else
+        -- Determine currency
+        local currency = "money"
+        if paymentMethod == "bank" then
+            currency = "bank"
+        end
+
+        -- Check funds
+        local playerMoney = GetMoney(source, currency)
+        if playerMoney < finalPrice then
+            return false, "Insufficient funds."
+        end
+
+        -- Deduct money
+        RemoveMoney(source, finalPrice, currency)
+    end
 
     -- Mark stock as sold
     MarkStockSold(stockItem.id, identifier, soldByCitizenid)
@@ -108,7 +217,13 @@ local function ProcessSale(source, dealershipId, stockItem, paymentMethod, coupo
     AddDealershipBalance(dealershipId, netRevenue)
 
     -- Ledger: sale
-    AddLedgerEntry(dealershipId, "sale", finalPrice, ("Vehicle sold: %s for %s"):format(stockItem.vehicle_label or stockItem.vehicle_model, GetCurrencyString(finalPrice)), identifier)
+    local ledgerDesc = ("Vehicle sold: %s for %s"):format(stockItem.vehicle_label or stockItem.vehicle_model, GetCurrencyString(finalPrice))
+    if societyEntry then
+        ledgerDesc = ledgerDesc .. (" (society: %s:%s)"):format(societyEntry.type, societyEntry.name)
+    elseif altCurrencyUsed then
+        ledgerDesc = ledgerDesc .. (" (alt: %s x%d)"):format(altCurrencyUsed.key, altCurrencyUsed.native)
+    end
+    AddLedgerEntry(dealershipId, "sale", finalPrice, ledgerDesc, identifier)
 
     -- Ledger: tax
     if salesTax > 0 then
@@ -117,22 +232,34 @@ local function ProcessSale(source, dealershipId, stockItem, paymentMethod, coupo
 
     -- Commission
     if soldByCitizenid then
-        -- Look up employee role, then get role-based commission from dealership metadata
-        local empRows = MySQL.query.await(
-            "SELECT `role`, `commission_rate` FROM `dealership_employees` WHERE `dealership_id` = ? AND `identifier` = ? LIMIT 1",
+        -- Lookup priority: per-employee override → dealership grade-based rate (using the seller's
+        -- REAL framework job grade, never a synthetic role label) → Config.DefaultCommission.
+        local empRow = MySQL.single.await(
+            "SELECT `commission_rate` FROM `dealership_employees` WHERE `dealership_id` = ? AND `identifier` = ? LIMIT 1",
             { tonumber(dealershipId), soldByCitizenid }
         )
+
         local commissionRate = Config.DefaultCommission or 0.08
-        if empRows and empRows[1] then
-            local empRole = empRows[1].role or 'salesperson'
-            -- Check dealership metadata for role-based commission rates
-            local dealership = GetDealership(tonumber(dealershipId))
+        local empOverride = empRow and tonumber(empRow.commission_rate)
+        if empOverride and empOverride > 0 then
+            -- DB stores percentage (0-100); normalise to decimal.
+            commissionRate = empOverride / 100
+        else
             local meta = dealership and dealership.metadata
             if type(meta) == "string" then meta = json.decode(meta) or {} end
-            if type(meta) == "table" and meta.commissionRates and meta.commissionRates[empRole] then
-                commissionRate = tonumber(meta.commissionRates[empRole]) / 100
+            if dealership and type(meta) == "table" and type(meta.commissionRates) == "table" and dealership.job and dealership.job ~= "" then
+                local sellerSource = GetSourceFromIdentifier(soldByCitizenid)
+                local sellerGrade = sellerSource and GetPlayerJobGrade and GetPlayerJobGrade(sellerSource) or nil
+                if sellerGrade then
+                    -- commissionRates is stored with string keys (JSON normalisation) keyed by level.
+                    local gradeRate = meta.commissionRates[tostring(sellerGrade)] or meta.commissionRates[sellerGrade]
+                    if gradeRate then
+                        commissionRate = tonumber(gradeRate) / 100
+                    end
+                end
             end
         end
+
         local commission = math.floor(finalPrice * commissionRate)
         if commission > 0 then
             -- Deduct commission from dealership balance
@@ -165,7 +292,15 @@ local function ProcessSale(source, dealershipId, stockItem, paymentMethod, coupo
     AddOwnedVehicleWithProps(source, stockItem.vehicle_model, plate, props)
 
     -- Notify
-    ShowNotification(source, ("You purchased a %s for %s!"):format(stockItem.vehicle_label or stockItem.vehicle_model, GetCurrencyString(finalPrice)))
+    -- Award dealership XP (progression / auto-tier).
+    if AwardDealershipXP then
+        local cfg = Config.DealershipProgression or {}
+        local xp = (cfg.xpPerSale or 0) + math.floor(finalPrice * (cfg.xpPerSaleRevenueRate or 0))
+        AwardDealershipXP(dealershipId, xp)
+    end
+
+    -- Purchase success toast is delivered by the NUI wrapper on the buyer's client
+    -- (sales_purchase_success); skip the server-side dupe.
 
     debugPrint(("[Sales] Player %s purchased %s (stock #%d) for %s"):format(identifier, stockItem.vehicle_model, stockItem.id, GetCurrencyString(finalPrice)))
 
@@ -319,6 +454,41 @@ lib.callback.register("pickle_dealerships:confirmEmployeeSale", function(source,
         model = stockItem.vehicle_model,
         label = stockItem.vehicle_label or stockItem.vehicle_model,
     }
+end)
+
+--- Returns the alt payment methods this dealership accepts, including the
+--- calling player's balance and the native amount needed for `price`. Called
+--- by the sales UI to render dynamic payment tabs.
+lib.callback.register("pickle_dealerships:getAltPaymentOptions", function(source, data)
+    local dealershipId = tonumber(data and data.dealershipId)
+    local price = tonumber(data and data.price) or 0
+    if not dealershipId then return {} end
+
+    local dealership = GetDealership(dealershipId)
+    if not dealership then return {} end
+
+    local meta = dealership.metadata
+    if type(meta) == "string" then meta = json.decode(meta) or {} end
+    local accepted = type(meta) == "table" and meta.acceptedAltCurrencies or {}
+
+    local out = {}
+    for _, key in ipairs(accepted) do
+        local def = GetAltCurrency and GetAltCurrency(key) or nil
+        if def then
+            local native = AltCurrencyNativeAmount(def, price)
+            local balance = tonumber(def.get(source)) or 0
+            out[#out + 1] = {
+                key = key,
+                label = def.label or key,
+                type = def.type,
+                valuePerUnit = def.valuePerUnit,
+                balance = balance,
+                required = native,
+                canAfford = balance >= native,
+            }
+        end
+    end
+    return out
 end)
 
 lib.callback.register("pickle_dealerships:getVehicleDetails", function(source, data)

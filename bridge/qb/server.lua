@@ -29,11 +29,14 @@ end
 
 function GetEmployees(jobName, cb)
     local employees = {}
+    local seen = {}
     local players = QBCore.Functions.GetQBPlayers()
     for _, player in pairs(players) do
         if player and player.PlayerData and player.PlayerData.job and player.PlayerData.job.name == jobName then
+            seen[player.PlayerData.citizenid] = true
             employees[#employees + 1] = {
                 source = player.PlayerData.source,
+                identifier = player.PlayerData.citizenid,
                 name = player.PlayerData.charinfo.firstname .. " " .. player.PlayerData.charinfo.lastname,
                 grade = player.PlayerData.job.grade.level,
                 gradeLabel = player.PlayerData.job.grade.name,
@@ -41,6 +44,27 @@ function GetEmployees(jobName, cb)
             }
         end
     end
+
+    local rows = MySQL.query.await(
+        "SELECT citizenid, charinfo, job FROM players WHERE JSON_EXTRACT(job, '$.name') = ?",
+        { jobName }
+    ) or {}
+    for _, row in ipairs(rows) do
+        if not seen[row.citizenid] then
+            local info = type(row.charinfo) == "string" and (json.decode(row.charinfo) or {}) or (row.charinfo or {})
+            local job = type(row.job) == "string" and (json.decode(row.job) or {}) or (row.job or {})
+            local grade = job.grade or {}
+            employees[#employees + 1] = {
+                source = nil,
+                identifier = row.citizenid,
+                name = (info.firstname or "Unknown") .. " " .. (info.lastname or ""),
+                grade = tonumber(grade.level) or 0,
+                gradeLabel = grade.name or "",
+                online = false,
+            }
+        end
+    end
+
     if type(cb) == "function" then cb(employees) end
     return employees
 end
@@ -220,6 +244,102 @@ function GetPlayerJobGrade(source)
     local xPlayer = QBCore.Functions.GetPlayer(tonumber(source))
     if not xPlayer or not xPlayer.PlayerData or not xPlayer.PlayerData.job then return 0 end
     return xPlayer.PlayerData.job.grade.level or 0
+end
+
+function GetPlayerGangName(source)
+    local xPlayer = QBCore.Functions.GetPlayer(tonumber(source))
+    if not xPlayer or not xPlayer.PlayerData or not xPlayer.PlayerData.gang then return nil end
+    return xPlayer.PlayerData.gang.name
+end
+
+function GetPlayerGangGrade(source)
+    local xPlayer = QBCore.Functions.GetPlayer(tonumber(source))
+    if not xPlayer or not xPlayer.PlayerData or not xPlayer.PlayerData.gang or not xPlayer.PlayerData.gang.grade then return 0 end
+    return xPlayer.PlayerData.gang.grade.level or 0
+end
+
+function SetPlayerGang(source, gang, grade)
+    local xPlayer = QBCore.Functions.GetPlayer(tonumber(source))
+    if not xPlayer or not xPlayer.Functions.SetGang then return false end
+    xPlayer.Functions.SetGang(gang, grade)
+    return true
+end
+
+--- Applies a faction change to a player by citizenid, whether online or offline.
+function SetFactionByIdentifier(factionType, identifier, factionName, grade)
+    if not identifier or not factionName then return false end
+    local src = GetSourceFromIdentifier(identifier)
+    if src then
+        if factionType == "gang" then return SetPlayerGang(src, factionName, grade) end
+        SetPlayerJob(src, factionName, grade)
+        return true
+    end
+    local column = (factionType == "gang") and "gang" or "job"
+    local ok = pcall(function()
+        MySQL.update.await(
+            ("UPDATE players SET %s = JSON_SET(COALESCE(%s, JSON_OBJECT()), '$.name', ?, '$.grade', JSON_OBJECT('level', ?)) WHERE citizenid = ?"):format(column, column),
+            { factionName, tonumber(grade) or 0, identifier }
+        )
+    end)
+    return ok
+end
+
+
+function GetGangGrades(gangName)
+    if not QBCore.Shared or not QBCore.Shared.Gangs then return {} end
+    local gang = QBCore.Shared.Gangs[gangName]
+    if not gang or not gang.grades then return {} end
+    local grades = {}
+    for level, grade in pairs(gang.grades) do
+        grades[#grades + 1] = {
+            level = tonumber(level),
+            label = grade.name or ("Grade " .. level),
+        }
+    end
+    table.sort(grades, function(a, b) return a.level < b.level end)
+    return grades
+end
+
+function GetGangMembers(gangName, cb)
+    local members = {}
+    local seen = {}
+    local players = QBCore.Functions.GetQBPlayers()
+    for _, player in pairs(players) do
+        if player and player.PlayerData and player.PlayerData.gang and player.PlayerData.gang.name == gangName then
+            seen[player.PlayerData.citizenid] = true
+            members[#members + 1] = {
+                source = player.PlayerData.source,
+                identifier = player.PlayerData.citizenid,
+                name = player.PlayerData.charinfo.firstname .. " " .. player.PlayerData.charinfo.lastname,
+                grade = player.PlayerData.gang.grade and player.PlayerData.gang.grade.level or 0,
+                gradeLabel = player.PlayerData.gang.grade and player.PlayerData.gang.grade.name or "",
+                online = true,
+            }
+        end
+    end
+
+    local rows = MySQL.query.await(
+        "SELECT citizenid, charinfo, gang FROM players WHERE JSON_EXTRACT(gang, '$.name') = ?",
+        { gangName }
+    ) or {}
+    for _, row in ipairs(rows) do
+        if not seen[row.citizenid] then
+            local info = type(row.charinfo) == "string" and (json.decode(row.charinfo) or {}) or (row.charinfo or {})
+            local gang = type(row.gang) == "string" and (json.decode(row.gang) or {}) or (row.gang or {})
+            local grade = gang.grade or {}
+            members[#members + 1] = {
+                source = nil,
+                identifier = row.citizenid,
+                name = (info.firstname or "Unknown") .. " " .. (info.lastname or ""),
+                grade = tonumber(grade.level) or 0,
+                gradeLabel = grade.name or "",
+                online = false,
+            }
+        end
+    end
+
+    if type(cb) == "function" then cb(members) end
+    return members
 end
 
 function SetPlayerJob(source, job, grade)

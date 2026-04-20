@@ -420,6 +420,19 @@ function CreateDeliveryDepot(name, x, y, z, heading)
     return id
 end
 
+--- Moves the dispatch ped (pickup) coords for an existing depot.
+function SetDeliveryDepotPickup(id, x, y, z, heading)
+    id = tonumber(id)
+    if not id or not DeliveryDepotCache[id] then return false end
+    if not x or not y or not z then return false end
+    MySQL.update.await(
+        "UPDATE `delivery_depots` SET `x` = ?, `y` = ?, `z` = ?, `heading` = ? WHERE `id` = ?",
+        { x, y, z, heading or 0.0, id }
+    )
+    DeliveryDepotCache[id].pickupCoords = { x = x, y = y, z = z, w = heading or 0.0 }
+    return true
+end
+
 --- Sets (or clears, if all coords are nil) the separate truck-spawn point for a depot.
 function SetDeliveryDepotSpawn(id, x, y, z, heading)
     id = tonumber(id)
@@ -535,6 +548,143 @@ end
 function GetDealership(id)
     if not id then return nil end
     return DealershipCache[tonumber(id)]
+end
+
+--- Returns the dealership's progression state from metadata.xp and the
+--- configured level thresholds. Always returns something usable even when
+--- progression is disabled (so callers don't have to handle nils).
+function GetDealershipProgression(dealership)
+    local cfg = Config.DealershipProgression or {}
+    local levels = cfg.levels or {}
+    local meta = dealership and dealership.metadata
+    if type(meta) == "string" then meta = json.decode(meta) or {} end
+    local xp = (type(meta) == "table" and tonumber(meta.xp)) or 0
+
+    -- Resolve current level by walking thresholds in ascending order. The dealership's
+    -- stored tier can override upward (manual admin bumps), but never downward.
+    local resolved = 1
+    local highest = 1
+    for lvl, def in pairs(levels) do
+        lvl = tonumber(lvl)
+        if lvl then
+            if xp >= (def.xpRequired or 0) and lvl > resolved then resolved = lvl end
+            if lvl > highest then highest = lvl end
+        end
+    end
+    if dealership and dealership.tier and dealership.tier > resolved then
+        resolved = dealership.tier
+    end
+
+    local nextLevel = resolved + 1
+    local nextDef = levels[nextLevel]
+    local currentDef = levels[resolved] or { label = ("Level " .. tostring(resolved)), xpRequired = 0 }
+
+    return {
+        level = resolved,
+        label = currentDef.label,
+        xp = xp,
+        currentLevelXp = currentDef.xpRequired or 0,
+        nextLevelXp = nextDef and nextDef.xpRequired or nil,
+        isMaxLevel = resolved >= highest,
+        enabled = cfg.enabled ~= false,
+    }
+end
+
+--- Adds XP to a dealership and, if thresholds are crossed, bumps its tier.
+--- No-op when progression is disabled. Returns the new progression snapshot.
+function AwardDealershipXP(dealershipId, amount)
+    local cfg = Config.DealershipProgression or {}
+    if cfg.enabled == false then return nil end
+    amount = math.floor(tonumber(amount) or 0)
+    if amount <= 0 then return nil end
+
+    local dealership = GetDealership(dealershipId)
+    if not dealership then return nil end
+
+    local meta = dealership.metadata
+    if type(meta) == "string" then meta = json.decode(meta) or {} end
+    if type(meta) ~= "table" then meta = {} end
+
+    meta.xp = (tonumber(meta.xp) or 0) + amount
+
+    -- Auto-tier: compute the highest level whose xpRequired is met.
+    local levels = cfg.levels or {}
+    local newTier = dealership.tier or 1
+    for lvl, def in pairs(levels) do
+        lvl = tonumber(lvl)
+        if lvl and meta.xp >= (def.xpRequired or 0) and lvl > newTier then
+            newTier = lvl
+        end
+    end
+
+    MySQL.update.await(
+        "UPDATE dealerships SET tier = ?, metadata = ? WHERE id = ?",
+        { newTier, json.encode(meta), dealershipId }
+    )
+    UpdateDealershipCache(dealershipId, { tier = newTier, metadata = meta })
+
+    if newTier > (dealership.tier or 1) then
+        TriggerClientEvent('pickle_dealerships:dealershipLevelUp', -1, dealershipId, newTier)
+    end
+
+    return GetDealershipProgression(GetDealership(dealershipId))
+end
+
+--- Returns the dealership's faction as { name = string|nil, type = 'job'|'gang' }.
+--- `dealership.job` holds the faction name (legacy column name kept for back-compat);
+--- the type lives in metadata.factionType and defaults to 'job'.
+--- Returns the admin-configured access gate for a dealership:
+---   mode = 'public' | 'faction'
+---   minGrade = number (faction mode only)
+function GetDealershipAccess(dealership)
+    if not dealership then return { mode = 'public', minGrade = 0 } end
+    local meta = dealership.metadata
+    if type(meta) == "string" then meta = json.decode(meta) or {} end
+    if type(meta) ~= "table" then return { mode = 'public', minGrade = 0 } end
+    local mode = meta.accessMode
+    if mode ~= "faction" then mode = "public" end
+    return { mode = mode, minGrade = tonumber(meta.accessMinGrade) or 0 }
+end
+
+--- Checks whether a player may view/purchase at this dealership. Owners,
+--- hired employees (DB row), and admins bypass the access gate — this
+--- prevents locking out the people who run the lot.
+function PlayerCanAccessDealership(source, dealership)
+    if not dealership then return false end
+    if IsPlayerAdmin and IsPlayerAdmin(source) then return true end
+
+    local identifier = GetIdentifier and GetIdentifier(source) or nil
+    if identifier and dealership.owner_identifier == identifier then return true end
+
+    local access = GetDealershipAccess(dealership)
+    if access.mode == "public" then return true end
+
+    local faction = GetDealershipFaction(dealership)
+    if not faction.name or faction.name == "" then
+        -- Faction mode but no faction configured — treat as public to avoid
+        -- accidentally locking everyone out. Admin must set the faction.
+        return true
+    end
+
+    if faction.type == "gang" then
+        local name = GetPlayerGangName and GetPlayerGangName(source) or nil
+        if name ~= faction.name then return false end
+        return (GetPlayerGangGrade and GetPlayerGangGrade(source) or 0) >= access.minGrade
+    end
+    local name = GetPlayerJobName and GetPlayerJobName(source) or nil
+    if name ~= faction.name then return false end
+    return (GetPlayerJobGrade and GetPlayerJobGrade(source) or 0) >= access.minGrade
+end
+
+function GetDealershipFaction(dealership)
+    if not dealership then return { name = nil, type = 'job' } end
+    local meta = dealership.metadata
+    if type(meta) == "string" then meta = json.decode(meta) or {} end
+    local factionType = (type(meta) == "table" and meta.factionType) or 'job'
+    if factionType ~= 'job' and factionType ~= 'gang' then factionType = 'job' end
+    local name = dealership.job
+    if name == "" then name = nil end
+    return { name = name, type = factionType }
 end
 
 function GetDealershipByLocation(location)

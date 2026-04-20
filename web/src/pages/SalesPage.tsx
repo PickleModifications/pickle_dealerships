@@ -11,10 +11,22 @@ import { fetchNui, formatCurrency, getVehicleImage } from '../lib/utils'
 import { t } from '../lib/locale'
 import { getCached, setCache, buildKey } from '../lib/cache'
 import { SkeletonCardGrid } from '../components/ui/skeleton'
-import { X, Search, CreditCard, Car, Tag, Banknote, FileText } from 'lucide-react'
+import { X, Search, CreditCard, Car, Tag, Banknote, FileText, Shield, Coins } from 'lucide-react'
 import VehicleImg from '../components/VehicleImg'
 import { PickleFaxDialog } from '../components/PickleFax'
-import type { DealershipData, StockItem } from '../types'
+import type { DealershipData, StockItem, SocietyMatch, AltPaymentOption } from '../types'
+
+function getStockMinGrade(item: StockItem): number {
+  let meta = item.metadata as unknown
+  if (typeof meta === 'string') {
+    try { meta = JSON.parse(meta) } catch { return 0 }
+  }
+  if (meta && typeof meta === 'object') {
+    const mg = (meta as Record<string, unknown>).minGrade
+    return typeof mg === 'number' ? mg : 0
+  }
+  return 0
+}
 
 interface Props {
   data: DealershipData
@@ -29,8 +41,11 @@ export default function SalesPage({ data, onClose }: Props) {
   const [loading, setLoading] = useState(!cached)
   const [selected, setSelected] = useState<StockItem | null>(null)
   const [couponCode, setCouponCode] = useState('')
-  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'bank'>('bank')
+  // paymentMethod: 'cash' | 'bank' | 'society' | `alt:${key}`
+  const [paymentMethod, setPaymentMethod] = useState<string>('bank')
   const [pickleFaxId, setPickleFaxId] = useState<number | null>(null)
+  const [societyMatch, setSocietyMatch] = useState<SocietyMatch | null>(null)
+  const [altOptions, setAltOptions] = useState<AltPaymentOption[]>([])
 
   useEffect(() => {
     fetchNui<StockItem[] | { stock: StockItem[] }>('getStock', {
@@ -42,12 +57,32 @@ export default function SalesPage({ data, onClose }: Props) {
       setCache(cacheKey, items)
       setLoading(false)
     }).catch(() => setLoading(false))
+
+    fetchNui<{ match: SocietyMatch | null }>('canUseSocietyFunds', {
+      dealershipId: data.dealershipId,
+    }).then((res) => {
+      setSocietyMatch(res?.match ?? null)
+    }).catch(() => setSocietyMatch(null))
   }, [data.dealershipId])
 
   const available = stock.filter((s) => !s.sold_at && !s.unlisted && s.delivered_at && new Date(s.delivered_at) <= new Date())
   const filtered = available.filter((item) =>
     (item.vehicle_label || item.vehicle_model).toLowerCase().includes(search.toLowerCase())
   )
+
+  // Fetch alt-payment balances whenever the selected vehicle (or its price) changes
+  useEffect(() => {
+    if (!selected) {
+      setAltOptions([])
+      return
+    }
+    fetchNui<{ options: AltPaymentOption[] }>('getAltPaymentOptions', {
+      dealershipId: data.dealershipId,
+      price: selected.retail_price,
+    }).then((res) => {
+      setAltOptions(res?.options ?? [])
+    }).catch(() => setAltOptions([]))
+  }, [selected?.id, selected?.retail_price, data.dealershipId])
 
   const handlePurchase = () => {
     if (!selected) return
@@ -128,6 +163,9 @@ export default function SalesPage({ data, onClose }: Props) {
                       {(item.quantity || 1) > 1 && <Badge variant="secondary">x{item.quantity}</Badge>}
                       {item.is_used && <Badge variant="secondary">{t('label_pre_owned')}</Badge>}
                       {item.display_spot && <Badge variant="outline">{t('label_on_display')}</Badge>}
+                      {getStockMinGrade(item) > 0 && (
+                        <Badge variant="outline" className="gap-0.5"><Shield className="h-2.5 w-2.5" /> {getStockMinGrade(item)}</Badge>
+                      )}
                       {item.is_used && (
                         <button
                           onClick={(e) => { e.stopPropagation(); setPickleFaxId(item.id) }}
@@ -176,12 +214,43 @@ export default function SalesPage({ data, onClose }: Props) {
                 <p className="text-2xl font-bold text-accent">{formatCurrency(selected.retail_price)}</p>
               </div>
 
-              <Tabs defaultValue="bank" onValueChange={(v) => setPaymentMethod(v as 'cash' | 'bank')}>
-                <TabsList className="w-full">
+              <Tabs value={paymentMethod} onValueChange={(v) => setPaymentMethod(v)}>
+                <TabsList className="w-full flex-wrap">
                   <TabsTrigger value="bank" className="flex-1 gap-1"><CreditCard className="h-3 w-3" /> {t('label_bank')}</TabsTrigger>
                   <TabsTrigger value="cash" className="flex-1 gap-1"><Banknote className="h-3 w-3" /> {t('label_cash')}</TabsTrigger>
+                  {societyMatch && (
+                    <TabsTrigger value="society" className="flex-1 gap-1"><Shield className="h-3 w-3" /> {t('label_society_funds')}</TabsTrigger>
+                  )}
+                  {altOptions.map((opt) => (
+                    <TabsTrigger key={opt.key} value={`alt:${opt.key}`} className="flex-1 gap-1">
+                      <Coins className="h-3 w-3" /> {opt.label}
+                    </TabsTrigger>
+                  ))}
                 </TabsList>
               </Tabs>
+              {paymentMethod === 'society' && societyMatch && (
+                <p className="text-[10px] text-muted-foreground">
+                  {t('society_funds_source', societyMatch.name)}
+                </p>
+              )}
+              {paymentMethod.startsWith('alt:') && (() => {
+                const opt = altOptions.find((o) => `alt:${o.key}` === paymentMethod)
+                if (!opt) return null
+                return (
+                  <div className="text-[10px] text-muted-foreground space-y-0.5">
+                    <p>{t('alt_payment_balance', String(opt.balance))} &middot; {t('alt_payment_required', String(opt.required))}</p>
+                    {!opt.canAfford && (
+                      <p className="text-rose-400">{t('alt_payment_insufficient')}</p>
+                    )}
+                  </div>
+                )
+              })()}
+
+              {selected && getStockMinGrade(selected) > 0 && (
+                <p className="text-[10px] text-amber-400 flex items-center gap-1">
+                  <Shield className="h-3 w-3" /> {t('label_min_grade_required', String(getStockMinGrade(selected)))}
+                </p>
+              )}
 
               {isEmployee && (
                 <div>

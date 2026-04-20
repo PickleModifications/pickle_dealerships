@@ -23,6 +23,28 @@ export interface DealershipData {
   stockId?: number
   deliveryQueue?: DeliveryQueueData
   depotId?: number
+  // Depot admin: survives gizmo invocations so the create dialog can repopulate
+  pendingDepot?: {
+    name?: string
+    pickupCoords?: { x: number; y: number; z: number; w?: number }
+    spawnCoords?: { x: number; y: number; z: number; w?: number }
+  }
+  pendingDealership?: {
+    name?: string
+    mode?: string
+    type?: string
+    coords?: { x: number; y: number; z: number; w?: number }
+    spawnPoint?: { x: number; y: number; z: number; w?: number }
+    deliveryPoint?: { x: number; y: number; z: number; w?: number }
+  }
+  editDepotId?: number
+  // When set, the showroom opens in "display-spot picker" mode. The Buy/Finance
+  // actions are replaced with a single "Place Here" button that assigns the
+  // selected vehicle to this spot via setDisplaySpot.
+  pickerSpotId?: number
+  // When set, the showroom opens in "single-vehicle spot view" mode — no
+  // sidebar, camera already at the spot, and the given stock item pre-selected.
+  spotViewStockId?: number
   uploadConfig?: {
     url: string
     field: string
@@ -34,10 +56,16 @@ export interface DealershipData {
 export interface DealershipMetadata {
   coords?: PositionData
   spawnPoint?: PositionData
+  deliveryPoint?: PositionData
   displaySpots?: PositionData[]
   interactionPoints?: Record<string, PositionData>
   npcSpawnPoints?: PositionData[]
   zones?: PositionData[]
+  factionType?: 'job' | 'gang'
+  societyAllowlist?: SocietyAllowlistEntry[]
+  acceptedAltCurrencies?: string[]
+  accessMode?: 'public' | 'faction'
+  accessMinGrade?: number
 }
 
 export interface PositionData {
@@ -107,11 +135,13 @@ export interface Employee {
   dealership_id: number
   identifier: string
   name?: string
-  role: 'manager' | 'salesperson' | 'owner'
   gradeLabel?: string
   grade?: number
-  commission_rate: number
-  hired_at: string
+  // Legacy single rate (kept for back-compat in older mission payloads).
+  commission_rate?: number
+  // Per-employee override as a percentage (0-100). 0 means "use dealership grade rate".
+  commission_override?: number
+  hired_at?: string
   clocked_in?: boolean
   online?: boolean
   metadata?: Record<string, unknown>
@@ -169,6 +199,16 @@ export interface FinancingSettings {
   installmentOptions: number[]
 }
 
+export interface DealershipProgression {
+  level: number
+  label: string
+  xp: number
+  currentLevelXp: number
+  nextLevelXp: number | null
+  isMaxLevel: boolean
+  enabled: boolean
+}
+
 export interface DashboardStats {
   totalSales: number
   totalRevenue: number
@@ -176,7 +216,7 @@ export interface DashboardStats {
   totalCommission: number
   salesThisWeek: number
   revenueThisWeek: number
-  topSeller?: { name: string; sales: number }
+  topSeller?: { name: string; sales: number; revenue?: number }
   stockCount: number
   stockCapacity: number
   employeeCount: number
@@ -254,6 +294,7 @@ export interface MissionOverlayState {
   visible: boolean
   phase?: 'pickup' | 'transport'
   phaseKey?: string
+  phaseHintKey?: string
   vehicleLabel?: string
   quantity?: number
   bundledLines?: number
@@ -354,6 +395,37 @@ export interface PickleFaxDetails {
   image?: string | null
   class?: string | null
   properties: Record<string, unknown> | null
+}
+
+export type FactionType = 'job' | 'gang'
+
+export interface AltCurrencyInfo {
+  key: string
+  label: string
+  type: string
+  valuePerUnit: number
+}
+
+export interface AltPaymentOption {
+  key: string
+  label: string
+  type: string
+  valuePerUnit: number
+  balance: number
+  required: number
+  canAfford: boolean
+}
+
+export interface SocietyAllowlistEntry {
+  type: 'job' | 'gang'
+  name: string
+  minGrade: number
+}
+
+export interface SocietyMatch {
+  type: 'job' | 'gang'
+  name: string
+  minGrade: number
 }
 
 export interface NuiMessage {
