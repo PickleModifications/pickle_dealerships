@@ -129,12 +129,19 @@ end)
 --- Create a new dealership
 RegisterNUICallback("adminCreateDealership", function(data, cb)
     local result = lib.callback.await("pickle_dealerships:adminCreateDealership", false, {
-        label         = data.label,
-        mode          = data.mode,
-        type          = data.type,
-        coords        = data.coords,
-        spawnPoint    = data.spawnPoint,
-        deliveryPoint = data.deliveryPoint,
+        label            = data.label,
+        mode             = data.mode,
+        type             = data.type,
+        tier             = data.tier,
+        factionType      = data.factionType,
+        factionName      = data.factionName,
+        ownerIdentifier  = data.ownerIdentifier,
+        coords           = data.coords,
+        spawnPoint       = data.spawnPoint,
+        deliveryPoint    = data.deliveryPoint,
+        managementPoint  = data.managementPoint,
+        salesPoint       = data.salesPoint,
+        showroomPoint    = data.showroomPoint,
     })
     if result and result.success then
         ShowNotification(result.message)
@@ -191,7 +198,10 @@ RegisterNUICallback("adminPlaceDealershipPoint", function(payload, cb)
         }
         if field == "coords" then draft.coords = coord
         elseif field == "spawnPoint" then draft.spawnPoint = coord
-        elseif field == "deliveryPoint" then draft.deliveryPoint = coord end
+        elseif field == "deliveryPoint" then draft.deliveryPoint = coord
+        elseif field == "managementPoint" then draft.managementPoint = coord
+        elseif field == "salesPoint" then draft.salesPoint = coord
+        elseif field == "showroomPoint" then draft.showroomPoint = coord end
     end
 
     OpenNui('admin', {

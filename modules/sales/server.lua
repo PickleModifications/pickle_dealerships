@@ -3,11 +3,57 @@
 --  Vehicle sales to players
 -- =============================================
 
+-- ─── Test drive routing buckets ─────────────────────────────────────────────
+-- Each test drive runs in its own bucket so the driver can't crash into other
+-- players, other players' vehicles, or traffic. Bucket IDs are derived from
+-- server ID so concurrent drives don't collide. Restored on test drive end,
+-- player disconnect, or resource stop.
+
+local TEST_DRIVE_BUCKET_BASE = 90000
+local originalBuckets = {} -- [src] = previous bucket id
+
+local function EnterTestDriveBucket(source)
+    local src = tonumber(source)
+    if not src or originalBuckets[src] then return end
+    local key = tostring(src)
+    originalBuckets[src] = GetPlayerRoutingBucket(key)
+    SetPlayerRoutingBucket(key, TEST_DRIVE_BUCKET_BASE + src)
+end
+
+local function LeaveTestDriveBucket(source)
+    local src = tonumber(source)
+    if not src then return end
+    local prev = originalBuckets[src]
+    if prev == nil then return end
+    SetPlayerRoutingBucket(tostring(src), prev)
+    originalBuckets[src] = nil
+end
+
+RegisterNetEvent('pickle_dealerships:enterTestDriveBucket', function()
+    EnterTestDriveBucket(source)
+end)
+
+RegisterNetEvent('pickle_dealerships:leaveTestDriveBucket', function()
+    LeaveTestDriveBucket(source)
+end)
+
+AddEventHandler('playerDropped', function()
+    LeaveTestDriveBucket(source)
+end)
+
+AddEventHandler('onResourceStop', function(resourceName)
+    if resourceName ~= GetCurrentResourceName() then return end
+    for src, prev in pairs(originalBuckets) do
+        pcall(SetPlayerRoutingBucket, tostring(src), prev)
+    end
+    originalBuckets = {}
+end)
+
 -- ─── Helpers ────────────────────────────────────────────────────────────────
 
 local function GetStockItem(stockId)
     local rows = MySQL.query.await(
-        "SELECT * FROM `dealership_stock` WHERE `id` = ? LIMIT 1",
+        "SELECT * FROM `pickle_dealership_stock` WHERE `id` = ? LIMIT 1",
         { tonumber(stockId) }
     )
     return rows and rows[1] or nil
@@ -16,7 +62,7 @@ end
 local function ValidateCoupon(dealershipId, code, purchasePrice)
     if not code or code == "" then return nil end
     local rows = MySQL.query.await(
-        "SELECT * FROM `dealership_coupons` WHERE `dealership_id` = ? AND `code` = ? LIMIT 1",
+        "SELECT * FROM `pickle_dealership_coupons` WHERE `dealership_id` = ? AND `code` = ? LIMIT 1",
         { tonumber(dealershipId), tostring(code) }
     )
     local coupon = rows and rows[1] or nil
@@ -33,24 +79,24 @@ local function ValidateCoupon(dealershipId, code, purchasePrice)
     end
 
     -- Increment uses
-    MySQL.update("UPDATE `dealership_coupons` SET `uses` = `uses` + 1 WHERE `id` = ?", { coupon.id })
+    MySQL.update("UPDATE `pickle_dealership_coupons` SET `uses` = `uses` + 1 WHERE `id` = ?", { coupon.id })
 
     return discount, coupon
 end
 
 local function MarkStockSold(stockId, identifier, soldBy)
     local stock = MySQL.single.await(
-        "SELECT `quantity` FROM `dealership_stock` WHERE `id` = ?",
+        "SELECT `quantity` FROM `pickle_dealership_stock` WHERE `id` = ?",
         { tonumber(stockId) }
     )
     if stock and stock.quantity > 1 then
         MySQL.update(
-            "UPDATE `dealership_stock` SET `quantity` = `quantity` - 1 WHERE `id` = ?",
+            "UPDATE `pickle_dealership_stock` SET `quantity` = `quantity` - 1 WHERE `id` = ?",
             { tonumber(stockId) }
         )
     else
         MySQL.update(
-            "UPDATE `dealership_stock` SET `sold_at` = NOW(), `sold_to` = ?, `sold_by` = ? WHERE `id` = ?",
+            "UPDATE `pickle_dealership_stock` SET `sold_at` = NOW(), `sold_to` = ?, `sold_by` = ? WHERE `id` = ?",
             { identifier, soldBy, tonumber(stockId) }
         )
     end
@@ -58,12 +104,12 @@ end
 
 local function AddDealershipBalance(dealershipId, amount)
     MySQL.update.await(
-        "UPDATE `dealerships` SET `balance` = `balance` + ? WHERE `id` = ?",
+        "UPDATE `pickle_dealerships` SET `balance` = `balance` + ? WHERE `id` = ?",
         { tonumber(amount), tonumber(dealershipId) }
     )
     -- Read fresh balance from DB to keep cache accurate
     local freshBalance = MySQL.scalar.await(
-        "SELECT `balance` FROM `dealerships` WHERE `id` = ?",
+        "SELECT `balance` FROM `pickle_dealerships` WHERE `id` = ?",
         { tonumber(dealershipId) }
     )
     if freshBalance then
@@ -235,7 +281,7 @@ local function ProcessSale(source, dealershipId, stockItem, paymentMethod, coupo
         -- Lookup priority: per-employee override → dealership grade-based rate (using the seller's
         -- REAL framework job grade, never a synthetic role label) → Config.DefaultCommission.
         local empRow = MySQL.single.await(
-            "SELECT `commission_rate` FROM `dealership_employees` WHERE `dealership_id` = ? AND `identifier` = ? LIMIT 1",
+            "SELECT `commission_rate` FROM `pickle_dealership_employees` WHERE `dealership_id` = ? AND `identifier` = ? LIMIT 1",
             { tonumber(dealershipId), soldByCitizenid }
         )
 

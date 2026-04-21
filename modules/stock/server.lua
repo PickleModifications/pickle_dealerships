@@ -6,7 +6,7 @@ lib.callback.register('pickle_dealerships:getCatalog', function(source, data)
     if not locationKey then return { items = {}, total = 0, page = 1, pageSize = 50 } end
 
     local dealership = MySQL.single.await(
-        'SELECT * FROM dealerships WHERE location = ?',
+        'SELECT * FROM pickle_dealerships WHERE location = ?',
         { locationKey }
     )
     if not dealership then return { items = {}, total = 0, page = 1, pageSize = 50 } end
@@ -65,7 +65,7 @@ lib.callback.register('pickle_dealerships:getCatalog', function(source, data)
 
     local countParams = { table.unpack(params) }
     local countResult = MySQL.scalar.await(
-        ('SELECT COUNT(*) FROM wholesale_catalog WHERE %s'):format(where),
+        ('SELECT COUNT(*) FROM pickle_wholesale_catalog WHERE %s'):format(where),
         countParams
     )
 
@@ -73,7 +73,7 @@ lib.callback.register('pickle_dealerships:getCatalog', function(source, data)
     params[#params + 1] = offset
 
     local results = MySQL.query.await(
-        ('SELECT * FROM wholesale_catalog WHERE %s ORDER BY wholesale ASC LIMIT ? OFFSET ?'):format(where),
+        ('SELECT * FROM pickle_wholesale_catalog WHERE %s ORDER BY wholesale ASC LIMIT ? OFFSET ?'):format(where),
         params
     )
 
@@ -90,7 +90,7 @@ end)
 ---@param locationKey string
 lib.callback.register('pickle_dealerships:getStock', function(source, locationKey)
     local dealership = MySQL.single.await(
-        'SELECT * FROM dealerships WHERE location = ?',
+        'SELECT * FROM pickle_dealerships WHERE location = ?',
         { locationKey }
     )
     if not dealership then return {} end
@@ -100,8 +100,8 @@ lib.callback.register('pickle_dealerships:getStock', function(source, locationKe
 
     local isManager = CanPlayerManage(source, dealership.id)
     local stockQuery = isManager
-        and 'SELECT ds.*, wc.image, wc.class FROM dealership_stock ds LEFT JOIN wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL ORDER BY ds.ordered_at DESC'
-        or  'SELECT ds.*, wc.image, wc.class FROM dealership_stock ds LEFT JOIN wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.unlisted = 0 ORDER BY ds.ordered_at DESC'
+        and 'SELECT ds.*, wc.image, wc.class FROM pickle_dealership_stock ds LEFT JOIN pickle_wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL ORDER BY ds.ordered_at DESC'
+        or  'SELECT ds.*, wc.image, wc.class FROM pickle_dealership_stock ds LEFT JOIN pickle_wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.unlisted = 0 ORDER BY ds.ordered_at DESC'
     local stock = MySQL.query.await(stockQuery, { dealership.id }) or {}
 
     -- Include pending orders as in-transit stock cards.
@@ -113,8 +113,8 @@ lib.callback.register('pickle_dealerships:getStock', function(source, locationKe
                dor.wholesale_cost, dor.quantity, dor.delivery_mode, dor.delivery_fee,
                dor.ordered_at, dor.delivered_at, dor.claimed_by,
                wc.image, COALESCE(wc.class, 'sedan') AS class
-          FROM dealership_orders dor
-          LEFT JOIN wholesale_catalog wc ON wc.model = dor.vehicle_model
+          FROM pickle_dealership_orders dor
+          LEFT JOIN pickle_wholesale_catalog wc ON wc.model = dor.vehicle_model
          WHERE dor.dealership_id = ?
          ORDER BY dor.ordered_at DESC
     ]], { dealership.id }) or {}
@@ -180,7 +180,7 @@ lib.callback.register('pickle_dealerships:getShowroomStock', function(source, da
     if not locationKey then return { items = {}, total = 0, page = 1, pageSize = 20 } end
 
     local dealership = MySQL.single.await(
-        'SELECT * FROM dealerships WHERE location = ?',
+        'SELECT * FROM pickle_dealerships WHERE location = ?',
         { locationKey }
     )
     if not dealership then return { items = {}, total = 0, page = 1, pageSize = 20 } end
@@ -232,7 +232,7 @@ lib.callback.register('pickle_dealerships:getShowroomStock', function(source, da
 
     local countParams = { table.unpack(params) }
     local countResult = MySQL.scalar.await(
-        ('SELECT COUNT(*) FROM dealership_stock ds LEFT JOIN wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE %s'):format(where),
+        ('SELECT COUNT(*) FROM pickle_dealership_stock ds LEFT JOIN pickle_wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE %s'):format(where),
         countParams
     )
 
@@ -240,7 +240,7 @@ lib.callback.register('pickle_dealerships:getShowroomStock', function(source, da
     params[#params + 1] = offset
 
     local results = MySQL.query.await(
-        ('SELECT ds.*, wc.image, wc.class FROM dealership_stock ds LEFT JOIN wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE %s ORDER BY %s LIMIT ? OFFSET ?'):format(where, orderBy),
+        ('SELECT ds.*, wc.image, wc.class FROM pickle_dealership_stock ds LEFT JOIN pickle_wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE %s ORDER BY %s LIMIT ? OFFSET ?'):format(where, orderBy),
         params
     )
 
@@ -249,7 +249,7 @@ lib.callback.register('pickle_dealerships:getShowroomStock', function(source, da
     local highestPrice = 0
     if page == 1 and search == '' and classFilter == 'all' and not minPrice and not maxPrice then
         local classRows = MySQL.query.await(
-            'SELECT DISTINCT wc.class FROM dealership_stock ds LEFT JOIN wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.unlisted = 0 AND ds.delivered_at IS NOT NULL AND ds.delivered_at <= NOW() AND wc.class IS NOT NULL ORDER BY wc.class',
+            'SELECT DISTINCT wc.class FROM pickle_dealership_stock ds LEFT JOIN pickle_wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.unlisted = 0 AND ds.delivered_at IS NOT NULL AND ds.delivered_at <= NOW() AND wc.class IS NOT NULL ORDER BY wc.class',
             { dealership.id }
         )
         if classRows then
@@ -259,7 +259,7 @@ lib.callback.register('pickle_dealerships:getShowroomStock', function(source, da
         end
 
         highestPrice = MySQL.scalar.await(
-            'SELECT COALESCE(MAX(ds.retail_price), 0) FROM dealership_stock ds WHERE ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.unlisted = 0 AND ds.delivered_at IS NOT NULL AND ds.delivered_at <= NOW()',
+            'SELECT COALESCE(MAX(ds.retail_price), 0) FROM pickle_dealership_stock ds WHERE ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.unlisted = 0 AND ds.delivered_at IS NOT NULL AND ds.delivered_at <= NOW()',
             { dealership.id }
         ) or 0
     end
@@ -320,7 +320,7 @@ lib.callback.register('pickle_dealerships:orderVehicle', function(source, locati
     if not identifier then return false, 'Unable to identify player.' end
 
     local dealership = MySQL.single.await(
-        'SELECT * FROM dealerships WHERE location = ?',
+        'SELECT * FROM pickle_dealerships WHERE location = ?',
         { locationKey }
     )
     if not dealership then return false, 'Dealership not found.' end
@@ -330,7 +330,7 @@ lib.callback.register('pickle_dealerships:orderVehicle', function(source, locati
     local employee = nil
     if not isOwner then
         employee = MySQL.single.await(
-            'SELECT role FROM dealership_employees WHERE dealership_id = ? AND identifier = ?',
+            'SELECT role FROM pickle_dealership_employees WHERE dealership_id = ? AND identifier = ?',
             { dealership.id, identifier }
         )
         if not employee or (employee.role ~= 'manager' and not IsPlayerAdmin(source)) then
@@ -340,7 +340,7 @@ lib.callback.register('pickle_dealerships:orderVehicle', function(source, locati
 
     -- Verify the model is in the DB catalog
     local catalogEntry = MySQL.single.await(
-        'SELECT * FROM wholesale_catalog WHERE model = ?',
+        'SELECT * FROM pickle_wholesale_catalog WHERE model = ?',
         { model }
     )
 
@@ -387,7 +387,7 @@ lib.callback.register('pickle_dealerships:orderVehicle', function(source, locati
         end
         local cfg = Config.Delivery or {}
         local openOffers = MySQL.scalar.await(
-            "SELECT COUNT(*) FROM dealership_orders WHERE dealership_id = ? AND delivery_mode = 'local' AND claimed_by IS NULL",
+            "SELECT COUNT(*) FROM pickle_dealership_orders WHERE dealership_id = ? AND delivery_mode = 'local' AND claimed_by IS NULL",
             { dealership.id }
         ) or 0
         if tonumber(openOffers) >= (cfg.maxActiveQueuePerDealership or 10) then
@@ -402,11 +402,11 @@ lib.callback.register('pickle_dealerships:orderVehicle', function(source, locati
     local tierCfg = Config.Tiers[dealership.tier or 1]
     local stockCapacity = (tierCfg and tierCfg.stockCap) or 20
     local stockCount = MySQL.scalar.await(
-        'SELECT COALESCE(SUM(quantity), 0) FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NULL',
+        'SELECT COALESCE(SUM(quantity), 0) FROM pickle_dealership_stock WHERE dealership_id = ? AND sold_at IS NULL',
         { dealership.id }
     ) or 0
     local pendingCount = MySQL.scalar.await(
-        'SELECT COALESCE(SUM(quantity), 0) FROM dealership_orders WHERE dealership_id = ?',
+        'SELECT COALESCE(SUM(quantity), 0) FROM pickle_dealership_orders WHERE dealership_id = ?',
         { dealership.id }
     ) or 0
     local currentCount = tonumber(stockCount) + tonumber(pendingCount)
@@ -426,21 +426,21 @@ lib.callback.register('pickle_dealerships:orderVehicle', function(source, locati
         return false, 'Insufficient dealership funds. Need $' .. totalCost .. ', have $' .. dealership.balance .. '.'
     end
 
-    MySQL.update.await('UPDATE dealerships SET balance = balance - ? WHERE id = ?', { totalCost, dealership.id })
+    MySQL.update.await('UPDATE pickle_dealerships SET balance = balance - ? WHERE id = ?', { totalCost, dealership.id })
 
     local stockId
     if resolvedMode == 'instant' then
         -- Admin/testing: stack directly into stock
         local existing = MySQL.single.await(
-            'SELECT id FROM dealership_stock WHERE dealership_id = ? AND vehicle_model = ? AND sold_at IS NULL AND display_spot IS NULL AND is_used = 0 AND (`condition` = 100.00 OR `condition` IS NULL) ORDER BY id ASC LIMIT 1',
+            'SELECT id FROM pickle_dealership_stock WHERE dealership_id = ? AND vehicle_model = ? AND sold_at IS NULL AND display_spot IS NULL AND is_used = 0 AND (`condition` = 100.00 OR `condition` IS NULL) ORDER BY id ASC LIMIT 1',
             { dealership.id, model }
         )
         if existing then
-            MySQL.update.await('UPDATE dealership_stock SET quantity = quantity + ? WHERE id = ?', { qty, existing.id })
+            MySQL.update.await('UPDATE pickle_dealership_stock SET quantity = quantity + ? WHERE id = ?', { qty, existing.id })
             stockId = existing.id
         else
             stockId = MySQL.insert.await(
-                'INSERT INTO dealership_stock (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, ordered_at, delivered_at, quantity) VALUES (?, ?, ?, ?, ?, NOW(), NOW(), ?)',
+                'INSERT INTO pickle_dealership_stock (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, ordered_at, delivered_at, quantity) VALUES (?, ?, ?, ?, ?, NOW(), NOW(), ?)',
                 { dealership.id, model, catalogEntry.label or model, wholesalePrice, retailPrice, qty }
             )
         end
@@ -449,25 +449,25 @@ lib.callback.register('pickle_dealerships:orderVehicle', function(source, locati
         local deliveryMinutes = (Config.DeliveryTime or 20) * qty
         local deliveredAt = os.date('%Y-%m-%d %H:%M:%S', os.time() + (deliveryMinutes * 60))
         local existingOrder = MySQL.single.await(
-            "SELECT id FROM dealership_orders WHERE dealership_id = ? AND vehicle_model = ? AND delivery_mode = 'expedited' AND (delivered_at IS NULL OR delivered_at > NOW()) ORDER BY id ASC LIMIT 1",
+            "SELECT id FROM pickle_dealership_orders WHERE dealership_id = ? AND vehicle_model = ? AND delivery_mode = 'expedited' AND (delivered_at IS NULL OR delivered_at > NOW()) ORDER BY id ASC LIMIT 1",
             { dealership.id, model }
         )
         if existingOrder then
             MySQL.update.await(
-                'UPDATE dealership_orders SET quantity = quantity + ?, delivered_at = GREATEST(COALESCE(delivered_at, ?), ?) WHERE id = ?',
+                'UPDATE pickle_dealership_orders SET quantity = quantity + ?, delivered_at = GREATEST(COALESCE(delivered_at, ?), ?) WHERE id = ?',
                 { qty, deliveredAt, deliveredAt, existingOrder.id }
             )
             stockId = existingOrder.id
         else
             stockId = MySQL.insert.await(
-                "INSERT INTO dealership_orders (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, quantity, delivery_mode, ordered_at, delivered_at) VALUES (?, ?, ?, ?, ?, ?, 'expedited', NOW(), ?)",
+                "INSERT INTO pickle_dealership_orders (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, quantity, delivery_mode, ordered_at, delivered_at) VALUES (?, ?, ?, ?, ?, ?, 'expedited', NOW(), ?)",
                 { dealership.id, model, catalogEntry.label or model, wholesalePrice, retailPrice, qty, deliveredAt }
             )
         end
     else
         -- Local delivery: order sits in queue for any player to claim. Route is picked at claim time.
         stockId = MySQL.insert.await(
-            "INSERT INTO dealership_orders (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, quantity, delivery_mode, delivery_fee, ordered_at, delivered_at) VALUES (?, ?, ?, ?, ?, ?, 'local', ?, NOW(), NULL)",
+            "INSERT INTO pickle_dealership_orders (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, quantity, delivery_mode, delivery_fee, ordered_at, delivered_at) VALUES (?, ?, ?, ?, ?, ?, 'local', ?, NOW(), NULL)",
             { dealership.id, model, catalogEntry.label or model, wholesalePrice, retailPrice, qty, costs.deliveryFee }
         )
     end
@@ -476,7 +476,7 @@ lib.callback.register('pickle_dealerships:orderVehicle', function(source, locati
     if totalCost > 0 then
         local desc = ('Vehicle order (%s): %s x%d'):format(resolvedMode, model, qty)
         MySQL.insert.await(
-            'INSERT INTO dealership_ledger (dealership_id, type, amount, description, identifier, created_at) VALUES (?, ?, ?, ?, ?, NOW())',
+            'INSERT INTO pickle_dealership_ledger (dealership_id, type, amount, description, identifier, created_at) VALUES (?, ?, ?, ?, ?, NOW())',
             { dealership.id, 'expense', -totalCost, desc, identifier }
         )
     end
@@ -491,7 +491,7 @@ end)
 --- UI cost-preview callback used by the stock ordering dialog.
 --- Returns the total cost + driver fee for each mode, so the owner can compare before confirming.
 lib.callback.register('pickle_dealerships:previewOrderCost', function(source, model, qty)
-    local catalogEntry = MySQL.single.await('SELECT * FROM wholesale_catalog WHERE model = ?', { model })
+    local catalogEntry = MySQL.single.await('SELECT * FROM pickle_wholesale_catalog WHERE model = ?', { model })
     if not catalogEntry then return nil end
     local q = math.max(1, math.min(100, tonumber(qty) or 1))
     local wholesale = catalogEntry.wholesale
@@ -512,7 +512,7 @@ lib.callback.register('pickle_dealerships:setRetailPrice', function(source, loca
     if not identifier then return false, 'Unable to identify player.' end
 
     local dealership = MySQL.single.await(
-        'SELECT * FROM dealerships WHERE location = ?',
+        'SELECT * FROM pickle_dealerships WHERE location = ?',
         { locationKey }
     )
     if not dealership then return false, 'Dealership not found.' end
@@ -521,7 +521,7 @@ lib.callback.register('pickle_dealerships:setRetailPrice', function(source, loca
     local isOwner = dealership.owner_identifier == identifier
     if not isOwner then
         local employee = MySQL.single.await(
-            'SELECT role FROM dealership_employees WHERE dealership_id = ? AND identifier = ?',
+            'SELECT role FROM pickle_dealership_employees WHERE dealership_id = ? AND identifier = ?',
             { dealership.id, identifier }
         )
         if not employee or (employee.role ~= 'manager' and not IsPlayerAdmin(source)) then
@@ -535,13 +535,13 @@ lib.callback.register('pickle_dealerships:setRetailPrice', function(source, loca
 
     -- Verify stock belongs to this dealership
     local stock = MySQL.single.await(
-        'SELECT * FROM dealership_stock WHERE id = ? AND dealership_id = ? AND sold_at IS NULL',
+        'SELECT * FROM pickle_dealership_stock WHERE id = ? AND dealership_id = ? AND sold_at IS NULL',
         { stockId, dealership.id }
     )
     if not stock then return false, 'Stock item not found.' end
 
     MySQL.update.await(
-        'UPDATE dealership_stock SET retail_price = ? WHERE id = ?',
+        'UPDATE pickle_dealership_stock SET retail_price = ? WHERE id = ?',
         { retailPrice, stockId }
     )
 
@@ -551,7 +551,7 @@ end)
 
 --- Owner/manager sets the minimum faction grade required to purchase a stock item.
 --- Grade is scoped to the dealership's assigned job/gang (dealership.job). A minGrade
---- of 0 or nil removes the restriction. The value is persisted in dealership_stock.metadata.
+--- of 0 or nil removes the restriction. The value is persisted in pickle_dealership_stock.metadata.
 ---@param locationKey string
 ---@param stockId number
 ---@param minGrade number|nil
@@ -560,14 +560,14 @@ lib.callback.register('pickle_dealerships:setStockMinGrade', function(source, lo
     if not identifier then return false, 'Unable to identify player.' end
 
     local dealership = MySQL.single.await(
-        'SELECT * FROM dealerships WHERE location = ?',
+        'SELECT * FROM pickle_dealerships WHERE location = ?',
         { locationKey }
     )
     if not dealership then return false, 'Dealership not found.' end
     if not CanPlayerManage(source, dealership.id) then return false, 'You do not have permission.' end
 
     local stock = MySQL.single.await(
-        'SELECT id, metadata, vehicle_label FROM dealership_stock WHERE id = ? AND dealership_id = ? AND sold_at IS NULL',
+        'SELECT id, metadata, vehicle_label FROM pickle_dealership_stock WHERE id = ? AND dealership_id = ? AND sold_at IS NULL',
         { stockId, dealership.id }
     )
     if not stock then return false, 'Stock item not found.' end
@@ -584,7 +584,7 @@ lib.callback.register('pickle_dealerships:setStockMinGrade', function(source, lo
     end
 
     MySQL.update.await(
-        'UPDATE dealership_stock SET metadata = ? WHERE id = ?',
+        'UPDATE pickle_dealership_stock SET metadata = ? WHERE id = ?',
         { json.encode(meta), stockId }
     )
 
@@ -598,14 +598,14 @@ lib.callback.register('pickle_dealerships:toggleUnlisted', function(source, loca
     if not identifier then return false, 'Unable to identify player.' end
 
     local dealership = MySQL.single.await(
-        'SELECT * FROM dealerships WHERE location = ?',
+        'SELECT * FROM pickle_dealerships WHERE location = ?',
         { locationKey }
     )
     if not dealership then return false, 'Dealership not found.' end
     if not CanPlayerManage(source, dealership.id) then return false, 'You do not have permission.' end
 
     local stock = MySQL.single.await(
-        'SELECT id, unlisted, vehicle_label, auction_id FROM dealership_stock WHERE id = ? AND dealership_id = ? AND sold_at IS NULL',
+        'SELECT id, unlisted, vehicle_label, auction_id FROM pickle_dealership_stock WHERE id = ? AND dealership_id = ? AND sold_at IS NULL',
         { stockId, dealership.id }
     )
     if not stock then return false, 'Stock item not found.' end
@@ -615,7 +615,7 @@ lib.callback.register('pickle_dealerships:toggleUnlisted', function(source, loca
     -- If unlisting and the vehicle is at auction, cancel the auction (only if no bids)
     if newValue == 1 and stock.auction_id then
         local auction = MySQL.single.await(
-            "SELECT id, current_bid, status FROM dealership_auctions WHERE id = ?",
+            "SELECT id, current_bid, status FROM pickle_dealership_auctions WHERE id = ?",
             { stock.auction_id }
         )
         if auction and auction.status == 'active' then
@@ -623,18 +623,18 @@ lib.callback.register('pickle_dealerships:toggleUnlisted', function(source, loca
                 return false, 'Cannot unlist while auction has active bids.'
             end
             MySQL.update.await(
-                "UPDATE dealership_auctions SET status = 'cancelled', ended_at = NOW() WHERE id = ?",
+                "UPDATE pickle_dealership_auctions SET status = 'cancelled', ended_at = NOW() WHERE id = ?",
                 { stock.auction_id }
             )
-            MySQL.update.await("UPDATE dealership_stock SET auction_id = NULL WHERE id = ?", { stockId })
+            MySQL.update.await("UPDATE pickle_dealership_stock SET auction_id = NULL WHERE id = ?", { stockId })
         end
     end
 
     -- If unlisting, also remove from display spot
     if newValue == 1 then
-        MySQL.update.await('UPDATE dealership_stock SET unlisted = 1, display_spot = NULL WHERE id = ?', { stockId })
+        MySQL.update.await('UPDATE pickle_dealership_stock SET unlisted = 1, display_spot = NULL WHERE id = ?', { stockId })
     else
-        MySQL.update.await('UPDATE dealership_stock SET unlisted = 0 WHERE id = ?', { stockId })
+        MySQL.update.await('UPDATE pickle_dealership_stock SET unlisted = 0 WHERE id = ?', { stockId })
     end
 
     local statusKey = newValue == 1 and 'stock_unlisted' or 'stock_listed'
@@ -652,13 +652,13 @@ end)
 --- whole stock list when only one spot changed.
 lib.callback.register('pickle_dealerships:getStockAtSpot', function(_, locationKey, spotId)
     if not locationKey or not spotId then return nil end
-    local dealership = MySQL.single.await('SELECT id FROM dealerships WHERE location = ?', { locationKey })
+    local dealership = MySQL.single.await('SELECT id FROM pickle_dealerships WHERE location = ?', { locationKey })
     if not dealership then return nil end
 
     local row = MySQL.single.await([[
         SELECT ds.*, wc.image, wc.class
-        FROM dealership_stock ds
-        LEFT JOIN wholesale_catalog wc ON wc.model = ds.vehicle_model
+        FROM pickle_dealership_stock ds
+        LEFT JOIN pickle_wholesale_catalog wc ON wc.model = ds.vehicle_model
         WHERE ds.dealership_id = ?
           AND ds.display_spot = ?
           AND ds.sold_at IS NULL
@@ -676,7 +676,7 @@ lib.callback.register('pickle_dealerships:setDisplaySpot', function(source, loca
     if not identifier then return false, 'Unable to identify player.' end
 
     local dealership = MySQL.single.await(
-        'SELECT * FROM dealerships WHERE location = ?',
+        'SELECT * FROM pickle_dealerships WHERE location = ?',
         { locationKey }
     )
     if not dealership then return false, 'Dealership not found.' end
@@ -685,7 +685,7 @@ lib.callback.register('pickle_dealerships:setDisplaySpot', function(source, loca
     local isOwner = dealership.owner_identifier == identifier
     if not isOwner then
         local employee = MySQL.single.await(
-            'SELECT role FROM dealership_employees WHERE dealership_id = ? AND identifier = ?',
+            'SELECT role FROM pickle_dealership_employees WHERE dealership_id = ? AND identifier = ?',
             { dealership.id, identifier }
         )
         if not employee or (employee.role ~= 'manager' and not IsPlayerAdmin(source)) then
@@ -695,7 +695,7 @@ lib.callback.register('pickle_dealerships:setDisplaySpot', function(source, loca
 
     -- Verify stock belongs to this dealership and is delivered
     local stock = MySQL.single.await(
-        'SELECT * FROM dealership_stock WHERE id = ? AND dealership_id = ? AND sold_at IS NULL',
+        'SELECT * FROM pickle_dealership_stock WHERE id = ? AND dealership_id = ? AND sold_at IS NULL',
         { stockId, dealership.id }
     )
     if not stock then return false, 'Stock item not found.' end
@@ -715,26 +715,26 @@ lib.callback.register('pickle_dealerships:setDisplaySpot', function(source, loca
     if spot then
         -- Check if spot is already occupied by another vehicle
         local existing = MySQL.single.await(
-            'SELECT id FROM dealership_stock WHERE dealership_id = ? AND display_spot = ? AND sold_at IS NULL AND id != ?',
+            'SELECT id FROM pickle_dealership_stock WHERE dealership_id = ? AND display_spot = ? AND sold_at IS NULL AND id != ?',
             { dealership.id, spot, stockId }
         )
         if existing then
             -- Remove previous vehicle from spot
             MySQL.update.await(
-                'UPDATE dealership_stock SET display_spot = NULL WHERE id = ?',
+                'UPDATE pickle_dealership_stock SET display_spot = NULL WHERE id = ?',
                 { existing.id }
             )
         end
 
         -- Assign the spot directly on the stock entry (no splitting)
         MySQL.update.await(
-            'UPDATE dealership_stock SET display_spot = ? WHERE id = ?',
+            'UPDATE pickle_dealership_stock SET display_spot = ? WHERE id = ?',
             { spot, stockId }
         )
         markSpot(spot)
     else
         MySQL.update.await(
-            'UPDATE dealership_stock SET display_spot = NULL WHERE id = ?',
+            'UPDATE pickle_dealership_stock SET display_spot = NULL WHERE id = ?',
             { stockId }
         )
     end
@@ -744,7 +744,7 @@ lib.callback.register('pickle_dealerships:setDisplaySpot', function(source, loca
 
     -- Notify clients: pass the affected spot IDs so only those re-render.
     TriggerClientEvent('pickle_dealerships:refreshDisplay', -1, locationKey, spotList)
-    
+    print("INSANE!!!", os.time())
     ShowNotification(source, spot and _L('stock_display_spot_set', spot) or _L('stock_display_removed_server'), 'success')
     return true
 end)
@@ -754,14 +754,14 @@ end)
 ---@param locationKey string
 lib.callback.register('pickle_dealerships:checkDeliveries', function(source, locationKey)
     local dealership = MySQL.single.await(
-        'SELECT * FROM dealerships WHERE location = ?',
+        'SELECT * FROM pickle_dealerships WHERE location = ?',
         { locationKey }
     )
     if not dealership then return {} end
 
     -- Find items that have a future delivered_at that has now passed
     local delivered = MySQL.query.await(
-        'SELECT * FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NULL AND delivered_at IS NOT NULL AND delivered_at <= NOW()',
+        'SELECT * FROM pickle_dealership_stock WHERE dealership_id = ? AND sold_at IS NULL AND delivered_at IS NOT NULL AND delivered_at <= NOW()',
         { dealership.id }
     )
 
@@ -773,7 +773,7 @@ lib.callback.register('pickle_dealerships:getTradeInSuggestion', function(source
     if not plate then return nil end
     plate = string.upper(tostring(plate):gsub('^%s*(.-)%s*$', '%1'))
 
-    local dealership = MySQL.single.await('SELECT id FROM dealerships WHERE location = ?', { locationKey })
+    local dealership = MySQL.single.await('SELECT id FROM pickle_dealerships WHERE location = ?', { locationKey })
     if not dealership then return nil end
     if not CanPlayerManage(source, dealership.id) then return nil end
 
@@ -785,7 +785,7 @@ lib.callback.register('pickle_dealerships:getTradeInSuggestion', function(source
         return { model = nil, label = nil, wholesale = nil, owner = owned.owner }
     end
 
-    local entry = MySQL.single.await('SELECT label, wholesale FROM wholesale_catalog WHERE model = ?', { model })
+    local entry = MySQL.single.await('SELECT label, wholesale FROM pickle_wholesale_catalog WHERE model = ?', { model })
     return {
         model = model,
         label = (entry and entry.label) or model,
@@ -816,7 +816,7 @@ lib.callback.register('pickle_dealerships:tradeInVehicle', function(source, loca
     if not plate or not properties then return false, 'Missing vehicle data.' end
     if buyPrice <= 0 or retailPrice <= 0 then return false, 'Buy and retail prices must be set.' end
 
-    local dealership = MySQL.single.await('SELECT * FROM dealerships WHERE location = ?', { locationKey })
+    local dealership = MySQL.single.await('SELECT * FROM pickle_dealerships WHERE location = ?', { locationKey })
     if not dealership then return false, 'Dealership not found.' end
     if not CanPlayerManage(source, dealership.id) then return false, 'You do not have permission.' end
 
@@ -833,7 +833,7 @@ lib.callback.register('pickle_dealerships:tradeInVehicle', function(source, loca
         return false, 'The vehicle owner is not online.'
     end
 
-    local catalogLookup = MySQL.single.await('SELECT label FROM wholesale_catalog WHERE model = ?', { model })
+    local catalogLookup = MySQL.single.await('SELECT label FROM pickle_wholesale_catalog WHERE model = ?', { model })
     local displayLabel = (catalogLookup and catalogLookup.label) or model
 
     local consented = lib.callback.await('pickle_dealerships:confirmTradeIn', sellerSource, {
@@ -854,7 +854,7 @@ lib.callback.register('pickle_dealerships:tradeInVehicle', function(source, loca
 
     -- Block trade-in if vehicle is under active financing
     local activeFinancing = MySQL.scalar.await(
-        "SELECT COUNT(*) FROM `dealership_financing` WHERE `vehicle_plate` = ? AND `status` = 'active'",
+        "SELECT COUNT(*) FROM `pickle_dealership_financing` WHERE `vehicle_plate` = ? AND `status` = 'active'",
         { plate }
     )
     if activeFinancing and tonumber(activeFinancing) > 0 then
@@ -866,11 +866,11 @@ lib.callback.register('pickle_dealerships:tradeInVehicle', function(source, loca
     local tierCfg = Config.Tiers[dealership.tier or 1]
     local stockCapacity = (tierCfg and tierCfg.stockCap) or 20
     local stockCount = MySQL.scalar.await(
-        'SELECT COALESCE(SUM(quantity), 0) FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NULL',
+        'SELECT COALESCE(SUM(quantity), 0) FROM pickle_dealership_stock WHERE dealership_id = ? AND sold_at IS NULL',
         { dealership.id }
     ) or 0
     local pendingCount = MySQL.scalar.await(
-        'SELECT COALESCE(SUM(quantity), 0) FROM dealership_orders WHERE dealership_id = ?',
+        'SELECT COALESCE(SUM(quantity), 0) FROM pickle_dealership_orders WHERE dealership_id = ?',
         { dealership.id }
     ) or 0
     if (tonumber(stockCount) + tonumber(pendingCount) + 1) > stockCapacity then
@@ -889,11 +889,11 @@ lib.callback.register('pickle_dealerships:tradeInVehicle', function(source, loca
     local engine = tonumber(props.engineHealth) or 1000
     local condition = math.max(0, math.min(100, ((body + engine) / 2) / 10))
 
-    local catalog = MySQL.single.await('SELECT label FROM wholesale_catalog WHERE model = ?', { model })
+    local catalog = MySQL.single.await('SELECT label FROM pickle_wholesale_catalog WHERE model = ?', { model })
     local label = (catalog and catalog.label) or model
 
     -- Deduct from dealership balance
-    MySQL.update.await('UPDATE dealerships SET balance = balance - ? WHERE id = ?', { buyPrice, dealership.id })
+    MySQL.update.await('UPDATE pickle_dealerships SET balance = balance - ? WHERE id = ?', { buyPrice, dealership.id })
 
     -- Pay the seller (consent already confirmed above)
     AddMoney(sellerSource, buyPrice, 'bank')
@@ -904,7 +904,7 @@ lib.callback.register('pickle_dealerships:tradeInVehicle', function(source, loca
 
     -- Insert pre-owned stock row (captured vehicle properties stored in metadata)
     local stockId = MySQL.insert.await(
-        'INSERT INTO dealership_stock (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, ordered_at, delivered_at, quantity, is_used, metadata, plate, acquired_from, `condition`) VALUES (?, ?, ?, ?, ?, NOW(), NOW(), 1, 1, ?, ?, ?, ?)',
+        'INSERT INTO pickle_dealership_stock (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, ordered_at, delivered_at, quantity, is_used, metadata, plate, acquired_from, `condition`) VALUES (?, ?, ?, ?, ?, NOW(), NOW(), 1, 1, ?, ?, ?, ?)',
         {
             dealership.id, model, label, buyPrice, retailPrice,
             json.encode(props), plate, sellerIdentifier, condition,
@@ -925,7 +925,7 @@ lib.callback.register('pickle_dealerships:getSeizeDealerships', function(source)
     if not identifier then return {} end
 
     local dealerships = MySQL.query.await(
-        'SELECT id, name, location FROM dealerships WHERE seize_enabled = 1'
+        'SELECT id, name, location FROM pickle_dealerships WHERE seize_enabled = 1'
     ) or {}
 
     local result = {}
@@ -949,7 +949,7 @@ lib.callback.register('pickle_dealerships:seizeVehicle', function(source, data)
 
     if not dealershipId or not plate or not properties then return false, 'Missing data.' end
 
-    local dealership = MySQL.single.await('SELECT * FROM dealerships WHERE id = ?', { dealershipId })
+    local dealership = MySQL.single.await('SELECT * FROM pickle_dealerships WHERE id = ?', { dealershipId })
     if not dealership then return false, 'Dealership not found.' end
     if not dealership.seize_enabled or dealership.seize_enabled == 0 or dealership.seize_enabled == false then return false, 'Seize mode is not enabled for this dealership.' end
     if not CanPlayerManage(source, dealership.id) then return false, 'You do not have permission.' end
@@ -973,11 +973,11 @@ lib.callback.register('pickle_dealerships:seizeVehicle', function(source, data)
     local tierCfg = Config.Tiers[dealership.tier or 1]
     local stockCapacity = (tierCfg and tierCfg.stockCap) or 20
     local stockCount = MySQL.scalar.await(
-        'SELECT COALESCE(SUM(quantity), 0) FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NULL',
+        'SELECT COALESCE(SUM(quantity), 0) FROM pickle_dealership_stock WHERE dealership_id = ? AND sold_at IS NULL',
         { dealership.id }
     ) or 0
     local pendingCount = MySQL.scalar.await(
-        'SELECT COALESCE(SUM(quantity), 0) FROM dealership_orders WHERE dealership_id = ?',
+        'SELECT COALESCE(SUM(quantity), 0) FROM pickle_dealership_orders WHERE dealership_id = ?',
         { dealership.id }
     ) or 0
     if (tonumber(stockCount) + tonumber(pendingCount) + 1) > stockCapacity then
@@ -991,7 +991,7 @@ lib.callback.register('pickle_dealerships:seizeVehicle', function(source, data)
     local engine = tonumber(props.engineHealth) or 1000
     local condition = math.max(0, math.min(100, ((body + engine) / 2) / 10))
 
-    local catalog = MySQL.single.await('SELECT label FROM wholesale_catalog WHERE model = ?', { model })
+    local catalog = MySQL.single.await('SELECT label FROM pickle_wholesale_catalog WHERE model = ?', { model })
     local label = (catalog and catalog.label) or (data.label and data.label ~= '' and data.label) or model
 
     -- Remove ownership if the vehicle is registered
@@ -1003,12 +1003,12 @@ lib.callback.register('pickle_dealerships:seizeVehicle', function(source, data)
 
     -- Cancel any active financing on this vehicle (no refund — the player loses the vehicle)
     local activeLoan = MySQL.single.await(
-        "SELECT id, identifier, dealership_id FROM dealership_financing WHERE vehicle_plate = ? AND status = 'active'",
+        "SELECT id, identifier, dealership_id FROM pickle_dealership_financing WHERE vehicle_plate = ? AND status = 'active'",
         { plate }
     )
     if activeLoan then
         MySQL.update.await(
-            "UPDATE dealership_financing SET status = 'repossessed' WHERE id = ?",
+            "UPDATE pickle_dealership_financing SET status = 'repossessed' WHERE id = ?",
             { activeLoan.id }
         )
         AddLedgerEntry(activeLoan.dealership_id, "repossession", 0, ("Vehicle seized — financing cancelled: plate %s"):format(plate), activeLoan.identifier)
@@ -1023,7 +1023,7 @@ lib.callback.register('pickle_dealerships:seizeVehicle', function(source, data)
 
     -- Insert as unlisted pre-owned stock (no cost to dealership)
     local stockId = MySQL.insert.await(
-        'INSERT INTO dealership_stock (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, ordered_at, delivered_at, quantity, is_used, unlisted, metadata, plate, acquired_from, `condition`) VALUES (?, ?, ?, 0, 0, NOW(), NOW(), 1, 1, 1, ?, ?, ?, ?)',
+        'INSERT INTO pickle_dealership_stock (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, ordered_at, delivered_at, quantity, is_used, unlisted, metadata, plate, acquired_from, `condition`) VALUES (?, ?, ?, 0, 0, NOW(), NOW(), 1, 1, 1, ?, ?, ?, ?)',
         {
             dealership.id, model, label,
             json.encode(props), plate, previousOwner or 'seized', condition,
@@ -1039,10 +1039,10 @@ lib.callback.register('pickle_dealerships:seizeVehicle', function(source, data)
 end)
 
 --- On-demand: process any delivered orders for a dealership
---- Moves delivered orders from dealership_orders into dealership_stock (stacking onto existing stock)
+--- Moves delivered orders from pickle_dealership_orders into pickle_dealership_stock (stacking onto existing stock)
 function ProcessDeliveredOrders(dealershipId)
     local completed = MySQL.query.await(
-        'SELECT * FROM dealership_orders WHERE dealership_id = ? AND delivered_at IS NOT NULL AND delivered_at <= NOW()',
+        'SELECT * FROM pickle_dealership_orders WHERE dealership_id = ? AND delivered_at IS NOT NULL AND delivered_at <= NOW()',
         { dealershipId }
     )
     if not completed or #completed == 0 then return false end
@@ -1050,11 +1050,11 @@ function ProcessDeliveredOrders(dealershipId)
     for _, order in ipairs(completed) do
         -- Try to stack onto existing stock of the same model
         local existing = MySQL.single.await(
-            'SELECT id FROM dealership_stock WHERE dealership_id = ? AND vehicle_model = ? AND sold_at IS NULL AND display_spot IS NULL AND is_used = 0 AND (`condition` = 100.00 OR `condition` IS NULL) ORDER BY id ASC LIMIT 1',
+            'SELECT id FROM pickle_dealership_stock WHERE dealership_id = ? AND vehicle_model = ? AND sold_at IS NULL AND display_spot IS NULL AND is_used = 0 AND (`condition` = 100.00 OR `condition` IS NULL) ORDER BY id ASC LIMIT 1',
             { dealershipId, order.vehicle_model }
         )
         if existing then
-            MySQL.update.await('UPDATE dealership_stock SET quantity = quantity + ? WHERE id = ?', { order.quantity, existing.id })
+            MySQL.update.await('UPDATE pickle_dealership_stock SET quantity = quantity + ? WHERE id = ?', { order.quantity, existing.id })
         else
             local orderedAtSql
             if type(order.ordered_at) == 'number' then
@@ -1065,11 +1065,11 @@ function ProcessDeliveredOrders(dealershipId)
                 orderedAtSql = os.date('%Y-%m-%d %H:%M:%S')
             end
             MySQL.insert.await(
-                'INSERT INTO dealership_stock (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, ordered_at, delivered_at, quantity) VALUES (?, ?, ?, ?, ?, ?, NOW(), ?)',
+                'INSERT INTO pickle_dealership_stock (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, ordered_at, delivered_at, quantity) VALUES (?, ?, ?, ?, ?, ?, NOW(), ?)',
                 { dealershipId, order.vehicle_model, order.vehicle_label, order.wholesale_cost, order.retail_price, orderedAtSql, order.quantity }
             )
         end
-        MySQL.update.await('DELETE FROM dealership_orders WHERE id = ?', { order.id })
+        MySQL.update.await('DELETE FROM pickle_dealership_orders WHERE id = ?', { order.id })
     end
 
     return true

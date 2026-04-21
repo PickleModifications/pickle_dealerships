@@ -975,6 +975,9 @@ Language["en"] = {
     employees_no_grades_available = "This dealership's faction has no grades defined in the framework.",
     employees_invalid_grade = "That grade does not exist on this faction.",
 
+    admin_initial_owner = "Initial Owner",
+    admin_initial_owner_desc = "Optional. The player who'll own this lot on creation. Leave empty to create as unclaimed.",
+
     -- Admin: create-dealership position rows
     admin_create_positions_hint = "Place the dealership's core positions now, or skip and set them later from Manage Positions.",
     label_dealership_center_desc = "Main blip + zone anchor. Required.",

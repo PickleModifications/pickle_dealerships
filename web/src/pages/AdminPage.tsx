@@ -75,17 +75,35 @@ export default function AdminPage({ data, onClose }: Props) {
     name: string
     mode: string
     type: string
+    tier: string
+    factionType: FactionType
+    factionName: string
+    ownerIdentifier: string
     coords?: PositionData
     spawnPoint?: PositionData
     deliveryPoint?: PositionData
+    managementPoint?: PositionData
+    salesPoint?: PositionData
+    showroomPoint?: PositionData
   }>({
     name: data.pendingDealership?.name ?? '',
     mode: data.pendingDealership?.mode ?? 'player-owned',
     type: data.pendingDealership?.type ?? 'car',
+    tier: data.pendingDealership?.tier ?? '1',
+    factionType: data.pendingDealership?.factionType ?? 'job',
+    factionName: data.pendingDealership?.factionName ?? '',
+    ownerIdentifier: data.pendingDealership?.ownerIdentifier ?? '',
     coords: data.pendingDealership?.coords,
     spawnPoint: data.pendingDealership?.spawnPoint,
     deliveryPoint: data.pendingDealership?.deliveryPoint,
+    managementPoint: data.pendingDealership?.managementPoint,
+    salesPoint: data.pendingDealership?.salesPoint,
+    showroomPoint: data.pendingDealership?.showroomPoint,
   })
+
+  // Player picker state for "Owner" field when mode == 'player-owned'
+  const [createOwnerSearch, setCreateOwnerSearch] = useState('')
+  const [createOwnerPicker, setCreateOwnerPicker] = useState(false)
 
   // Transfer ownership
   const [onlinePlayers, setOnlinePlayers] = useState<{ source: number; name: string; identifier: string }[]>([])
@@ -234,12 +252,21 @@ export default function AdminPage({ data, onClose }: Props) {
         label: dealershipDraft.name.trim(),
         mode: dealershipDraft.mode,
         type: dealershipDraft.type,
+        tier: parseInt(dealershipDraft.tier) || 1,
+        factionType: dealershipDraft.factionType,
+        factionName: dealershipDraft.factionName.trim(),
+        ownerIdentifier: dealershipDraft.mode === 'player-owned' ? dealershipDraft.ownerIdentifier.trim() : '',
         coords: dealershipDraft.coords,
         spawnPoint: dealershipDraft.spawnPoint,
         deliveryPoint: dealershipDraft.deliveryPoint,
       }).then(() => {
         setAction(null)
-        setDealershipDraft({ name: '', mode: 'player-owned', type: 'car' })
+        setDealershipDraft({
+          name: '', mode: 'player-owned', type: 'car', tier: '1',
+          factionType: 'job', factionName: '', ownerIdentifier: '',
+        })
+        setCreateOwnerSearch('')
+        setCreateOwnerPicker(false)
         loadDealerships()
       })
       return
@@ -976,7 +1003,7 @@ export default function AdminPage({ data, onClose }: Props) {
         </Dialog>
 
         <Dialog open={action === 'create'} onOpenChange={(open) => { if (!open) setAction(null) }}>
-          <DialogContent onClose={() => setAction(null)} className="max-h-[85vh] !grid-rows-[auto_1fr_auto] !gap-0 p-0 overflow-hidden">
+          <DialogContent onClose={() => setAction(null)} className="max-h-full !grid-rows-[auto_1fr_auto] !gap-0 p-0 overflow-hidden">
             <DialogHeader className="p-6 pb-4 border-b border-border">
               <DialogTitle>{t('title_create_dealership')}</DialogTitle>
               <DialogDescription>{t('admin_create_desc')}</DialogDescription>
@@ -1001,6 +1028,102 @@ export default function AdminPage({ data, onClose }: Props) {
                     <SelectItem value="car">{t('label_car')}</SelectItem><SelectItem value="boat">{t('label_boat')}</SelectItem><SelectItem value="air">{t('label_aircraft')}</SelectItem><SelectItem value="mixed">{t('label_mixed')}</SelectItem>
                   </SelectContent></Select></div>
               </div>
+
+              <div>
+                <label className="text-sm font-medium">{t('label_tier')}</label>
+                <Select value={dealershipDraft.tier} onValueChange={(v) => setDealershipDraft({ ...dealershipDraft, tier: v })}>
+                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="1">1 - {t('tier_1')}</SelectItem>
+                    <SelectItem value="2">2 - {t('tier_2')}</SelectItem>
+                    <SelectItem value="3">3 - {t('tier_3')}</SelectItem>
+                    <SelectItem value="4">4 - {t('tier_4')}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Framework faction — same shape as the admin edit dialog. Optional. */}
+              <div className="space-y-2">
+                <label className="text-sm font-medium">{t('admin_framework_faction')}</label>
+                <div className="flex gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setDealershipDraft({ ...dealershipDraft, factionType: 'job' })}
+                    className={`flex-1 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${dealershipDraft.factionType === 'job' ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}
+                  >
+                    {t('label_job')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDealershipDraft({ ...dealershipDraft, factionType: 'gang' })}
+                    className={`flex-1 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${dealershipDraft.factionType === 'gang' ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}
+                  >
+                    {t('label_gang')}
+                  </button>
+                </div>
+                <Input
+                  value={dealershipDraft.factionName}
+                  onChange={(e) => setDealershipDraft({ ...dealershipDraft, factionName: e.target.value })}
+                  placeholder={dealershipDraft.factionType === 'gang' ? 'e.g. ballas' : 'e.g. police'}
+                  className="mt-1 font-mono"
+                />
+              </div>
+
+              {/* Initial owner — only meaningful for player-owned mode. */}
+              {dealershipDraft.mode === 'player-owned' && (
+                <div className="space-y-1">
+                  <label className="text-sm font-medium">{t('admin_initial_owner')}</label>
+                  <p className="text-xs text-muted-foreground">{t('admin_initial_owner_desc')}</p>
+                  <div className="relative">
+                    <Input
+                      value={dealershipDraft.ownerIdentifier || createOwnerSearch}
+                      onChange={(e) => {
+                        setDealershipDraft({ ...dealershipDraft, ownerIdentifier: '' })
+                        setCreateOwnerSearch(e.target.value)
+                        if (!createOwnerPicker && e.target.value) {
+                          setCreateOwnerPicker(true)
+                          fetchNui<{ source: number; name: string; identifier: string }[]>('adminGetOnlinePlayers', {}).then((res) => {
+                            setOnlinePlayers(Array.isArray(res) ? res : [])
+                          })
+                        }
+                      }}
+                      onFocus={() => {
+                        if (!createOwnerPicker) {
+                          setCreateOwnerPicker(true)
+                          fetchNui<{ source: number; name: string; identifier: string }[]>('adminGetOnlinePlayers', {}).then((res) => {
+                            setOnlinePlayers(Array.isArray(res) ? res : [])
+                          })
+                        }
+                      }}
+                      placeholder={t('admin_search_players')}
+                      className="font-mono"
+                    />
+                    {createOwnerPicker && !dealershipDraft.ownerIdentifier && createOwnerSearch && (
+                      <div className="absolute z-10 top-full mt-1 left-0 right-0 bg-popover border border-border rounded-md shadow-md max-h-40 overflow-auto">
+                        {onlinePlayers
+                          .filter((p) => p.name.toLowerCase().includes(createOwnerSearch.toLowerCase()) || p.identifier.toLowerCase().includes(createOwnerSearch.toLowerCase()))
+                          .map((p) => (
+                            <button
+                              key={p.source}
+                              onClick={() => {
+                                setDealershipDraft({ ...dealershipDraft, ownerIdentifier: p.identifier })
+                                setCreateOwnerSearch(p.name)
+                                setCreateOwnerPicker(false)
+                              }}
+                              className="w-full text-left px-3 py-2 hover:bg-muted text-sm flex justify-between"
+                            >
+                              <span>{p.name}</span>
+                              <span className="text-xs text-muted-foreground font-mono">{p.identifier.substring(0, 12)}...</span>
+                            </button>
+                          ))}
+                      </div>
+                    )}
+                  </div>
+                  {dealershipDraft.ownerIdentifier && (
+                    <p className="text-[10px] text-muted-foreground font-mono">{dealershipDraft.ownerIdentifier}</p>
+                  )}
+                </div>
+              )}
 
               <Separator />
 
@@ -1033,11 +1156,38 @@ export default function AdminPage({ data, onClose }: Props) {
                   onPlace={() => fetchNui('adminPlaceDealershipPoint', { field: 'deliveryPoint', draft: dealershipDraft })}
                   onRemove={() => setDealershipDraft({ ...dealershipDraft, deliveryPoint: undefined })}
                 />
+                <PositionRow
+                  icon={<Briefcase className="h-4 w-4" />}
+                  label={t('label_management_point') + ' *'}
+                  description={t('label_owner_manager_access')}
+                  placed={!!dealershipDraft.managementPoint}
+                  coords={dealershipDraft.managementPoint}
+                  onPlace={() => fetchNui('adminPlaceDealershipPoint', { field: 'managementPoint', draft: dealershipDraft })}
+                  onRemove={() => setDealershipDraft({ ...dealershipDraft, managementPoint: undefined })}
+                />
+                <PositionRow
+                  icon={<Handshake className="h-4 w-4" />}
+                  label={t('label_sales_point') + ' *'}
+                  description={t('label_view_vehicles_access')}
+                  placed={!!dealershipDraft.salesPoint}
+                  coords={dealershipDraft.salesPoint}
+                  onPlace={() => fetchNui('adminPlaceDealershipPoint', { field: 'salesPoint', draft: dealershipDraft })}
+                  onRemove={() => setDealershipDraft({ ...dealershipDraft, salesPoint: undefined })}
+                />
+                <PositionRow
+                  icon={<Store className="h-4 w-4" />}
+                  label={t('label_showroom_position') + ' *'}
+                  description={t('label_showroom_preview')}
+                  placed={!!dealershipDraft.showroomPoint}
+                  coords={dealershipDraft.showroomPoint}
+                  onPlace={() => fetchNui('adminPlaceDealershipPoint', { field: 'showroomPoint', draft: dealershipDraft })}
+                  onRemove={() => setDealershipDraft({ ...dealershipDraft, showroomPoint: undefined })}
+                />
               </div>
             </div>
             <div className="flex gap-2 p-6 pt-4 border-t border-border bg-card">
               <Button variant="outline" className="flex-1" onClick={() => setAction(null)}>{t('btn_cancel')}</Button>
-              <Button className="flex-1" onClick={handleAction} disabled={!dealershipDraft.name.trim() || !dealershipDraft.coords}>
+              <Button className="flex-1" onClick={handleAction} disabled={!dealershipDraft.name.trim() || !dealershipDraft.coords || !dealershipDraft.managementPoint || !dealershipDraft.salesPoint || !dealershipDraft.showroomPoint}>
                 <Plus className="h-4 w-4" /> {t('btn_create')}
               </Button>
             </div>

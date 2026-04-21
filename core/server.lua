@@ -11,9 +11,9 @@ DealershipCache = {}
 
 CreateThread(function()
     MySQL.ready(function()
-        -- dealerships
+        -- pickle_dealerships
         MySQL.Async.execute([[
-            CREATE TABLE IF NOT EXISTS `dealerships` (
+            CREATE TABLE IF NOT EXISTS `pickle_dealerships` (
                 `id`               INT UNSIGNED    NOT NULL AUTO_INCREMENT,
                 `name`             VARCHAR(100)    NOT NULL,
                 `location`         VARCHAR(100)    NOT NULL,
@@ -24,7 +24,9 @@ CreateThread(function()
                 `balance`          BIGINT          NOT NULL DEFAULT 0,
                 `reputation`       INT             NOT NULL DEFAULT 0,
                 `job`              VARCHAR(50)     DEFAULT NULL,
+                `seize_enabled`    TINYINT(1)      NOT NULL DEFAULT 0,
                 `metadata`         JSON            DEFAULT NULL,
+                `financing_settings` JSON          DEFAULT NULL,
                 `created_at`       TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 `updated_at`       TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
                 PRIMARY KEY (`id`),
@@ -34,9 +36,9 @@ CreateThread(function()
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ]])
 
-        -- dealership_employees
+        -- pickle_dealership_employees
         MySQL.Async.execute([[
-            CREATE TABLE IF NOT EXISTS `dealership_employees` (
+            CREATE TABLE IF NOT EXISTS `pickle_dealership_employees` (
                 `id`              INT UNSIGNED   NOT NULL AUTO_INCREMENT,
                 `dealership_id`   INT UNSIGNED   NOT NULL,
                 `identifier`       VARCHAR(50)    NOT NULL,
@@ -50,9 +52,9 @@ CreateThread(function()
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ]])
 
-        -- dealership_stock
+        -- pickle_dealership_stock
         MySQL.Async.execute([[
-            CREATE TABLE IF NOT EXISTS `dealership_stock` (
+            CREATE TABLE IF NOT EXISTS `pickle_dealership_stock` (
                 `id`              INT UNSIGNED   NOT NULL AUTO_INCREMENT,
                 `dealership_id`   INT UNSIGNED   NOT NULL,
                 `vehicle_model`   VARCHAR(100)   NOT NULL,
@@ -68,36 +70,21 @@ CreateThread(function()
                 `sold_to`         VARCHAR(50)    DEFAULT NULL,
                 `sold_by`         VARCHAR(50)    DEFAULT NULL,
                 `quantity`        INT UNSIGNED   NOT NULL DEFAULT 1,
+                `is_used`         TINYINT(1)     NOT NULL DEFAULT 0,
+                `unlisted`        TINYINT(1)     NOT NULL DEFAULT 0,
                 `metadata`        JSON           DEFAULT NULL,
+                `plate`           VARCHAR(20)    DEFAULT NULL,
+                `acquired_from`   VARCHAR(50)    DEFAULT NULL,
+                `auction_id`      INT            DEFAULT NULL,
                 PRIMARY KEY (`id`),
                 KEY `idx_dealership` (`dealership_id`),
                 KEY `idx_model`      (`vehicle_model`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ]])
 
-        -- Migration: rename citizenid columns to identifier for framework-agnostic support
-        MySQL.Async.execute([[ ALTER TABLE `dealerships` CHANGE COLUMN IF EXISTS `owner_citizenid` `owner_identifier` VARCHAR(50) DEFAULT NULL ]])
-        MySQL.Async.execute([[ ALTER TABLE `dealership_employees` CHANGE COLUMN IF EXISTS `citizenid` `identifier` VARCHAR(50) NOT NULL ]])
-        MySQL.Async.execute([[ ALTER TABLE `dealership_ledger` CHANGE COLUMN IF EXISTS `citizenid` `identifier` VARCHAR(50) DEFAULT NULL ]])
-        MySQL.Async.execute([[ ALTER TABLE `dealership_financing` CHANGE COLUMN IF EXISTS `citizenid` `identifier` VARCHAR(50) NOT NULL ]])
-
-        -- Migration: add quantity column for existing databases
+        -- pickle_dealership_orders — pending/in-transit orders (separate from available stock)
         MySQL.Async.execute([[
-            ALTER TABLE `dealership_stock` ADD COLUMN IF NOT EXISTS `quantity` INT UNSIGNED NOT NULL DEFAULT 1 AFTER `sold_by`;
-        ]])
-
-        -- Migration: pre-owned vehicle support (metadata reused for captured vehicle properties)
-        MySQL.Async.execute([[ ALTER TABLE `dealership_stock` ADD COLUMN IF NOT EXISTS `is_used` TINYINT(1) NOT NULL DEFAULT 0 AFTER `quantity` ]])
-        MySQL.Async.execute([[ ALTER TABLE `dealership_stock` ADD COLUMN IF NOT EXISTS `plate` VARCHAR(20) DEFAULT NULL AFTER `metadata` ]])
-        MySQL.Async.execute([[ ALTER TABLE `dealership_stock` ADD COLUMN IF NOT EXISTS `acquired_from` VARCHAR(50) DEFAULT NULL AFTER `plate` ]])
-
-        -- Migration: seize vehicle support
-        MySQL.Async.execute([[ ALTER TABLE `dealerships` ADD COLUMN IF NOT EXISTS `seize_enabled` TINYINT(1) NOT NULL DEFAULT 0 AFTER `job` ]])
-        MySQL.Async.execute([[ ALTER TABLE `dealership_stock` ADD COLUMN IF NOT EXISTS `unlisted` TINYINT(1) NOT NULL DEFAULT 0 AFTER `is_used` ]])
-
-        -- dealership_orders — pending/in-transit orders (separate from available stock)
-        MySQL.Async.execute([[
-            CREATE TABLE IF NOT EXISTS `dealership_orders` (
+            CREATE TABLE IF NOT EXISTS `pickle_dealership_orders` (
                 `id`              INT UNSIGNED   NOT NULL AUTO_INCREMENT,
                 `dealership_id`   INT UNSIGNED   NOT NULL,
                 `vehicle_model`   VARCHAR(100)   NOT NULL,
@@ -105,33 +92,24 @@ CreateThread(function()
                 `retail_price`    BIGINT         NOT NULL DEFAULT 0,
                 `wholesale_cost`  BIGINT         NOT NULL DEFAULT 0,
                 `quantity`        INT UNSIGNED   NOT NULL DEFAULT 1,
+                `delivery_mode`   VARCHAR(16)    NOT NULL DEFAULT 'expedited',
+                `route_id`        VARCHAR(32)    DEFAULT NULL,
+                `delivery_fee`    BIGINT         NOT NULL DEFAULT 0,
+                `claimed_by`      VARCHAR(64)    DEFAULT NULL,
+                `claimed_at`      DATETIME       DEFAULT NULL,
                 `ordered_at`      TIMESTAMP      NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 `delivered_at`    TIMESTAMP      NULL DEFAULT NULL,
                 PRIMARY KEY (`id`),
                 KEY `idx_dealership` (`dealership_id`),
                 KEY `idx_model`      (`vehicle_model`),
-                KEY `idx_delivered`  (`delivered_at`)
+                KEY `idx_delivered`  (`delivered_at`),
+                KEY `idx_orders_queue` (`delivery_mode`, `claimed_by`, `delivered_at`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ]])
 
-        -- One-time migration: move any existing in-transit entries from dealership_stock to dealership_orders
+        -- pickle_dealership_ledger
         MySQL.Async.execute([[
-            INSERT INTO dealership_orders (dealership_id, vehicle_model, vehicle_label, retail_price, wholesale_cost, quantity, ordered_at, delivered_at)
-            SELECT dealership_id, vehicle_model, vehicle_label, retail_price, wholesale_cost, quantity, COALESCE(ordered_at, NOW()), delivered_at
-            FROM dealership_stock
-            WHERE sold_at IS NULL AND display_spot IS NULL AND delivered_at IS NOT NULL AND delivered_at > NOW()
-        ]])
-        MySQL.Async.execute([[
-            DELETE FROM dealership_stock
-            WHERE sold_at IS NULL AND display_spot IS NULL AND delivered_at IS NOT NULL AND delivered_at > NOW()
-        ]])
-
-        -- Migration: consolidation of duplicate stock entries is handled by the background thread
-        -- in modules/stock/server.lua (runs every 30s with safe per-row updates/deletes)
-
-        -- dealership_ledger
-        MySQL.Async.execute([[
-            CREATE TABLE IF NOT EXISTS `dealership_ledger` (
+            CREATE TABLE IF NOT EXISTS `pickle_dealership_ledger` (
                 `id`              INT UNSIGNED   NOT NULL AUTO_INCREMENT,
                 `dealership_id`   INT UNSIGNED   NOT NULL,
                 `type`            VARCHAR(50)    NOT NULL,
@@ -145,9 +123,9 @@ CreateThread(function()
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ]])
 
-        -- dealership_financing
+        -- pickle_dealership_financing
         MySQL.Async.execute([[
-            CREATE TABLE IF NOT EXISTS `dealership_financing` (
+            CREATE TABLE IF NOT EXISTS `pickle_dealership_financing` (
                 `id`                 INT UNSIGNED   NOT NULL AUTO_INCREMENT,
                 `dealership_id`      INT UNSIGNED   NOT NULL,
                 `identifier`          VARCHAR(50)    NOT NULL,
@@ -168,9 +146,9 @@ CreateThread(function()
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ]])
 
-        -- dealership_coupons
+        -- pickle_dealership_coupons
         MySQL.Async.execute([[
-            CREATE TABLE IF NOT EXISTS `dealership_coupons` (
+            CREATE TABLE IF NOT EXISTS `pickle_dealership_coupons` (
                 `id`              INT UNSIGNED   NOT NULL AUTO_INCREMENT,
                 `dealership_id`   INT UNSIGNED   NOT NULL,
                 `code`            VARCHAR(50)    NOT NULL,
@@ -189,9 +167,9 @@ CreateThread(function()
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ]])
 
-        -- dealership_deliveries
+        -- pickle_dealership_deliveries
         MySQL.Async.execute([[
-            CREATE TABLE IF NOT EXISTS `dealership_deliveries` (
+            CREATE TABLE IF NOT EXISTS `pickle_dealership_deliveries` (
                 `id`               INT UNSIGNED   NOT NULL AUTO_INCREMENT,
                 `dealership_id`    INT UNSIGNED   NOT NULL,
                 `stock_ids`        JSON           DEFAULT NULL,
@@ -208,17 +186,9 @@ CreateThread(function()
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ]])
 
-        -- Gameplay delivery system: extend dealership_orders for queue/claim flow
-        MySQL.Async.execute([[ ALTER TABLE `dealership_orders` ADD COLUMN IF NOT EXISTS `delivery_mode` VARCHAR(16) NOT NULL DEFAULT 'expedited' AFTER `quantity` ]])
-        MySQL.Async.execute([[ ALTER TABLE `dealership_orders` ADD COLUMN IF NOT EXISTS `route_id` VARCHAR(32) DEFAULT NULL AFTER `delivery_mode` ]])
-        MySQL.Async.execute([[ ALTER TABLE `dealership_orders` ADD COLUMN IF NOT EXISTS `delivery_fee` BIGINT NOT NULL DEFAULT 0 AFTER `route_id` ]])
-        MySQL.Async.execute([[ ALTER TABLE `dealership_orders` ADD COLUMN IF NOT EXISTS `claimed_by` VARCHAR(64) DEFAULT NULL AFTER `delivery_fee` ]])
-        MySQL.Async.execute([[ ALTER TABLE `dealership_orders` ADD COLUMN IF NOT EXISTS `claimed_at` DATETIME DEFAULT NULL AFTER `claimed_by` ]])
-        MySQL.Async.execute([[ ALTER TABLE `dealership_orders` ADD INDEX IF NOT EXISTS `idx_orders_queue` (`delivery_mode`, `claimed_by`, `delivered_at`) ]])
-
-        -- Gameplay delivery system: in-game configurable pickup depots (replaces static Config.DeliveryRoutes)
+        -- Gameplay delivery system: in-game configurable pickup depots
         MySQL.Async.execute([[
-            CREATE TABLE IF NOT EXISTS `delivery_depots` (
+            CREATE TABLE IF NOT EXISTS `pickle_delivery_depots` (
                 `id`             INT UNSIGNED   NOT NULL AUTO_INCREMENT,
                 `name`           VARCHAR(100)   NOT NULL,
                 `x`              DOUBLE         NOT NULL,
@@ -228,22 +198,19 @@ CreateThread(function()
                 `distance_band`  VARCHAR(16)    NOT NULL DEFAULT 'short',
                 `dropoff_radius` DOUBLE         NOT NULL DEFAULT 25.0,
                 `active`         TINYINT(1)     NOT NULL DEFAULT 1,
+                `spawn_x`        DOUBLE         DEFAULT NULL,
+                `spawn_y`        DOUBLE         DEFAULT NULL,
+                `spawn_z`        DOUBLE         DEFAULT NULL,
+                `spawn_heading`  DOUBLE         DEFAULT NULL,
                 `created_at`     TIMESTAMP      NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (`id`),
                 KEY `idx_active_band` (`active`, `distance_band`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ]])
 
-        -- Optional truck-spawn point — if the yard where the truck parks is distinct from where the
-        -- dispatch ped stands, admins can capture a separate location. Null = use the ped coords.
-        MySQL.Async.execute([[ ALTER TABLE `delivery_depots` ADD COLUMN IF NOT EXISTS `spawn_x` DOUBLE NULL ]])
-        MySQL.Async.execute([[ ALTER TABLE `delivery_depots` ADD COLUMN IF NOT EXISTS `spawn_y` DOUBLE NULL ]])
-        MySQL.Async.execute([[ ALTER TABLE `delivery_depots` ADD COLUMN IF NOT EXISTS `spawn_z` DOUBLE NULL ]])
-        MySQL.Async.execute([[ ALTER TABLE `delivery_depots` ADD COLUMN IF NOT EXISTS `spawn_heading` DOUBLE NULL ]])
-
         -- Gameplay delivery system: per-player driver progression
         MySQL.Async.execute([[
-            CREATE TABLE IF NOT EXISTS `dealership_driver_progression` (
+            CREATE TABLE IF NOT EXISTS `pickle_dealership_driver_progression` (
                 `identifier`         VARCHAR(64)   NOT NULL,
                 `xp`                 INT           NOT NULL DEFAULT 0,
                 `level`              INT           NOT NULL DEFAULT 1,
@@ -256,9 +223,9 @@ CreateThread(function()
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ]])
 
-        -- wholesale_catalog (admin-managed vehicle catalog)
+        -- pickle_wholesale_catalog (admin-managed vehicle catalog)
         MySQL.Async.execute([[
-            CREATE TABLE IF NOT EXISTS `wholesale_catalog` (
+            CREATE TABLE IF NOT EXISTS `pickle_wholesale_catalog` (
                 `id`              INT UNSIGNED   NOT NULL AUTO_INCREMENT,
                 `model`           VARCHAR(100)   NOT NULL,
                 `label`           VARCHAR(150)   NOT NULL,
@@ -266,6 +233,7 @@ CreateThread(function()
                 `tier`            VARCHAR(30)    NOT NULL DEFAULT 'basic',
                 `class`           VARCHAR(50)    NOT NULL DEFAULT 'sedan',
                 `vehicle_type`    VARCHAR(30)    NOT NULL DEFAULT 'car',
+                `image`           MEDIUMTEXT     DEFAULT NULL,
                 `created_at`      TIMESTAMP      NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (`id`),
                 UNIQUE KEY `idx_model` (`model`),
@@ -274,19 +242,9 @@ CreateThread(function()
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ]])
 
-        -- Migration: add job column if missing
-        MySQL.Async.execute([[
-            ALTER TABLE `dealerships` ADD COLUMN IF NOT EXISTS `job` VARCHAR(50) DEFAULT NULL AFTER `metadata`;
-        ]])
-
-        -- Migration: add image column to wholesale_catalog
-        MySQL.Async.execute([[
-            ALTER TABLE `wholesale_catalog` ADD COLUMN IF NOT EXISTS `image` MEDIUMTEXT DEFAULT NULL AFTER `vehicle_type`;
-        ]])
-
         -- Auctions
         MySQL.Async.execute([[
-            CREATE TABLE IF NOT EXISTS `dealership_auctions` (
+            CREATE TABLE IF NOT EXISTS `pickle_dealership_auctions` (
                 `id`                  INT AUTO_INCREMENT PRIMARY KEY,
                 `stock_id`            INT NOT NULL,
                 `dealership_id`       INT NOT NULL,
@@ -295,10 +253,11 @@ CreateThread(function()
                 `min_increment`       INT NOT NULL DEFAULT 100,
                 `reserve_price`       BIGINT DEFAULT NULL,
                 `buyout_price`        BIGINT DEFAULT NULL,
+                `duration_minutes`    INT NOT NULL DEFAULT 10,
                 `current_bid`         BIGINT DEFAULT NULL,
                 `current_bidder`      VARCHAR(50) DEFAULT NULL,
                 `started_at`          DATETIME DEFAULT CURRENT_TIMESTAMP,
-                `ends_at`             DATETIME NOT NULL,
+                `ends_at`             DATETIME DEFAULT NULL,
                 `ended_at`            DATETIME DEFAULT NULL,
                 `status`              ENUM('active','won','cancelled','no_sale') NOT NULL DEFAULT 'active',
                 `winner_identifier`   VARCHAR(50) DEFAULT NULL,
@@ -311,7 +270,7 @@ CreateThread(function()
         ]])
 
         MySQL.Async.execute([[
-            CREATE TABLE IF NOT EXISTS `dealership_auction_bids` (
+            CREATE TABLE IF NOT EXISTS `pickle_dealership_auction_bids` (
                 `id`                  INT AUTO_INCREMENT PRIMARY KEY,
                 `auction_id`          INT NOT NULL,
                 `bidder_identifier`   VARCHAR(50) NOT NULL,
@@ -323,30 +282,13 @@ CreateThread(function()
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ]])
 
-        MySQL.Async.execute([[
-            ALTER TABLE `dealership_stock` ADD COLUMN IF NOT EXISTS `auction_id` INT DEFAULT NULL AFTER `acquired_from`;
-        ]])
-
-        -- Deferred-timer model: ends_at becomes nullable (starts on first bid), duration stored upfront
-        MySQL.Async.execute([[
-            ALTER TABLE `dealership_auctions` ADD COLUMN IF NOT EXISTS `duration_minutes` INT NOT NULL DEFAULT 10 AFTER `buyout_price`;
-        ]])
-        MySQL.Async.execute([[
-            ALTER TABLE `dealership_auctions` MODIFY COLUMN `ends_at` DATETIME DEFAULT NULL;
-        ]])
-
-        -- Per-dealership financing settings (JSON blob)
-        MySQL.Async.execute([[
-            ALTER TABLE `dealerships` ADD COLUMN IF NOT EXISTS `financing_settings` JSON DEFAULT NULL AFTER `metadata`;
-        ]])
-
         -- Seed default wholesale catalog (INSERT IGNORE skips existing entries)
         local seedSQL = LoadResourceFile(GetCurrentResourceName(), "catalog_seed.sql")
         if seedSQL then
             MySQL.Async.execute(seedSQL)
         end
 
-        -- Load dealerships into cache after tables are ready
+        -- Load pickle_dealerships into cache after tables are ready
         LoadDealerships()
         LoadDeliveryDepots()
     end)
@@ -376,19 +318,7 @@ local function rowToDepot(row)
 end
 
 function LoadDeliveryDepots()
-    local rows = MySQL.query.await("SELECT * FROM `delivery_depots` WHERE `active` = 1 ORDER BY `id` ASC") or {}
-
-    -- If table is empty, seed from the legacy Config.DeliveryRoutes so existing servers keep working
-    if #rows == 0 and Config.DeliveryRoutes then
-        for _, r in pairs(Config.DeliveryRoutes) do
-            local px, py, pz, pw = r.pickupCoords.x, r.pickupCoords.y, r.pickupCoords.z, r.pickupCoords.w or 0.0
-            MySQL.insert.await(
-                "INSERT INTO `delivery_depots` (`name`, `x`, `y`, `z`, `heading`, `active`) VALUES (?, ?, ?, ?, ?, 1)",
-                { r.label or 'Depot', px, py, pz, pw }
-            )
-        end
-        rows = MySQL.query.await("SELECT * FROM `delivery_depots` WHERE `active` = 1 ORDER BY `id` ASC") or {}
-    end
+    local rows = MySQL.query.await("SELECT * FROM `pickle_delivery_depots` WHERE `active` = 1 ORDER BY `id` ASC") or {}
 
     DeliveryDepotCache = {}
     for _, row in ipairs(rows) do
@@ -406,7 +336,7 @@ end
 function CreateDeliveryDepot(name, x, y, z, heading)
     if not name or not x or not y or not z then return nil, 'Invalid arguments.' end
     local id = MySQL.insert.await(
-        "INSERT INTO `delivery_depots` (`name`, `x`, `y`, `z`, `heading`) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO `pickle_delivery_depots` (`name`, `x`, `y`, `z`, `heading`) VALUES (?, ?, ?, ?, ?)",
         { name, x, y, z, heading or 0.0 }
     )
     if id then
@@ -426,7 +356,7 @@ function SetDeliveryDepotPickup(id, x, y, z, heading)
     if not id or not DeliveryDepotCache[id] then return false end
     if not x or not y or not z then return false end
     MySQL.update.await(
-        "UPDATE `delivery_depots` SET `x` = ?, `y` = ?, `z` = ?, `heading` = ? WHERE `id` = ?",
+        "UPDATE `pickle_delivery_depots` SET `x` = ?, `y` = ?, `z` = ?, `heading` = ? WHERE `id` = ?",
         { x, y, z, heading or 0.0, id }
     )
     DeliveryDepotCache[id].pickupCoords = { x = x, y = y, z = z, w = heading or 0.0 }
@@ -439,13 +369,13 @@ function SetDeliveryDepotSpawn(id, x, y, z, heading)
     if not id or not DeliveryDepotCache[id] then return false end
     if x == nil or y == nil or z == nil then
         MySQL.update.await(
-            "UPDATE `delivery_depots` SET `spawn_x` = NULL, `spawn_y` = NULL, `spawn_z` = NULL, `spawn_heading` = NULL WHERE `id` = ?",
+            "UPDATE `pickle_delivery_depots` SET `spawn_x` = NULL, `spawn_y` = NULL, `spawn_z` = NULL, `spawn_heading` = NULL WHERE `id` = ?",
             { id }
         )
         DeliveryDepotCache[id].spawnCoords = nil
     else
         MySQL.update.await(
-            "UPDATE `delivery_depots` SET `spawn_x` = ?, `spawn_y` = ?, `spawn_z` = ?, `spawn_heading` = ? WHERE `id` = ?",
+            "UPDATE `pickle_delivery_depots` SET `spawn_x` = ?, `spawn_y` = ?, `spawn_z` = ?, `spawn_heading` = ? WHERE `id` = ?",
             { x, y, z, heading or 0.0, id }
         )
         DeliveryDepotCache[id].spawnCoords = { x = x, y = y, z = z, w = heading or 0.0 }
@@ -466,7 +396,7 @@ function UpdateDeliveryDepot(id, fields)
     end
     if #sets == 0 then return false end
     params[#params + 1] = id
-    MySQL.update.await(("UPDATE `delivery_depots` SET %s WHERE `id` = ?"):format(table.concat(sets, ", ")), params)
+    MySQL.update.await(("UPDATE `pickle_delivery_depots` SET %s WHERE `id` = ?"):format(table.concat(sets, ", ")), params)
     LoadDeliveryDepots()
     return true
 end
@@ -474,7 +404,7 @@ end
 function DeleteDeliveryDepot(id)
     id = tonumber(id)
     if not id then return false end
-    MySQL.update.await("UPDATE `delivery_depots` SET `active` = 0 WHERE `id` = ?", { id })
+    MySQL.update.await("UPDATE `pickle_delivery_depots` SET `active` = 0 WHERE `id` = ?", { id })
     DeliveryDepotCache[id] = nil
     return true
 end
@@ -530,7 +460,7 @@ end
 -- ─── Dealership Cache Functions ──────────────────────────────────────────────
 
 function LoadDealerships()
-    local rows = MySQL.query.await("SELECT * FROM `dealerships`")
+    local rows = MySQL.query.await("SELECT * FROM `pickle_dealerships`")
     if not rows then return end
 
     DealershipCache = {}
@@ -618,7 +548,7 @@ function AwardDealershipXP(dealershipId, amount)
     end
 
     MySQL.update.await(
-        "UPDATE dealerships SET tier = ?, metadata = ? WHERE id = ?",
+        "UPDATE pickle_dealerships SET tier = ?, metadata = ? WHERE id = ?",
         { newTier, json.encode(meta), dealershipId }
     )
     UpdateDealershipCache(dealershipId, { tier = newTier, metadata = meta })
@@ -712,7 +642,7 @@ end
 function AddLedgerEntry(dealershipId, type, amount, description, identifier)
     if not dealershipId or not type or not amount then return end
     MySQL.insert(
-        "INSERT INTO `dealership_ledger` (`dealership_id`, `type`, `amount`, `description`, `identifier`) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO `pickle_dealership_ledger` (`dealership_id`, `type`, `amount`, `description`, `identifier`) VALUES (?, ?, ?, ?, ?)",
         { tonumber(dealershipId), type, tonumber(amount), description or "", identifier }
     )
 end
@@ -736,9 +666,9 @@ function GetPlayerDealershipRole(source, dealershipId)
         return "owner"
     end
 
-    -- Employee check via dealership_employees table
+    -- Employee check via pickle_dealership_employees table
     local rows = MySQL.query.await(
-        "SELECT `role` FROM `dealership_employees` WHERE `dealership_id` = ? AND `identifier` = ? LIMIT 1",
+        "SELECT `role` FROM `pickle_dealership_employees` WHERE `dealership_id` = ? AND `identifier` = ? LIMIT 1",
         { dealershipId, identifier }
     )
 
@@ -785,12 +715,12 @@ end
 function GetDriverProgression(identifier)
     if not identifier then return nil end
     local row = MySQL.single.await(
-        "SELECT * FROM `dealership_driver_progression` WHERE `identifier` = ?",
+        "SELECT * FROM `pickle_dealership_driver_progression` WHERE `identifier` = ?",
         { identifier }
     )
     if not row then
         MySQL.insert.await(
-            "INSERT INTO `dealership_driver_progression` (`identifier`) VALUES (?)",
+            "INSERT INTO `pickle_dealership_driver_progression` (`identifier`) VALUES (?)",
             { identifier }
         )
         row = { identifier = identifier, xp = 0, level = 1, completed_count = 0, failed_count = 0, streak = 0, lifetime_earnings = 0 }
@@ -808,7 +738,7 @@ function AddDriverXP(identifier, xp)
     local newXP = math.max(0, (current.xp or 0) + xp)
     local newLevel = ResolveDriverLevel(newXP)
     MySQL.update.await(
-        "UPDATE `dealership_driver_progression` SET `xp` = ?, `level` = ? WHERE `identifier` = ?",
+        "UPDATE `pickle_dealership_driver_progression` SET `xp` = ?, `level` = ? WHERE `identifier` = ?",
         { newXP, newLevel, identifier }
     )
     return { xp = newXP, level = newLevel, leveledUp = newLevel > oldLevel, oldLevel = oldLevel }
@@ -818,12 +748,12 @@ function RecordDriverDelivery(identifier, earnings, success)
     if not identifier then return end
     if success then
         MySQL.update.await(
-            "UPDATE `dealership_driver_progression` SET `completed_count` = `completed_count` + 1, `streak` = `streak` + 1, `lifetime_earnings` = `lifetime_earnings` + ? WHERE `identifier` = ?",
+            "UPDATE `pickle_dealership_driver_progression` SET `completed_count` = `completed_count` + 1, `streak` = `streak` + 1, `lifetime_earnings` = `lifetime_earnings` + ? WHERE `identifier` = ?",
             { math.max(0, tonumber(earnings) or 0), identifier }
         )
     else
         MySQL.update.await(
-            "UPDATE `dealership_driver_progression` SET `failed_count` = `failed_count` + 1, `streak` = 0 WHERE `identifier` = ?",
+            "UPDATE `pickle_dealership_driver_progression` SET `failed_count` = `failed_count` + 1, `streak` = 0 WHERE `identifier` = ?",
             { identifier }
         )
     end

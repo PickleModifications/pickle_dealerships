@@ -87,7 +87,7 @@ lib.callback.register('pickle_dealerships:getDealerships', function(source)
         if resolved then
             local stockCount = 0
             local result = MySQL.scalar.await(
-                'SELECT COALESCE(SUM(quantity), 0) FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NULL',
+                'SELECT COALESCE(SUM(quantity), 0) FROM pickle_dealership_stock WHERE dealership_id = ? AND sold_at IS NULL',
                 { cached.id }
             )
             stockCount = tonumber(result or 0)
@@ -132,13 +132,13 @@ lib.callback.register('pickle_dealerships:getDealershipData', function(source, l
 
     if cached then
         local stockResults = MySQL.query.await(
-            'SELECT * FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NULL',
+            'SELECT * FROM pickle_dealership_stock WHERE dealership_id = ? AND sold_at IS NULL',
             { cached.id }
         )
         stock = stockResults or {}
 
         local employeeResults = MySQL.query.await(
-            'SELECT * FROM dealership_employees WHERE dealership_id = ?',
+            'SELECT * FROM pickle_dealership_employees WHERE dealership_id = ?',
             { cached.id }
         )
         employees = employeeResults or {}
@@ -201,7 +201,7 @@ lib.callback.register('pickle_dealerships:purchaseDealership', function(source, 
     end
 
     MySQL.update.await(
-        'UPDATE dealerships SET owner_identifier = ?, balance = 0 WHERE id = ?',
+        'UPDATE pickle_dealerships SET owner_identifier = ?, balance = 0 WHERE id = ?',
         { identifier, cached.id }
     )
     cached.owner_identifier = identifier
@@ -233,9 +233,9 @@ lib.callback.register('pickle_dealerships:sellDealership', function(source, loca
     local sellbackRate = Config.SellbackRate or 0.5
     local refund = math.floor((resolved.purchasePrice or 0) * sellbackRate)
 
-    MySQL.update.await('DELETE FROM dealership_employees WHERE dealership_id = ?', { cached.id })
-    MySQL.update.await('DELETE FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NULL', { cached.id })
-    MySQL.update.await('UPDATE dealerships SET owner_identifier = NULL, balance = 0 WHERE id = ?', { cached.id })
+    MySQL.update.await('DELETE FROM pickle_dealership_employees WHERE dealership_id = ?', { cached.id })
+    MySQL.update.await('DELETE FROM pickle_dealership_stock WHERE dealership_id = ? AND sold_at IS NULL', { cached.id })
+    MySQL.update.await('UPDATE pickle_dealerships SET owner_identifier = NULL, balance = 0 WHERE id = ?', { cached.id })
 
     cached.owner_identifier = nil
     cached.balance = 0
@@ -266,7 +266,7 @@ lib.callback.register('pickle_dealerships:renameDealership', function(source, lo
         return { success = false, error = _L("invalid_name_length") }
     end
 
-    MySQL.update.await('UPDATE dealerships SET name = ? WHERE id = ?', { newName, cached.id })
+    MySQL.update.await('UPDATE pickle_dealerships SET name = ? WHERE id = ?', { newName, cached.id })
     cached.name = newName
     ShowNotification(source, _L("dealership_renamed_to", newName))
     return { success = true }

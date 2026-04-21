@@ -8,20 +8,20 @@ lib.callback.register("pickle_dealerships:getDealershipFinances", function(sourc
     if not dealership then return nil end
 
     -- Read fresh balance from DB
-    local freshBalance = MySQL.scalar.await("SELECT `balance` FROM `dealerships` WHERE `id` = ?", { dealershipId })
+    local freshBalance = MySQL.scalar.await("SELECT `balance` FROM `pickle_dealerships` WHERE `id` = ?", { dealershipId })
     if freshBalance then
         UpdateDealershipCache(dealershipId, { balance = tonumber(freshBalance) })
     end
 
     -- Fetch last 50 ledger entries
-    local ledger = MySQL.query.await("SELECT * FROM dealership_ledger WHERE dealership_id = ? ORDER BY created_at DESC LIMIT 50", { dealershipId })
+    local ledger = MySQL.query.await("SELECT * FROM pickle_dealership_ledger WHERE dealership_id = ? ORDER BY created_at DESC LIMIT 50", { dealershipId })
 
     -- Revenue stats: positive amounts = income, negative = expenses
     local stats = MySQL.query.await([[
         SELECT
             COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) AS total_income,
             COALESCE(SUM(CASE WHEN amount < 0 THEN amount ELSE 0 END), 0) AS total_expenses
-        FROM dealership_ledger
+        FROM pickle_dealership_ledger
         WHERE dealership_id = ?
     ]], { dealershipId })
 
@@ -66,7 +66,7 @@ lib.callback.register("pickle_dealerships:withdrawFunds", function(source, data)
 
     -- Deduct from dealership
     local newBalance = dealership.balance - amount
-    MySQL.update.await("UPDATE dealerships SET balance = ? WHERE id = ?", { newBalance, dealershipId })
+    MySQL.update.await("UPDATE pickle_dealerships SET balance = ? WHERE id = ?", { newBalance, dealershipId })
     UpdateDealershipCache(dealershipId, { balance = newBalance })
 
     -- Add to player bank
@@ -118,7 +118,7 @@ lib.callback.register("pickle_dealerships:depositFunds", function(source, data)
     RemoveMoney(source, amount, "money")
 
     local newBalance = (dealership.balance or 0) + amount
-    MySQL.update.await("UPDATE dealerships SET balance = ? WHERE id = ?", { newBalance, dealershipId })
+    MySQL.update.await("UPDATE pickle_dealerships SET balance = ? WHERE id = ?", { newBalance, dealershipId })
     UpdateDealershipCache(dealershipId, { balance = newBalance })
 
     local identifier = GetIdentifier(source)
@@ -159,7 +159,7 @@ lib.callback.register("pickle_dealerships:upgradeTier", function(source, data)
     local newBalance = dealership.balance - cost
     local newTier = currentTier + 1
 
-    MySQL.update.await("UPDATE dealerships SET balance = ?, tier = ? WHERE id = ?", { newBalance, newTier, dealershipId })
+    MySQL.update.await("UPDATE pickle_dealerships SET balance = ?, tier = ? WHERE id = ?", { newBalance, newTier, dealershipId })
     UpdateDealershipCache(dealershipId, { balance = newBalance, tier = newTier })
 
     local identifier = GetIdentifier(source)
@@ -182,12 +182,12 @@ lib.callback.register("pickle_dealerships:createCoupon", function(source, data)
     end
 
     -- Check for duplicate code
-    local existing = MySQL.scalar.await("SELECT id FROM dealership_coupons WHERE dealership_id = ? AND code = ?", { dealershipId, toupper(data.code) })
+    local existing = MySQL.scalar.await("SELECT id FROM pickle_dealership_coupons WHERE dealership_id = ? AND code = ?", { dealershipId, toupper(data.code) })
     if existing then
         return { success = false, message = "A coupon with that code already exists." }
     end
 
-    MySQL.insert.await("INSERT INTO dealership_coupons (dealership_id, code, discount_type, discount_value, max_uses, uses, min_purchase, vehicle_filter, expires_at, created_at) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, NOW())", {
+    MySQL.insert.await("INSERT INTO pickle_dealership_coupons (dealership_id, code, discount_type, discount_value, max_uses, uses, min_purchase, vehicle_filter, expires_at, created_at) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, NOW())", {
         dealershipId,
         toupper(data.code),
         data.discountType or "percentage",
@@ -210,7 +210,7 @@ lib.callback.register("pickle_dealerships:deleteCoupon", function(source, data)
         return { success = false, message = "You do not have permission to delete coupons." }
     end
 
-    local affected = MySQL.update.await("DELETE FROM dealership_coupons WHERE id = ? AND dealership_id = ?", { couponId, dealershipId })
+    local affected = MySQL.update.await("DELETE FROM pickle_dealership_coupons WHERE id = ? AND dealership_id = ?", { couponId, dealershipId })
     if affected and affected > 0 then
         return { success = true, message = "Coupon deleted." }
     else
@@ -224,7 +224,7 @@ lib.callback.register("pickle_dealerships:getCoupons", function(source, dealersh
         return nil
     end
 
-    local coupons = MySQL.query.await("SELECT * FROM dealership_coupons WHERE dealership_id = ? ORDER BY created_at DESC", { dealershipId })
+    local coupons = MySQL.query.await("SELECT * FROM pickle_dealership_coupons WHERE dealership_id = ? ORDER BY created_at DESC", { dealershipId })
     return coupons or {}
 end)
 
@@ -235,7 +235,7 @@ lib.callback.register("pickle_dealerships:validateCoupon", function(source, data
     local purchaseAmount = tonumber(data.purchaseAmount) or 0
     local vehicleModel = data.vehicleModel
 
-    local coupon = MySQL.query.await("SELECT * FROM dealership_coupons WHERE dealership_id = ? AND code = ? LIMIT 1", { dealershipId, code })
+    local coupon = MySQL.query.await("SELECT * FROM pickle_dealership_coupons WHERE dealership_id = ? AND code = ? LIMIT 1", { dealershipId, code })
     if not coupon or #coupon == 0 then
         return { valid = false, message = "Invalid coupon code." }
     end
@@ -391,7 +391,7 @@ lib.callback.register("pickle_dealerships:setAcceptedAltCurrencies", function(so
     end
     meta.acceptedAltCurrencies = cleaned
 
-    MySQL.update.await("UPDATE dealerships SET metadata = ? WHERE id = ?", { json.encode(meta), dealershipId })
+    MySQL.update.await("UPDATE pickle_dealerships SET metadata = ? WHERE id = ?", { json.encode(meta), dealershipId })
     UpdateDealershipCache(dealershipId, { metadata = meta })
 
     return { success = true, message = _L("alt_currencies_updated") }
@@ -460,7 +460,7 @@ lib.callback.register("pickle_dealerships:setSocietyAllowlist", function(source,
     end
     meta.societyAllowlist = cleaned
 
-    MySQL.update.await("UPDATE dealerships SET metadata = ? WHERE id = ?", { json.encode(meta), dealershipId })
+    MySQL.update.await("UPDATE pickle_dealerships SET metadata = ? WHERE id = ?", { json.encode(meta), dealershipId })
     UpdateDealershipCache(dealershipId, { metadata = meta })
 
     return { success = true, message = _L("society_allowlist_updated") }
@@ -546,7 +546,7 @@ lib.callback.register("pickle_dealerships:setCommissionRates", function(source, 
     end
     meta.commissionRates = nextRates
 
-    MySQL.update.await("UPDATE dealerships SET metadata = ? WHERE id = ?", { json.encode(meta), dealershipId })
+    MySQL.update.await("UPDATE pickle_dealerships SET metadata = ? WHERE id = ?", { json.encode(meta), dealershipId })
     UpdateDealershipCache(dealershipId, { metadata = meta })
 
     return { success = true, message = "Commission rates updated." }
@@ -563,19 +563,19 @@ lib.callback.register("pickle_dealerships:getDashboardStats", function(source, d
 
     -- Total sales (sold stock items)
     local totalSales = MySQL.scalar.await(
-        "SELECT COUNT(*) FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NOT NULL",
+        "SELECT COUNT(*) FROM pickle_dealership_stock WHERE dealership_id = ? AND sold_at IS NOT NULL",
         { dealershipId }
     ) or 0
 
     -- Total revenue from sold stock
     local totalRevenue = MySQL.scalar.await(
-        "SELECT COALESCE(SUM(retail_price), 0) FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NOT NULL",
+        "SELECT COALESCE(SUM(retail_price), 0) FROM pickle_dealership_stock WHERE dealership_id = ? AND sold_at IS NOT NULL",
         { dealershipId }
     ) or 0
 
     -- Total profit (revenue - wholesale cost)
     local totalCost = MySQL.scalar.await(
-        "SELECT COALESCE(SUM(wholesale_cost), 0) FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NOT NULL",
+        "SELECT COALESCE(SUM(wholesale_cost), 0) FROM pickle_dealership_stock WHERE dealership_id = ? AND sold_at IS NOT NULL",
         { dealershipId }
     ) or 0
     local totalProfit = totalRevenue - totalCost
@@ -583,18 +583,18 @@ lib.callback.register("pickle_dealerships:getDashboardStats", function(source, d
     -- Total commission paid (from ledger). Commission is stored as a negative
     -- expense; present it as a positive amount so the dashboard reads naturally.
     local totalCommission = MySQL.scalar.await(
-        "SELECT COALESCE(ABS(SUM(amount)), 0) FROM dealership_ledger WHERE dealership_id = ? AND type = 'commission'",
+        "SELECT COALESCE(ABS(SUM(amount)), 0) FROM pickle_dealership_ledger WHERE dealership_id = ? AND type = 'commission'",
         { dealershipId }
     ) or 0
 
     -- Sales this week
     local salesThisWeek = MySQL.scalar.await(
-        "SELECT COUNT(*) FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NOT NULL AND sold_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)",
+        "SELECT COUNT(*) FROM pickle_dealership_stock WHERE dealership_id = ? AND sold_at IS NOT NULL AND sold_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)",
         { dealershipId }
     ) or 0
 
     local revenueThisWeek = MySQL.scalar.await(
-        "SELECT COALESCE(SUM(retail_price), 0) FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NOT NULL AND sold_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)",
+        "SELECT COALESCE(SUM(retail_price), 0) FROM pickle_dealership_stock WHERE dealership_id = ? AND sold_at IS NOT NULL AND sold_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)",
         { dealershipId }
     ) or 0
 
@@ -608,7 +608,7 @@ lib.callback.register("pickle_dealerships:getDashboardStats", function(source, d
             COUNT(*) AS sales,
             COALESCE(SUM(ds.retail_price), 0) AS revenue,
             p.charinfo AS charinfo
-        FROM dealership_stock ds
+        FROM pickle_dealership_stock ds
         LEFT JOIN players p ON p.citizenid = ds.sold_by
         WHERE ds.dealership_id = ?
           AND ds.sold_at IS NOT NULL
@@ -638,12 +638,12 @@ lib.callback.register("pickle_dealerships:getDashboardStats", function(source, d
 
     -- Current stock & employee counts
     local stockCount = MySQL.scalar.await(
-        "SELECT COUNT(*) FROM dealership_stock WHERE dealership_id = ? AND sold_at IS NULL",
+        "SELECT COUNT(*) FROM pickle_dealership_stock WHERE dealership_id = ? AND sold_at IS NULL",
         { dealershipId }
     ) or 0
 
     local employeeCount = MySQL.scalar.await(
-        "SELECT COUNT(*) FROM dealership_employees WHERE dealership_id = ?",
+        "SELECT COUNT(*) FROM pickle_dealership_employees WHERE dealership_id = ?",
         { dealershipId }
     ) or 0
 

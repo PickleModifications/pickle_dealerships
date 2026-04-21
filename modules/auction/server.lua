@@ -13,9 +13,9 @@ local function FetchAuction(auctionId)
     local row = MySQL.single.await(
         [[SELECT a.*, s.vehicle_model, s.vehicle_label, s.plate, s.condition, s.metadata AS stock_metadata,
                  d.name AS dealership_name
-          FROM `dealership_auctions` a
-          JOIN `dealership_stock` s ON s.id = a.stock_id
-          JOIN `dealerships` d ON d.id = a.dealership_id
+          FROM `pickle_dealership_auctions` a
+          JOIN `pickle_dealership_stock` s ON s.id = a.stock_id
+          JOIN `pickle_dealerships` d ON d.id = a.dealership_id
           WHERE a.id = ?]],
         { tonumber(auctionId) }
     )
@@ -26,10 +26,10 @@ local function FetchActiveAuctions()
     local rows = MySQL.query.await(
         [[SELECT a.*, s.vehicle_model, s.vehicle_label, s.plate, s.condition,
                  d.name AS dealership_name,
-                 (SELECT COUNT(*) FROM dealership_auction_bids b WHERE b.auction_id = a.id) AS bid_count
-          FROM `dealership_auctions` a
-          JOIN `dealership_stock` s ON s.id = a.stock_id
-          JOIN `dealerships` d ON d.id = a.dealership_id
+                 (SELECT COUNT(*) FROM pickle_dealership_auction_bids b WHERE b.auction_id = a.id) AS bid_count
+          FROM `pickle_dealership_auctions` a
+          JOIN `pickle_dealership_stock` s ON s.id = a.stock_id
+          JOIN `pickle_dealerships` d ON d.id = a.dealership_id
           WHERE a.status = 'active'
           ORDER BY a.ends_at ASC]],
         {}
@@ -39,7 +39,7 @@ local function FetchActiveAuctions()
 end
 
 local function UnlockStock(stockId)
-    MySQL.update.await("UPDATE `dealership_stock` SET `auction_id` = NULL WHERE `id` = ?", { tonumber(stockId) })
+    MySQL.update.await("UPDATE `pickle_dealership_stock` SET `auction_id` = NULL WHERE `id` = ?", { tonumber(stockId) })
 end
 
 local function RefundBidder(identifier, amount, note)
@@ -56,10 +56,10 @@ end
 
 local function AddDealershipBalance(dealershipId, amount)
     MySQL.update.await(
-        "UPDATE `dealerships` SET `balance` = `balance` + ? WHERE `id` = ?",
+        "UPDATE `pickle_dealerships` SET `balance` = `balance` + ? WHERE `id` = ?",
         { tonumber(amount), tonumber(dealershipId) }
     )
-    local fresh = MySQL.scalar.await("SELECT `balance` FROM `dealerships` WHERE `id` = ?", { tonumber(dealershipId) })
+    local fresh = MySQL.scalar.await("SELECT `balance` FROM `pickle_dealerships` WHERE `id` = ?", { tonumber(dealershipId) })
     if fresh and UpdateDealershipCache then UpdateDealershipCache(dealershipId, { balance = tonumber(fresh) }) end
 end
 
@@ -73,7 +73,7 @@ lib.callback.register("pickle_dealerships:createAuction", function(source, data)
     local stockId = tonumber(data and data.stockId)
     if not stockId then return false, "Invalid stock id." end
 
-    local stock = MySQL.single.await("SELECT * FROM `dealership_stock` WHERE `id` = ?", { stockId })
+    local stock = MySQL.single.await("SELECT * FROM `pickle_dealership_stock` WHERE `id` = ?", { stockId })
     if not stock then return false, "Stock not found." end
     if stock.sold_at then return false, "Stock already sold." end
     if stock.auction_id then return false, "Already at auction." end
@@ -101,14 +101,14 @@ lib.callback.register("pickle_dealerships:createAuction", function(source, data)
 
     -- Timer doesn't start until the first bid is placed; ends_at stays NULL until then.
     local id = MySQL.insert.await(
-        [[INSERT INTO `dealership_auctions`
+        [[INSERT INTO `pickle_dealership_auctions`
           (stock_id, dealership_id, seller_identifier, starting_bid, min_increment, reserve_price, buyout_price, duration_minutes, ends_at)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)]],
         { stockId, stock.dealership_id, GetIdentifier(source), startingBid, minIncrement, reserve, buyout, duration }
     )
     if not id then return false, "Failed to create auction." end
 
-    MySQL.update.await("UPDATE `dealership_stock` SET `auction_id` = ?, `unlisted` = 0 WHERE `id` = ?", { id, stockId })
+    MySQL.update.await("UPDATE `pickle_dealership_stock` SET `auction_id` = ?, `unlisted` = 0 WHERE `id` = ?", { id, stockId })
 
     BroadcastAuctionUpdate(id)
     return true, id
@@ -144,7 +144,7 @@ lib.callback.register("pickle_dealerships:placeBid", function(source, data)
     -- Refund previous top bidder, mark their row refunded
     if auction.current_bidder and auction.current_bid and auction.current_bid > 0 then
         MySQL.update.await(
-            "UPDATE `dealership_auction_bids` SET `refunded` = 1 WHERE `auction_id` = ? AND `bidder_identifier` = ? AND `refunded` = 0",
+            "UPDATE `pickle_dealership_auction_bids` SET `refunded` = 1 WHERE `auction_id` = ? AND `bidder_identifier` = ? AND `refunded` = 0",
             { auctionId, auction.current_bidder }
         )
         RefundBidder(auction.current_bidder, tonumber(auction.current_bid), 'Outbid')
@@ -152,7 +152,7 @@ lib.callback.register("pickle_dealerships:placeBid", function(source, data)
 
     -- Insert bid + update auction
     MySQL.insert.await(
-        "INSERT INTO `dealership_auction_bids` (auction_id, bidder_identifier, amount) VALUES (?, ?, ?)",
+        "INSERT INTO `pickle_dealership_auction_bids` (auction_id, bidder_identifier, amount) VALUES (?, ?, ?)",
         { auctionId, identifier, amount }
     )
 
@@ -162,18 +162,18 @@ lib.callback.register("pickle_dealerships:placeBid", function(source, data)
     local extended = false
     if isFirstBid then
         MySQL.update.await(
-            "UPDATE `dealership_auctions` SET `ends_at` = DATE_ADD(NOW(), INTERVAL ? MINUTE) WHERE `id` = ?",
+            "UPDATE `pickle_dealership_auctions` SET `ends_at` = DATE_ADD(NOW(), INTERVAL ? MINUTE) WHERE `id` = ?",
             { tonumber(auction.duration_minutes) or Config.Auction.defaultDuration, auctionId }
         )
         timerStarted = true
     elseif not isBuyout and Config.Auction.antiSnipeSeconds and Config.Auction.antiSnipeSeconds > 0 then
         local secondsLeft = MySQL.scalar.await(
-            "SELECT TIMESTAMPDIFF(SECOND, NOW(), `ends_at`) FROM `dealership_auctions` WHERE `id` = ?",
+            "SELECT TIMESTAMPDIFF(SECOND, NOW(), `ends_at`) FROM `pickle_dealership_auctions` WHERE `id` = ?",
             { auctionId }
         )
         if secondsLeft and tonumber(secondsLeft) < Config.Auction.antiSnipeSeconds then
             MySQL.update.await(
-                "UPDATE `dealership_auctions` SET `ends_at` = DATE_ADD(NOW(), INTERVAL ? SECOND) WHERE `id` = ?",
+                "UPDATE `pickle_dealership_auctions` SET `ends_at` = DATE_ADD(NOW(), INTERVAL ? SECOND) WHERE `id` = ?",
                 { Config.Auction.antiSnipeSeconds, auctionId }
             )
             extended = true
@@ -181,14 +181,14 @@ lib.callback.register("pickle_dealerships:placeBid", function(source, data)
     end
 
     MySQL.update.await(
-        "UPDATE `dealership_auctions` SET `current_bid` = ?, `current_bidder` = ? WHERE `id` = ?",
+        "UPDATE `pickle_dealership_auctions` SET `current_bid` = ?, `current_bidder` = ? WHERE `id` = ?",
         { amount, identifier, auctionId }
     )
 
     -- Buyout finalizes the auction immediately
     if isBuyout then
         -- Finalizer will pick it up on next tick; cut end_at to now so there's no delay.
-        MySQL.update.await("UPDATE `dealership_auctions` SET `ends_at` = NOW() WHERE `id` = ?", { auctionId })
+        MySQL.update.await("UPDATE `pickle_dealership_auctions` SET `ends_at` = NOW() WHERE `id` = ?", { auctionId })
     end
 
     BroadcastAuctionUpdate(auctionId)
@@ -215,7 +215,7 @@ lib.callback.register("pickle_dealerships:cancelAuction", function(source, data)
     end
 
     MySQL.update.await(
-        "UPDATE `dealership_auctions` SET `status` = 'cancelled', `ended_at` = NOW() WHERE `id` = ?",
+        "UPDATE `pickle_dealership_auctions` SET `status` = 'cancelled', `ended_at` = NOW() WHERE `id` = ?",
         { auctionId }
     )
     UnlockStock(auction.stock_id)
@@ -232,9 +232,9 @@ lib.callback.register("pickle_dealerships:getPendingPickups", function(source)
     local rows = MySQL.query.await(
         [[SELECT a.*, s.vehicle_model, s.vehicle_label, s.metadata AS stock_metadata, s.plate,
                  d.name AS dealership_name, d.location AS dealership_location
-          FROM `dealership_auctions` a
-          JOIN `dealership_stock` s ON s.id = a.stock_id
-          JOIN `dealerships` d ON d.id = a.dealership_id
+          FROM `pickle_dealership_auctions` a
+          JOIN `pickle_dealership_stock` s ON s.id = a.stock_id
+          JOIN `pickle_dealerships` d ON d.id = a.dealership_id
           WHERE a.status = 'won' AND a.winner_identifier = ? AND a.claimed_at IS NULL]],
         { identifier }
     ) or {}
@@ -251,9 +251,9 @@ lib.callback.register("pickle_dealerships:claimAuctionVehicle", function(source,
     local row = MySQL.single.await(
         [[SELECT a.*, s.vehicle_model, s.vehicle_label, s.metadata AS stock_metadata, s.plate, s.dealership_id AS dsid,
                  d.location AS dealership_location
-          FROM `dealership_auctions` a
-          JOIN `dealership_stock` s ON s.id = a.stock_id
-          JOIN `dealerships` d ON d.id = s.dealership_id
+          FROM `pickle_dealership_auctions` a
+          JOIN `pickle_dealership_stock` s ON s.id = a.stock_id
+          JOIN `pickle_dealerships` d ON d.id = s.dealership_id
           WHERE a.id = ?]],
         { auctionId }
     )
@@ -262,9 +262,9 @@ lib.callback.register("pickle_dealerships:claimAuctionVehicle", function(source,
     if row.winner_identifier ~= identifier then return false, "You are not the winner." end
     if row.claimed_at then return false, "Already claimed." end
 
-    MySQL.update.await("UPDATE `dealership_auctions` SET `claimed_at` = NOW() WHERE `id` = ?", { auctionId })
+    MySQL.update.await("UPDATE `pickle_dealership_auctions` SET `claimed_at` = NOW() WHERE `id` = ?", { auctionId })
     MySQL.update.await(
-        "UPDATE `dealership_stock` SET `sold_at` = NOW(), `sold_to` = ?, `sold_by` = ?, `auction_id` = NULL WHERE `id` = ?",
+        "UPDATE `pickle_dealership_stock` SET `sold_at` = NOW(), `sold_to` = ?, `sold_by` = ?, `auction_id` = NULL WHERE `id` = ?",
         { identifier, 'auction', row.stock_id }
     )
 
@@ -309,10 +309,10 @@ lib.callback.register("pickle_dealerships:getActiveAuctions", function(_, data)
         local rows = MySQL.query.await(
             [[SELECT a.*, s.vehicle_model, s.vehicle_label, s.plate, s.condition,
                      d.name AS dealership_name,
-                     (SELECT COUNT(*) FROM dealership_auction_bids b WHERE b.auction_id = a.id) AS bid_count
-              FROM `dealership_auctions` a
-              JOIN `dealership_stock` s ON s.id = a.stock_id
-              JOIN `dealerships` d ON d.id = a.dealership_id
+                     (SELECT COUNT(*) FROM pickle_dealership_auction_bids b WHERE b.auction_id = a.id) AS bid_count
+              FROM `pickle_dealership_auctions` a
+              JOIN `pickle_dealership_stock` s ON s.id = a.stock_id
+              JOIN `pickle_dealerships` d ON d.id = a.dealership_id
               WHERE a.status = 'active' AND a.dealership_id = ?
               ORDER BY a.ends_at ASC]],
             { dealershipId }
@@ -329,7 +329,7 @@ lib.callback.register("pickle_dealerships:getAuctionState", function(_, data)
     local row = FetchAuction(auctionId)
     if not row then return nil end
     local bids = MySQL.query.await(
-        "SELECT id, bidder_identifier, amount, placed_at, refunded FROM `dealership_auction_bids` WHERE `auction_id` = ? ORDER BY id DESC LIMIT 20",
+        "SELECT id, bidder_identifier, amount, placed_at, refunded FROM `pickle_dealership_auction_bids` WHERE `auction_id` = ? ORDER BY id DESC LIMIT 20",
         { auctionId }
     ) or {}
     row.bids = bids
@@ -366,13 +366,13 @@ local function FinalizeAuction(row)
         -- No sale: refund top bidder if any, unlock stock
         if hasBid then
             MySQL.update.await(
-                "UPDATE `dealership_auction_bids` SET `refunded` = 1 WHERE `auction_id` = ? AND `bidder_identifier` = ? AND `refunded` = 0",
+                "UPDATE `pickle_dealership_auction_bids` SET `refunded` = 1 WHERE `auction_id` = ? AND `bidder_identifier` = ? AND `refunded` = 0",
                 { auctionId, row.current_bidder }
             )
             RefundBidder(row.current_bidder, tonumber(row.current_bid), 'Reserve not met')
         end
         MySQL.update.await(
-            "UPDATE `dealership_auctions` SET `status` = 'no_sale', `ended_at` = NOW() WHERE `id` = ?",
+            "UPDATE `pickle_dealership_auctions` SET `status` = 'no_sale', `ended_at` = NOW() WHERE `id` = ?",
             { auctionId }
         )
         UnlockStock(row.stock_id)
@@ -389,7 +389,7 @@ local function FinalizeAuction(row)
             row.current_bidder)
 
         MySQL.update.await(
-            [[UPDATE `dealership_auctions`
+            [[UPDATE `pickle_dealership_auctions`
               SET `status` = 'won', `ended_at` = NOW(),
                   `winner_identifier` = ?, `winning_bid` = ?
               WHERE `id` = ?]],
@@ -412,7 +412,7 @@ CreateThread(function()
     Wait(3000)  -- let DB settle
     while true do
         local expired = MySQL.query.await(
-            [[SELECT * FROM `dealership_auctions`
+            [[SELECT * FROM `pickle_dealership_auctions`
               WHERE `status` = 'active' AND `ends_at` <= NOW()]],
             {}
         ) or {}

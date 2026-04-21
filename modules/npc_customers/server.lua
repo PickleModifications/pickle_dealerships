@@ -23,7 +23,7 @@ local function GenerateNPCProfile(dealershipId)
 
     -- Query actual available stock with wholesale costs and classes
     local availableStock = MySQL.query.await(
-        'SELECT ds.wholesale_cost, wc.class FROM dealership_stock ds LEFT JOIN wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.unlisted = 0 AND ds.delivered_at IS NOT NULL AND ds.delivered_at <= NOW()',
+        'SELECT ds.wholesale_cost, wc.class FROM pickle_dealership_stock ds LEFT JOIN pickle_wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.unlisted = 0 AND ds.delivered_at IS NOT NULL AND ds.delivered_at <= NOW()',
         { dealershipId }
     )
 
@@ -393,7 +393,7 @@ lib.callback.register("pickle_dealerships:completeNPCSale", function(source, dat
 
     -- Add to dealership balance
     local newBalance = (dealership.balance or 0) + adjustedAmount
-    MySQL.update("UPDATE dealerships SET balance = ? WHERE id = ?", { newBalance, dealershipId })
+    MySQL.update("UPDATE pickle_dealerships SET balance = ? WHERE id = ?", { newBalance, dealershipId })
     UpdateDealershipCache(dealershipId, { balance = newBalance })
 
     -- Calculate and pay commission
@@ -414,11 +414,11 @@ lib.callback.register("pickle_dealerships:completeNPCSale", function(source, dat
     end
 
     -- Always deduct from stock
-    local stock = MySQL.single.await("SELECT quantity FROM dealership_stock WHERE id = ?", { stockId })
+    local stock = MySQL.single.await("SELECT quantity FROM pickle_dealership_stock WHERE id = ?", { stockId })
     if stock and stock.quantity > 1 then
-        MySQL.update("UPDATE dealership_stock SET quantity = quantity - 1 WHERE id = ?", { stockId })
+        MySQL.update("UPDATE pickle_dealership_stock SET quantity = quantity - 1 WHERE id = ?", { stockId })
     else
-        MySQL.update("UPDATE dealership_stock SET sold_at = NOW(), sold_to = 'NPC', sold_by = ? WHERE id = ?", { identifier, stockId })
+        MySQL.update("UPDATE pickle_dealership_stock SET sold_at = NOW(), sold_to = 'NPC', sold_by = ? WHERE id = ?", { identifier, stockId })
     end
 
     -- Add XP if pickle_xp is available
@@ -430,7 +430,7 @@ lib.callback.register("pickle_dealerships:completeNPCSale", function(source, dat
     -- Update dealership reputation
     local repGain = (Config.NPCCustomers.reputationPerSale or 1) + bonusRep
     local newRep = (dealership.reputation or 0) + repGain
-    MySQL.update("UPDATE dealerships SET reputation = ? WHERE id = ?", { newRep, dealershipId })
+    MySQL.update("UPDATE pickle_dealerships SET reputation = ? WHERE id = ?", { newRep, dealershipId })
     UpdateDealershipCache(dealershipId, { reputation = newRep })
 
     -- Add ledger entry

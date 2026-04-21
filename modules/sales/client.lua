@@ -167,6 +167,10 @@ local function EndTestDrive()
     if not testDriveActive then return end
     testDriveActive = false
 
+    -- Restore original routing bucket before teardown so the player rejoins
+    -- the main instance cleanly.
+    TriggerServerEvent('pickle_dealerships:leaveTestDriveBucket')
+
     -- Delete test drive vehicle
     if testDriveVehicle and DoesEntityExist(testDriveVehicle) then
         local ped = PlayerPedId()
@@ -239,9 +243,17 @@ RegisterNUICallback("startTestDrive", function(data, cb)
         color = json.decode(color)
     end
 
+    -- Move the player to a dedicated routing bucket BEFORE spawning so the
+    -- test-drive vehicle is created in the same instance. Everyone else at
+    -- the dealership stays in the default bucket — no cross-player collisions
+    -- during the drive.
+    TriggerServerEvent('pickle_dealerships:enterTestDriveBucket')
+    Wait(100) -- let the server-side bucket change take effect
+
     -- Spawn test drive vehicle
     local veh = SpawnPurchasedVehicle(model, spawnPoint, color)
     if not veh then
+        TriggerServerEvent('pickle_dealerships:leaveTestDriveBucket')
         cb({ success = false, message = "Failed to spawn test drive vehicle." })
         return
     end

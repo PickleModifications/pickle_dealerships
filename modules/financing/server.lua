@@ -7,7 +7,7 @@
 
 local function GetStockItem(stockId)
     local rows = MySQL.query.await(
-        "SELECT * FROM `dealership_stock` WHERE `id` = ? LIMIT 1",
+        "SELECT * FROM `pickle_dealership_stock` WHERE `id` = ? LIMIT 1",
         { tonumber(stockId) }
     )
     return rows and rows[1] or nil
@@ -15,18 +15,18 @@ end
 
 local function MarkStockSold(stockId, identifier, soldBy)
     MySQL.update(
-        "UPDATE `dealership_stock` SET `sold_at` = NOW(), `sold_to` = ?, `sold_by` = ? WHERE `id` = ?",
+        "UPDATE `pickle_dealership_stock` SET `sold_at` = NOW(), `sold_to` = ?, `sold_by` = ? WHERE `id` = ?",
         { identifier, soldBy, tonumber(stockId) }
     )
 end
 
 local function AddDealershipBalance(dealershipId, amount)
     MySQL.update.await(
-        "UPDATE `dealerships` SET `balance` = `balance` + ? WHERE `id` = ?",
+        "UPDATE `pickle_dealerships` SET `balance` = `balance` + ? WHERE `id` = ?",
         { tonumber(amount), tonumber(dealershipId) }
     )
     local freshBalance = MySQL.scalar.await(
-        "SELECT `balance` FROM `dealerships` WHERE `id` = ?",
+        "SELECT `balance` FROM `pickle_dealerships` WHERE `id` = ?",
         { tonumber(dealershipId) }
     )
     if freshBalance then
@@ -121,7 +121,7 @@ lib.callback.register("pickle_dealerships:updateFinancingSettings", function(sou
     end
 
     MySQL.update.await(
-        "UPDATE `dealerships` SET `financing_settings` = ? WHERE `id` = ?",
+        "UPDATE `pickle_dealerships` SET `financing_settings` = ? WHERE `id` = ?",
         { json.encode(validated), dealershipId }
     )
 
@@ -247,7 +247,7 @@ lib.callback.register("pickle_dealerships:createFinancing", function(source, dat
     local nextPaymentTimestamp = os.time() + paymentIntervalSeconds
 
     MySQL.insert(
-        "INSERT INTO `dealership_financing` (`dealership_id`, `identifier`, `vehicle_plate`, `total_amount`, `amount_paid`, `installment_amount`, `interest_rate`, `next_payment`, `status`) VALUES (?, ?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?), 'active')",
+        "INSERT INTO `pickle_dealership_financing` (`dealership_id`, `identifier`, `vehicle_plate`, `total_amount`, `amount_paid`, `installment_amount`, `interest_rate`, `next_payment`, `status`) VALUES (?, ?, ?, ?, ?, ?, ?, FROM_UNIXTIME(?), 'active')",
         {
             dealershipId,
             identifier,
@@ -293,7 +293,7 @@ lib.callback.register("pickle_dealerships:makePayment", function(source, data)
     end
 
     local rows = MySQL.query.await(
-        "SELECT * FROM `dealership_financing` WHERE `id` = ? AND `identifier` = ? AND `status` = 'active' LIMIT 1",
+        "SELECT * FROM `pickle_dealership_financing` WHERE `id` = ? AND `identifier` = ? AND `status` = 'active' LIMIT 1",
         { financingId, identifier }
     )
     local financing = rows and rows[1] or nil
@@ -327,13 +327,13 @@ lib.callback.register("pickle_dealerships:makePayment", function(source, data)
 
     if fullyPaid then
         MySQL.update(
-            "UPDATE `dealership_financing` SET `amount_paid` = ?, `status` = 'paid', `missed_payments` = 0 WHERE `id` = ?",
+            "UPDATE `pickle_dealership_financing` SET `amount_paid` = ?, `status` = 'paid', `missed_payments` = 0 WHERE `id` = ?",
             { newAmountPaid, financingId }
         )
         AddLedgerEntry(financing.dealership_id, "financing_payment", paymentAmount, ("Final financing payment for plate %s"):format(financing.vehicle_plate), identifier)
     else
         MySQL.update(
-            "UPDATE `dealership_financing` SET `amount_paid` = ?, `next_payment` = FROM_UNIXTIME(?), `missed_payments` = 0 WHERE `id` = ?",
+            "UPDATE `pickle_dealership_financing` SET `amount_paid` = ?, `next_payment` = FROM_UNIXTIME(?), `missed_payments` = 0 WHERE `id` = ?",
             { newAmountPaid, nextPaymentTimestamp, financingId }
         )
         AddLedgerEntry(financing.dealership_id, "financing_payment", paymentAmount, ("Financing payment for plate %s"):format(financing.vehicle_plate), identifier)
@@ -355,7 +355,7 @@ lib.callback.register("pickle_dealerships:getMyFinancing", function(source)
     if not identifier then return {} end
 
     local rows = MySQL.query.await(
-        "SELECT f.*, d.name AS dealership_name FROM `dealership_financing` f LEFT JOIN `dealerships` d ON f.dealership_id = d.id WHERE f.identifier = ? AND f.status = 'active' ORDER BY f.created_at DESC",
+        "SELECT f.*, d.name AS dealership_name FROM `pickle_dealership_financing` f LEFT JOIN `pickle_dealerships` d ON f.dealership_id = d.id WHERE f.identifier = ? AND f.status = 'active' ORDER BY f.created_at DESC",
         { identifier }
     )
     if not rows then return {} end
@@ -393,7 +393,7 @@ lib.callback.register("pickle_dealerships:getDealershipFinancingAgreements", fun
     if role ~= 'owner' and role ~= 'admin' then return {} end
 
     local rows = MySQL.query.await(
-        "SELECT * FROM `dealership_financing` WHERE `dealership_id` = ? ORDER BY `status` ASC, `created_at` DESC",
+        "SELECT * FROM `pickle_dealership_financing` WHERE `dealership_id` = ? ORDER BY `status` ASC, `created_at` DESC",
         { dealershipId }
     ) or {}
 
@@ -413,13 +413,13 @@ lib.callback.register("pickle_dealerships:forgiveLoan", function(source, data)
     end
 
     local rows = MySQL.query.await(
-        "SELECT * FROM `dealership_financing` WHERE `id` = ? AND `dealership_id` = ? AND `status` = 'active' LIMIT 1",
+        "SELECT * FROM `pickle_dealership_financing` WHERE `id` = ? AND `dealership_id` = ? AND `status` = 'active' LIMIT 1",
         { financingId, dealershipId }
     )
     if not rows or not rows[1] then return false, "Agreement not found." end
 
     MySQL.update(
-        "UPDATE `dealership_financing` SET `status` = 'paid', `amount_paid` = `total_amount`, `missed_payments` = 0 WHERE `id` = ?",
+        "UPDATE `pickle_dealership_financing` SET `status` = 'paid', `amount_paid` = `total_amount`, `missed_payments` = 0 WHERE `id` = ?",
         { financingId }
     )
 
@@ -438,7 +438,7 @@ CreateThread(function()
 
         local now = os.time()
         local rows = MySQL.query.await(
-            "SELECT * FROM `dealership_financing` WHERE `status` = 'active' AND `next_payment` IS NOT NULL AND `next_payment` < NOW()"
+            "SELECT * FROM `pickle_dealership_financing` WHERE `status` = 'active' AND `next_payment` IS NOT NULL AND `next_payment` < NOW()"
         )
 
         if rows then
@@ -450,7 +450,7 @@ CreateThread(function()
 
                 if newMissed >= maxMissed then
                     MySQL.update(
-                        "UPDATE `dealership_financing` SET `status` = 'repossessed', `missed_payments` = ? WHERE `id` = ?",
+                        "UPDATE `pickle_dealership_financing` SET `status` = 'repossessed', `missed_payments` = ? WHERE `id` = ?",
                         { newMissed, financing.id }
                     )
                     RemoveOwnedVehicle(financing.identifier, financing.vehicle_plate)
@@ -468,7 +468,7 @@ CreateThread(function()
                     local nextPaymentTimestamp = now + paymentIntervalSeconds
 
                     MySQL.update(
-                        "UPDATE `dealership_financing` SET `missed_payments` = ?, `next_payment` = FROM_UNIXTIME(?) WHERE `id` = ?",
+                        "UPDATE `pickle_dealership_financing` SET `missed_payments` = ?, `next_payment` = FROM_UNIXTIME(?) WHERE `id` = ?",
                         { newMissed, nextPaymentTimestamp, financing.id }
                     )
 

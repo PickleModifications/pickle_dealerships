@@ -33,9 +33,16 @@ export interface DealershipData {
     name?: string
     mode?: string
     type?: string
+    tier?: string
+    factionType?: 'job' | 'gang'
+    factionName?: string
+    ownerIdentifier?: string
     coords?: { x: number; y: number; z: number; w?: number }
     spawnPoint?: { x: number; y: number; z: number; w?: number }
     deliveryPoint?: { x: number; y: number; z: number; w?: number }
+    managementPoint?: { x: number; y: number; z: number; w?: number }
+    salesPoint?: { x: number; y: number; z: number; w?: number }
+    showroomPoint?: { x: number; y: number; z: number; w?: number }
   }
   editDepotId?: number
   // When set, the showroom opens in "display-spot picker" mode. The Buy/Finance

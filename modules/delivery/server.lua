@@ -34,7 +34,7 @@ end
 
 local function ResolveCatalogTier(model)
     if not model then return 'basic' end
-    local row = MySQL.single.await('SELECT tier FROM wholesale_catalog WHERE model = ?', { model })
+    local row = MySQL.single.await('SELECT tier FROM pickle_wholesale_catalog WHERE model = ?', { model })
     return row and row.tier or 'basic'
 end
 
@@ -256,7 +256,7 @@ end
 
 --- Returns the dedicated drop-off point (deliveryPoint) as a plain {x,y,z,w} table, or nil.
 --- Local deliveries require this point — the queue filter + order-placement guard prevent
---- dealerships without it from participating in local delivery, so by the time a mission is
+--- pickle_dealerships without it from participating in local delivery, so by the time a mission is
 --- assembled we can trust it exists.
 local function GetDealershipDropoff(dealership)
     local meta = dealership.metadata
@@ -321,16 +321,16 @@ lib.callback.register('pickle_dealerships:getDeliveryQueue', function(source)
                o.quantity, o.delivery_fee, o.ordered_at, o.claimed_by,
                COALESCE(c.class, 'sedan') AS class, c.image AS image,
                d.name AS dealership_name
-          FROM dealership_orders o
-          LEFT JOIN wholesale_catalog c ON c.model = o.vehicle_model
-          JOIN dealerships d ON d.id = o.dealership_id
+          FROM pickle_dealership_orders o
+          LEFT JOIN pickle_wholesale_catalog c ON c.model = o.vehicle_model
+          JOIN pickle_dealerships d ON d.id = o.dealership_id
          WHERE o.delivery_mode = 'local' AND o.claimed_by IS NULL
          ORDER BY o.ordered_at ASC
     ]]) or {}
 
     -- Filter out any orders whose dealership has no deliveryPoint set. Without a drop-off point
     -- there's nowhere to land the trailer, so the offer is hidden from drivers until the owner
-    -- configures one (orders already in the queue for unconfigured dealerships simply stay idle).
+    -- configures one (orders already in the queue for unconfigured pickle_dealerships simply stay idle).
     do
         local filtered = {}
         for _, r in ipairs(rows) do
@@ -494,20 +494,20 @@ lib.callback.register('pickle_dealerships:acceptDelivery', function(source, orde
 
     -- 1. Atomic claim of the primary (first) order — always the one that must succeed for the mission to start.
     local claimed = MySQL.update.await(
-        "UPDATE dealership_orders SET claimed_by = ?, claimed_at = NOW() WHERE id = ? AND delivery_mode = 'local' AND claimed_by IS NULL",
+        "UPDATE pickle_dealership_orders SET claimed_by = ?, claimed_at = NOW() WHERE id = ? AND delivery_mode = 'local' AND claimed_by IS NULL",
         { identifier, orderId }
     )
     if not claimed or claimed == 0 then
         return false, _L('delivery_claimed_by_another')
     end
 
-    local primaryOrder = MySQL.single.await('SELECT * FROM dealership_orders WHERE id = ?', { orderId })
+    local primaryOrder = MySQL.single.await('SELECT * FROM pickle_dealership_orders WHERE id = ?', { orderId })
     if not primaryOrder then return false, 'Order not found.' end
 
     local dealership = GetDealership(primaryOrder.dealership_id)
-        or MySQL.single.await('SELECT * FROM dealerships WHERE id = ?', { primaryOrder.dealership_id })
+        or MySQL.single.await('SELECT * FROM pickle_dealerships WHERE id = ?', { primaryOrder.dealership_id })
     if not dealership then
-        MySQL.update.await('UPDATE dealership_orders SET claimed_by = NULL, claimed_at = NULL WHERE id = ?', { orderId })
+        MySQL.update.await('UPDATE pickle_dealership_orders SET claimed_by = NULL, claimed_at = NULL WHERE id = ?', { orderId })
         return false, 'Dealership not found.'
     end
 
@@ -526,12 +526,12 @@ lib.callback.register('pickle_dealerships:acceptDelivery', function(source, orde
         route, routeId = PickNearestDepot(dealerCoords)
     end
     if not route then
-        MySQL.update.await('UPDATE dealership_orders SET claimed_by = NULL, claimed_at = NULL WHERE id = ?', { orderId })
+        MySQL.update.await('UPDATE pickle_dealership_orders SET claimed_by = NULL, claimed_at = NULL WHERE id = ?', { orderId })
         return false, 'No delivery depots configured.'
     end
 
     -- 2. Resolve primary class + bucket and determine remaining trailer capacity (total + medium axes).
-    local primaryCatalog = MySQL.single.await('SELECT tier, class FROM wholesale_catalog WHERE model = ?', { primaryOrder.vehicle_model })
+    local primaryCatalog = MySQL.single.await('SELECT tier, class FROM pickle_wholesale_catalog WHERE model = ?', { primaryOrder.vehicle_model })
     local primaryClass = (primaryCatalog and primaryCatalog.class) or 'sedan'
     local primaryBucket = BundleBucketForClass(primaryClass)
     local caps = CAP_BY_SIZE[primaryBucket] or { total = 4, medium = 4 }
@@ -564,8 +564,8 @@ lib.callback.register('pickle_dealerships:acceptDelivery', function(source, orde
             siblingQuery = ([[
                 SELECT o.id, o.vehicle_model, o.vehicle_label, o.wholesale_cost, o.retail_price,
                        o.quantity, o.delivery_fee, COALESCE(c.class, 'sedan') AS class
-                  FROM dealership_orders o
-                  LEFT JOIN wholesale_catalog c ON c.model = o.vehicle_model
+                  FROM pickle_dealership_orders o
+                  LEFT JOIN pickle_wholesale_catalog c ON c.model = o.vehicle_model
                  WHERE o.dealership_id = ?
                    AND o.delivery_mode = 'local'
                    AND o.claimed_by IS NULL
@@ -577,8 +577,8 @@ lib.callback.register('pickle_dealerships:acceptDelivery', function(source, orde
             siblingQuery = [[
                 SELECT o.id, o.vehicle_model, o.vehicle_label, o.wholesale_cost, o.retail_price,
                        o.quantity, o.delivery_fee, COALESCE(c.class, 'sedan') AS class
-                  FROM dealership_orders o
-                  LEFT JOIN wholesale_catalog c ON c.model = o.vehicle_model
+                  FROM pickle_dealership_orders o
+                  LEFT JOIN pickle_wholesale_catalog c ON c.model = o.vehicle_model
                  WHERE o.dealership_id = ?
                    AND o.delivery_mode = 'local'
                    AND o.claimed_by IS NULL
@@ -611,12 +611,12 @@ lib.callback.register('pickle_dealerships:acceptDelivery', function(source, orde
                 params[#params + 1] = s.id
             end
             MySQL.update.await(
-                ("UPDATE dealership_orders SET claimed_by = ?, claimed_at = NOW() WHERE id IN (%s) AND delivery_mode = 'local' AND claimed_by IS NULL"):format(table.concat(placeholders, ',')),
+                ("UPDATE pickle_dealership_orders SET claimed_by = ?, claimed_at = NOW() WHERE id IN (%s) AND delivery_mode = 'local' AND claimed_by IS NULL"):format(table.concat(placeholders, ',')),
                 params
             )
             -- Re-read to see which actually got claimed by us (race-safe confirmation)
             local confirmed = MySQL.query.await(
-                ("SELECT id FROM dealership_orders WHERE id IN (%s) AND claimed_by = ?"):format(table.concat(placeholders, ',')),
+                ("SELECT id FROM pickle_dealership_orders WHERE id IN (%s) AND claimed_by = ?"):format(table.concat(placeholders, ',')),
                 (function() local p = { table.unpack(params, 2) }; p[#p + 1] = identifier; return p end)()
             ) or {}
             local claimedSet = {}
@@ -643,7 +643,7 @@ lib.callback.register('pickle_dealerships:acceptDelivery', function(source, orde
             params[#params + 1] = id
         end
         MySQL.update.await(
-            ("UPDATE dealership_orders SET route_id = ? WHERE id IN (%s)"):format(table.concat(placeholders, ',')),
+            ("UPDATE pickle_dealership_orders SET route_id = ? WHERE id IN (%s)"):format(table.concat(placeholders, ',')),
             params
         )
     end
@@ -654,7 +654,7 @@ lib.callback.register('pickle_dealerships:acceptDelivery', function(source, orde
     for _, v in ipairs(bundle) do totalQty = totalQty + v.quantity end
 
     local deliveryId = MySQL.insert.await(
-        "INSERT INTO dealership_deliveries (dealership_id, stock_ids, pickup_location, route, status, assigned_to, started_at) VALUES (?, ?, ?, ?, 'in_progress', ?, NOW())",
+        "INSERT INTO pickle_dealership_deliveries (dealership_id, stock_ids, pickup_location, route, status, assigned_to, started_at) VALUES (?, ?, ?, ?, 'in_progress', ?, NOW())",
         { primaryOrder.dealership_id, json.encode(bundledIds), routeId, routeId, identifier }
     )
 
@@ -719,14 +719,14 @@ lib.callback.register('pickle_dealerships:completeDelivery', function(source, de
     -- Convert each bundled order into stock (stacking identical models when possible).
     for _, line in ipairs(delivery.orders or {}) do
         local existing = MySQL.single.await(
-            'SELECT id FROM dealership_stock WHERE dealership_id = ? AND vehicle_model = ? AND sold_at IS NULL AND display_spot IS NULL AND is_used = 0 AND (`condition` = 100.00 OR `condition` IS NULL) ORDER BY id ASC LIMIT 1',
+            'SELECT id FROM pickle_dealership_stock WHERE dealership_id = ? AND vehicle_model = ? AND sold_at IS NULL AND display_spot IS NULL AND is_used = 0 AND (`condition` = 100.00 OR `condition` IS NULL) ORDER BY id ASC LIMIT 1',
             { delivery.dealershipId, line.model }
         )
         if existing then
-            MySQL.update.await('UPDATE dealership_stock SET quantity = quantity + ? WHERE id = ?', { line.quantity, existing.id })
+            MySQL.update.await('UPDATE pickle_dealership_stock SET quantity = quantity + ? WHERE id = ?', { line.quantity, existing.id })
         else
             MySQL.insert.await(
-                'INSERT INTO dealership_stock (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, ordered_at, delivered_at, quantity) VALUES (?, ?, ?, ?, ?, NOW(), NOW(), ?)',
+                'INSERT INTO pickle_dealership_stock (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, ordered_at, delivered_at, quantity) VALUES (?, ?, ?, ?, ?, NOW(), NOW(), ?)',
                 { delivery.dealershipId, line.model, line.label or line.model, line.wholesale, line.retail, line.quantity }
             )
         end
@@ -737,13 +737,13 @@ lib.callback.register('pickle_dealerships:completeDelivery', function(source, de
         local placeholders = {}
         for _ = 1, #delivery.orderIds do placeholders[#placeholders + 1] = '?' end
         MySQL.update.await(
-            ("DELETE FROM dealership_orders WHERE id IN (%s)"):format(table.concat(placeholders, ',')),
+            ("DELETE FROM pickle_dealership_orders WHERE id IN (%s)"):format(table.concat(placeholders, ',')),
             delivery.orderIds
         )
     end
 
     MySQL.update.await(
-        "UPDATE dealership_deliveries SET status = 'completed', completed_at = NOW() WHERE id = ?",
+        "UPDATE pickle_dealership_deliveries SET status = 'completed', completed_at = NOW() WHERE id = ?",
         { deliveryId }
     )
 
@@ -762,7 +762,7 @@ lib.callback.register('pickle_dealerships:completeDelivery', function(source, de
     -- Dealership reputation bump (synergy with NPC customer module)
     local repBonus = (Config.Delivery and Config.Delivery.dealershipRepBonus) or 0
     if repBonus > 0 then
-        MySQL.update.await('UPDATE dealerships SET reputation = reputation + ? WHERE id = ?', { repBonus, delivery.dealershipId })
+        MySQL.update.await('UPDATE pickle_dealerships SET reputation = reputation + ? WHERE id = ?', { repBonus, delivery.dealershipId })
         local cached = GetDealership(delivery.dealershipId)
         if cached then UpdateDealershipCache(delivery.dealershipId, { reputation = (cached.reputation or 0) + repBonus }) end
     end
@@ -812,7 +812,7 @@ local function AbandonDelivery(source, reason)
         end
         params[#params + 1] = delivery.identifier
         MySQL.update.await(
-            ("UPDATE dealership_orders SET claimed_by = NULL, claimed_at = NULL, route_id = NULL WHERE id IN (%s) AND claimed_by = ?"):format(table.concat(placeholders, ',')),
+            ("UPDATE pickle_dealership_orders SET claimed_by = NULL, claimed_at = NULL, route_id = NULL WHERE id IN (%s) AND claimed_by = ?"):format(table.concat(placeholders, ',')),
             params
         )
     end
@@ -826,7 +826,7 @@ local function AbandonDelivery(source, reason)
     end
 
     MySQL.update.await(
-        "UPDATE dealership_deliveries SET status = 'failed', completed_at = NOW() WHERE id = ?",
+        "UPDATE pickle_dealership_deliveries SET status = 'failed', completed_at = NOW() WHERE id = ?",
         { delivery.deliveryId }
     )
 
@@ -870,17 +870,17 @@ end)
 -- restarted) while a driver is mid-mission, the DB row still reads `claimed_by = <them>`
 -- but there's no live mission tracking it — the order becomes frozen and no-one else
 -- can grab it. On boot we force-unclaim every local order and mark any still-pending
--- `dealership_deliveries` rows as failed so the queue self-heals.
+-- `pickle_dealership_deliveries` rows as failed so the queue self-heals.
 AddEventHandler('onResourceStart', function(resourceName)
     if resourceName ~= GetCurrentResourceName() then return end
     CreateThread(function()
         local unclaimed = MySQL.update.await([[
-            UPDATE dealership_orders
+            UPDATE pickle_dealership_orders
                SET claimed_by = NULL, claimed_at = NULL, route_id = NULL
              WHERE delivery_mode = 'local' AND claimed_by IS NOT NULL
         ]])
         local failed = MySQL.update.await([[
-            UPDATE dealership_deliveries
+            UPDATE pickle_dealership_deliveries
                SET status = 'failed', completed_at = NOW()
              WHERE status = 'in_progress'
         ]])
@@ -899,17 +899,17 @@ CreateThread(function()
         Wait(60 * 60 * 1000) -- hourly
         local stale = MySQL.query.await([[
             SELECT id, dealership_id, wholesale_cost, quantity, vehicle_model
-            FROM dealership_orders
+            FROM pickle_dealership_orders
             WHERE delivery_mode = 'local' AND claimed_by IS NULL
               AND ordered_at < DATE_SUB(NOW(), INTERVAL 24 HOUR)
         ]]) or {}
         for _, o in ipairs(stale) do
             local refund = math.floor((o.wholesale_cost or 0) * (o.quantity or 1) * 0.5)
             if refund > 0 then
-                MySQL.update.await('UPDATE dealerships SET balance = balance + ? WHERE id = ?', { refund, o.dealership_id })
+                MySQL.update.await('UPDATE pickle_dealerships SET balance = balance + ? WHERE id = ?', { refund, o.dealership_id })
                 AddLedgerEntry(o.dealership_id, 'refund', refund, ('Stale local delivery order expired: %s'):format(o.vehicle_model), nil)
             end
-            MySQL.update.await('DELETE FROM dealership_orders WHERE id = ?', { o.id })
+            MySQL.update.await('DELETE FROM pickle_dealership_orders WHERE id = ?', { o.id })
         end
         if #stale > 0 then
             TriggerClientEvent('pickle_dealerships:deliveryQueueChanged', -1)

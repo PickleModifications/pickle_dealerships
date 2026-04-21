@@ -4,7 +4,7 @@ lib.callback.register("pickle_dealerships:adminGetAllDealerships", function(sour
         return nil
     end
 
-    local dealerships = MySQL.query.await("SELECT * FROM dealerships ORDER BY id ASC")
+    local dealerships = MySQL.query.await("SELECT * FROM pickle_dealerships ORDER BY id ASC")
     if dealerships then
         for _, d in ipairs(dealerships) do
             if d.owner_identifier then
@@ -60,7 +60,7 @@ lib.callback.register("pickle_dealerships:adminTransferOwnership", function(sour
         return { success = false, message = _L("dealership_not_found") }
     end
 
-    MySQL.update.await("UPDATE dealerships SET owner_identifier = ? WHERE id = ?", { newOwnerId, dealershipId })
+    MySQL.update.await("UPDATE pickle_dealerships SET owner_identifier = ? WHERE id = ?", { newOwnerId, dealershipId })
     UpdateDealershipCache(dealershipId, { owner_identifier = newOwnerId })
 
     local adminName = GetPlayerCharacterName(source) or GetPlayerName(source)
@@ -93,7 +93,7 @@ lib.callback.register("pickle_dealerships:adminSetBalance", function(source, dat
         return { success = false, message = _L("dealership_not_found") }
     end
 
-    MySQL.update.await("UPDATE dealerships SET balance = ? WHERE id = ?", { amount, dealershipId })
+    MySQL.update.await("UPDATE pickle_dealerships SET balance = ? WHERE id = ?", { amount, dealershipId })
     UpdateDealershipCache(dealershipId, { balance = amount })
 
     local adminName = GetPlayerCharacterName(source) or GetPlayerName(source)
@@ -124,7 +124,7 @@ lib.callback.register("pickle_dealerships:adminSetTier", function(source, data)
         return { success = false, message = _L("dealership_not_found") }
     end
 
-    MySQL.update.await("UPDATE dealerships SET tier = ? WHERE id = ?", { tier, dealershipId })
+    MySQL.update.await("UPDATE pickle_dealerships SET tier = ? WHERE id = ?", { tier, dealershipId })
     UpdateDealershipCache(dealershipId, { tier = tier })
 
     local adminName = GetPlayerCharacterName(source) or GetPlayerName(source)
@@ -150,11 +150,11 @@ lib.callback.register("pickle_dealerships:adminResetDealership", function(source
     end
 
     -- Wipe all related data
-    MySQL.update.await("UPDATE dealerships SET owner_id = NULL, balance = 0, tier = 1, reputation = 0 WHERE id = ?", { dealershipId })
-    MySQL.update.await("DELETE FROM dealership_employees WHERE dealership_id = ?", { dealershipId })
-    MySQL.update.await("DELETE FROM dealership_stock WHERE dealership_id = ?", { dealershipId })
-    MySQL.update.await("DELETE FROM dealership_orders WHERE dealership_id = ?", { dealershipId })
-    MySQL.update.await("DELETE FROM dealership_coupons WHERE dealership_id = ?", { dealershipId })
+    MySQL.update.await("UPDATE pickle_dealerships SET owner_id = NULL, balance = 0, tier = 1, reputation = 0 WHERE id = ?", { dealershipId })
+    MySQL.update.await("DELETE FROM pickle_dealership_employees WHERE dealership_id = ?", { dealershipId })
+    MySQL.update.await("DELETE FROM pickle_dealership_stock WHERE dealership_id = ?", { dealershipId })
+    MySQL.update.await("DELETE FROM pickle_dealership_orders WHERE dealership_id = ?", { dealershipId })
+    MySQL.update.await("DELETE FROM pickle_dealership_coupons WHERE dealership_id = ?", { dealershipId })
 
     UpdateDealershipCache(dealershipId, {
         owner_id   = nil,
@@ -189,16 +189,16 @@ lib.callback.register("pickle_dealerships:adminDeleteDealership", function(sourc
     end
 
     -- Auction bids reference auctions, not the dealership directly — wipe them first via subquery.
-    MySQL.update.await("DELETE FROM dealership_auction_bids WHERE auction_id IN (SELECT id FROM dealership_auctions WHERE dealership_id = ?)", { dealershipId })
-    MySQL.update.await("DELETE FROM dealership_auctions WHERE dealership_id = ?",   { dealershipId })
-    MySQL.update.await("DELETE FROM dealership_deliveries WHERE dealership_id = ?", { dealershipId })
-    MySQL.update.await("DELETE FROM dealership_financing WHERE dealership_id = ?",  { dealershipId })
-    MySQL.update.await("DELETE FROM dealership_ledger WHERE dealership_id = ?",     { dealershipId })
-    MySQL.update.await("DELETE FROM dealership_coupons WHERE dealership_id = ?",    { dealershipId })
-    MySQL.update.await("DELETE FROM dealership_orders WHERE dealership_id = ?",     { dealershipId })
-    MySQL.update.await("DELETE FROM dealership_stock WHERE dealership_id = ?",      { dealershipId })
-    MySQL.update.await("DELETE FROM dealership_employees WHERE dealership_id = ?",  { dealershipId })
-    MySQL.update.await("DELETE FROM dealerships WHERE id = ?",                      { dealershipId })
+    MySQL.update.await("DELETE FROM pickle_dealership_auction_bids WHERE auction_id IN (SELECT id FROM pickle_dealership_auctions WHERE dealership_id = ?)", { dealershipId })
+    MySQL.update.await("DELETE FROM pickle_dealership_auctions WHERE dealership_id = ?",   { dealershipId })
+    MySQL.update.await("DELETE FROM pickle_dealership_deliveries WHERE dealership_id = ?", { dealershipId })
+    MySQL.update.await("DELETE FROM pickle_dealership_financing WHERE dealership_id = ?",  { dealershipId })
+    MySQL.update.await("DELETE FROM pickle_dealership_ledger WHERE dealership_id = ?",     { dealershipId })
+    MySQL.update.await("DELETE FROM pickle_dealership_coupons WHERE dealership_id = ?",    { dealershipId })
+    MySQL.update.await("DELETE FROM pickle_dealership_orders WHERE dealership_id = ?",     { dealershipId })
+    MySQL.update.await("DELETE FROM pickle_dealership_stock WHERE dealership_id = ?",      { dealershipId })
+    MySQL.update.await("DELETE FROM pickle_dealership_employees WHERE dealership_id = ?",  { dealershipId })
+    MySQL.update.await("DELETE FROM pickle_dealerships WHERE id = ?",                      { dealershipId })
 
     DealershipCache[tonumber(dealershipId)] = nil
 
@@ -230,7 +230,7 @@ lib.callback.register("pickle_dealerships:adminToggleMode", function(source, dat
     local currentMode = dealership.mode or "public"
     local newMode = currentMode == "public" and "player_owned" or "public"
 
-    MySQL.update.await("UPDATE dealerships SET mode = ? WHERE id = ?", { newMode, dealershipId })
+    MySQL.update.await("UPDATE pickle_dealerships SET mode = ? WHERE id = ?", { newMode, dealershipId })
     UpdateDealershipCache(dealershipId, { mode = newMode })
 
     local adminName = GetPlayerCharacterName(source) or GetPlayerName(source)
@@ -258,7 +258,7 @@ lib.callback.register("pickle_dealerships:adminToggleSeize", function(source, da
     local current = (dealership.seize_enabled == 1 or dealership.seize_enabled == true) and 1 or 0
     local newValue = current == 1 and 0 or 1
 
-    MySQL.update.await("UPDATE dealerships SET seize_enabled = ? WHERE id = ?", { newValue, dealershipId })
+    MySQL.update.await("UPDATE pickle_dealerships SET seize_enabled = ? WHERE id = ?", { newValue, dealershipId })
     UpdateDealershipCache(dealershipId, { seize_enabled = newValue })
 
     local adminName = GetPlayerCharacterName(source) or GetPlayerName(source)
@@ -298,17 +298,43 @@ lib.callback.register("pickle_dealerships:adminCreateDealership", function(sourc
         metadata.deliveryPoint = { x = data.deliveryPoint.x, y = data.deliveryPoint.y, z = data.deliveryPoint.z, w = data.deliveryPoint.w or 0.0 }
     end
 
+    -- Interaction points (management / sales / showroom). Stored under
+    -- metadata.interactionPoints keyed by point type, matching the positions tab.
+    local function collectInteraction(key, pt)
+        if type(pt) ~= "table" or not pt.x then return end
+        metadata.interactionPoints = metadata.interactionPoints or {}
+        metadata.interactionPoints[key] = { x = pt.x, y = pt.y, z = pt.z, w = pt.w or 0.0 }
+    end
+    collectInteraction("management", data.managementPoint)
+    collectInteraction("sales", data.salesPoint)
+    collectInteraction("showroom", data.showroomPoint)
+
+    -- Framework faction (job OR gang). Faction name goes in the top-level `job` column;
+    -- the type disambiguator lives in metadata.factionType.
+    local factionName = data.factionName
+    if factionName == "" then factionName = nil end
+    local factionType = data.factionType
+    if factionType ~= "gang" then factionType = "job" end
+    if factionName then metadata.factionType = factionType end
+
+    -- Owner + tier: owner is only honored for player-owned mode. Tier clamps to 1–4.
+    local ownerIdentifier = nil
+    if mode == "player-owned" and type(data.ownerIdentifier) == "string" and data.ownerIdentifier ~= "" then
+        ownerIdentifier = data.ownerIdentifier
+    end
+    local tier = math.max(1, math.min(4, tonumber(data.tier) or 1))
+
     local metaJson = next(metadata) and json.encode(metadata) or nil
 
     local id = MySQL.insert.await(
-        "INSERT INTO dealerships (name, location, type, mode, tier, balance, reputation, metadata) VALUES (?, ?, ?, ?, 1, 0, 0, ?)",
-        { data.label, "pending", dealershipType, mode, metaJson }
+        "INSERT INTO pickle_dealerships (name, location, type, mode, tier, balance, reputation, owner_identifier, job, metadata) VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?, ?)",
+        { data.label, "pending", dealershipType, mode, tier, ownerIdentifier, factionName, metaJson }
     )
 
     if id then
         -- Set location to the DB id so it's always unique
         local location = "dealership_" .. id
-        MySQL.update.await("UPDATE dealerships SET location = ? WHERE id = ?", { location, id })
+        MySQL.update.await("UPDATE pickle_dealerships SET location = ? WHERE id = ?", { location, id })
 
         LoadDealerships()
 
@@ -376,7 +402,7 @@ lib.callback.register("pickle_dealerships:adminSavePosition", function(source, d
         metadata.zones[#metadata.zones + 1] = value
     end
 
-    MySQL.update.await("UPDATE dealerships SET metadata = ? WHERE id = ?", { json.encode(metadata), dealershipId })
+    MySQL.update.await("UPDATE pickle_dealerships SET metadata = ? WHERE id = ?", { json.encode(metadata), dealershipId })
     UpdateDealershipCache(dealershipId, { metadata = metadata })
 
     -- Tell clients exactly what changed so they can surgically update
@@ -403,7 +429,7 @@ lib.callback.register("pickle_dealerships:adminRemovePosition", function(source,
     end
 
     -- Always re-read metadata fresh from DB to avoid stale cache references
-    local row = MySQL.single.await("SELECT metadata FROM dealerships WHERE id = ?", { dealershipId })
+    local row = MySQL.single.await("SELECT metadata FROM pickle_dealerships WHERE id = ?", { dealershipId })
     local metadata = {}
     if row and row.metadata then
         if type(row.metadata) == "string" then
@@ -436,7 +462,7 @@ lib.callback.register("pickle_dealerships:adminRemovePosition", function(source,
         if removedIndex then
             -- Unassign any vehicle on this spot (by spot ID, not array index)
             MySQL.update.await(
-                'UPDATE dealership_stock SET display_spot = NULL WHERE dealership_id = ? AND (display_spot = ? OR display_spot = ?)',
+                'UPDATE pickle_dealership_stock SET display_spot = NULL WHERE dealership_id = ? AND (display_spot = ? OR display_spot = ?)',
                 { dealershipId, spotId, tostring(spotId) }
             )
             metadata.displaySpots = newSpots
@@ -453,7 +479,7 @@ lib.callback.register("pickle_dealerships:adminRemovePosition", function(source,
         end
     end
 
-    MySQL.update.await("UPDATE dealerships SET metadata = ? WHERE id = ?", { json.encode(metadata), dealershipId })
+    MySQL.update.await("UPDATE pickle_dealerships SET metadata = ? WHERE id = ?", { json.encode(metadata), dealershipId })
     UpdateDealershipCache(dealershipId, { metadata = metadata })
 
     local location = dealership.location
@@ -493,7 +519,7 @@ lib.callback.register("pickle_dealerships:adminGetCatalog", function(source, dat
 
     local countParams = { table.unpack(params) }
     local countResult = MySQL.scalar.await(
-        ("SELECT COUNT(*) FROM wholesale_catalog %s"):format(whereClause),
+        ("SELECT COUNT(*) FROM pickle_wholesale_catalog %s"):format(whereClause),
         countParams
     )
 
@@ -501,7 +527,7 @@ lib.callback.register("pickle_dealerships:adminGetCatalog", function(source, dat
     params[#params + 1] = offset
 
     local results = MySQL.query.await(
-        ("SELECT * FROM wholesale_catalog %s ORDER BY vehicle_type ASC, tier ASC, wholesale ASC LIMIT ? OFFSET ?"):format(whereClause),
+        ("SELECT * FROM pickle_wholesale_catalog %s ORDER BY vehicle_type ASC, tier ASC, wholesale ASC LIMIT ? OFFSET ?"):format(whereClause),
         params
     )
 
@@ -526,13 +552,13 @@ lib.callback.register("pickle_dealerships:adminAddCatalogVehicle", function(sour
         return { success = false, message = _L("admin_vehicle_label_required") }
     end
 
-    local existing = MySQL.single.await("SELECT id FROM wholesale_catalog WHERE model = ?", { data.model })
+    local existing = MySQL.single.await("SELECT id FROM pickle_wholesale_catalog WHERE model = ?", { data.model })
     if existing then
         return { success = false, message = _L("admin_vehicle_exists", data.model) }
     end
 
     local id = MySQL.insert.await(
-        "INSERT INTO wholesale_catalog (model, label, wholesale, tier, class, vehicle_type) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO pickle_wholesale_catalog (model, label, wholesale, tier, class, vehicle_type) VALUES (?, ?, ?, ?, ?, ?)",
         {
             data.model,
             data.label,
@@ -560,7 +586,7 @@ lib.callback.register("pickle_dealerships:adminUpdateCatalogVehicle", function(s
     end
 
     MySQL.update.await(
-        "UPDATE wholesale_catalog SET label = ?, wholesale = ?, tier = ?, class = ?, vehicle_type = ? WHERE id = ?",
+        "UPDATE pickle_wholesale_catalog SET label = ?, wholesale = ?, tier = ?, class = ?, vehicle_type = ? WHERE id = ?",
         {
             data.label,
             tonumber(data.wholesale) or 0,
@@ -584,12 +610,12 @@ lib.callback.register("pickle_dealerships:adminRemoveCatalogVehicle", function(s
         return { success = false, message = _L("admin_missing_vehicle_id") }
     end
 
-    MySQL.update.await("DELETE FROM wholesale_catalog WHERE id = ?", { data.id })
+    MySQL.update.await("DELETE FROM pickle_wholesale_catalog WHERE id = ?", { data.id })
     return { success = true, message = _L("admin_vehicle_removed") }
 end)
 
 --- Set dealership faction (job OR gang). `factionType` must be "job" or "gang".
---- The faction name is stored in `dealerships.job` (legacy column kept for back-compat);
+--- The faction name is stored in `pickle_dealerships.job` (legacy column kept for back-compat);
 --- the type lives in metadata.factionType.
 lib.callback.register("pickle_dealerships:adminSetFaction", function(source, data)
     if not IsPlayerAdmin(source) then
@@ -621,7 +647,7 @@ lib.callback.register("pickle_dealerships:adminSetFaction", function(source, dat
         meta.factionType = nil
     end
 
-    MySQL.update.await("UPDATE dealerships SET job = ?, metadata = ? WHERE id = ?", { factionName, json.encode(meta), dealershipId })
+    MySQL.update.await("UPDATE pickle_dealerships SET job = ?, metadata = ? WHERE id = ?", { factionName, json.encode(meta), dealershipId })
     UpdateDealershipCache(dealershipId, { job = factionName, metadata = meta })
 
     return { success = true, message = _L("admin_faction_set_to", factionType, factionName or "none") }
@@ -660,7 +686,7 @@ lib.callback.register("pickle_dealerships:adminSetAccess", function(source, data
         meta.accessMinGrade = nil
     end
 
-    MySQL.update.await("UPDATE dealerships SET metadata = ? WHERE id = ?", { json.encode(meta), dealershipId })
+    MySQL.update.await("UPDATE pickle_dealerships SET metadata = ? WHERE id = ?", { json.encode(meta), dealershipId })
     UpdateDealershipCache(dealershipId, { metadata = meta })
 
     return { success = true, message = _L("admin_access_set_to", mode) }
@@ -718,7 +744,7 @@ lib.callback.register("pickle_dealerships:adminSaveCatalogImage", function(sourc
         return { success = false, message = _L("admin_missing_catalog_data") }
     end
 
-    MySQL.update.await("UPDATE wholesale_catalog SET image = ? WHERE id = ?", { data.imageUrl, data.catalogId })
+    MySQL.update.await("UPDATE pickle_wholesale_catalog SET image = ? WHERE id = ?", { data.imageUrl, data.catalogId })
     return { success = true, message = _L("admin_vehicle_image_saved") }
 end)
 
@@ -732,7 +758,7 @@ lib.callback.register("pickle_dealerships:adminRemoveCatalogImage", function(sou
         return { success = false, message = _L("admin_missing_dealership_id") }
     end
 
-    MySQL.update.await("UPDATE wholesale_catalog SET image = NULL WHERE id = ?", { data.catalogId })
+    MySQL.update.await("UPDATE pickle_wholesale_catalog SET image = NULL WHERE id = ?", { data.catalogId })
     return { success = true, message = _L("admin_vehicle_image_removed") }
 end)
 
@@ -780,13 +806,13 @@ RegisterCommand("dealership_stockall", function(source, args, rawCommand)
         return
     end
 
-    local dealership = MySQL.single.await("SELECT * FROM dealerships WHERE id = ?", { dealershipId })
+    local dealership = MySQL.single.await("SELECT * FROM pickle_dealerships WHERE id = ?", { dealershipId })
     if not dealership then
         ShowNotification(source, _L("dealership_not_found"))
         return
     end
 
-    local catalog = MySQL.query.await("SELECT * FROM wholesale_catalog", {})
+    local catalog = MySQL.query.await("SELECT * FROM pickle_wholesale_catalog", {})
     if not catalog or #catalog == 0 then
         ShowNotification(source, _L("admin_no_catalog_vehicles"))
         return
@@ -795,12 +821,12 @@ RegisterCommand("dealership_stockall", function(source, args, rawCommand)
     local count = 0
     for _, v in ipairs(catalog) do
         local exists = MySQL.single.await(
-            "SELECT id FROM dealership_stock WHERE dealership_id = ? AND vehicle_model = ? AND sold_at IS NULL",
+            "SELECT id FROM pickle_dealership_stock WHERE dealership_id = ? AND vehicle_model = ? AND sold_at IS NULL",
             { dealershipId, v.model }
         )
         if not exists then
             MySQL.insert.await(
-                "INSERT INTO dealership_stock (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, ordered_at, delivered_at) VALUES (?, ?, ?, ?, ?, NOW(), NOW())",
+                "INSERT INTO pickle_dealership_stock (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, ordered_at, delivered_at) VALUES (?, ?, ?, ?, ?, NOW(), NOW())",
                 { dealershipId, v.model, v.label or v.model, v.wholesale, math.floor(v.wholesale * 1.3) }
             )
             count = count + 1

@@ -150,7 +150,7 @@ Config.Trailer = {
     depotInteractLabel = 'Start Delivery',
     depotInteractIcon  = 'fas fa-truck',
 
-    -- Map blip shown at every active depot. The depot's name (from the delivery_depots DB row)
+    -- Map blip shown at every active depot. The depot's name (from the pickle_delivery_depots DB row)
     -- is used as the label. See https://docs.fivem.net/docs/game-references/blips/ for sprite/colour IDs.
     depotBlip = {
         enabled    = true,

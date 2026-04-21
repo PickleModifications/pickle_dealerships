@@ -2,7 +2,7 @@
 -- Generated from https://docs.fivem.net/docs/game-references/vehicle-references/vehicle-models/
 -- Excludes: emergency, military, service, train, industrial, utility, commercial
 
-INSERT IGNORE INTO `wholesale_catalog` (`model`, `label`, `wholesale`, `tier`, `class`, `vehicle_type`) VALUES
+INSERT IGNORE INTO `pickle_wholesale_catalog` (`model`, `label`, `wholesale`, `tier`, `class`, `vehicle_type`) VALUES
     ('asbo', 'Asbo', 12000, 'basic', 'compact', 'car'),
     ('blista', 'Blista', 12000, 'basic', 'compact', 'car'),
     ('brioso', 'Brioso R/A', 12000, 'basic', 'compact', 'car'),

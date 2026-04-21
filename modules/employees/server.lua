@@ -251,7 +251,7 @@ lib.callback.register("pickle_dealerships:getEmployees", function(source, data)
     -- index by identifier so we can attach them to the online list without N+1 lookups.
     local overrideByIdentifier = {}
     local overrideRows = MySQL.query.await(
-        "SELECT `identifier`, `commission_rate` FROM `dealership_employees` WHERE `dealership_id` = ?",
+        "SELECT `identifier`, `commission_rate` FROM `pickle_dealership_employees` WHERE `dealership_id` = ?",
         { dealershipId }
     ) or {}
     for _, row in ipairs(overrideRows) do
@@ -300,17 +300,17 @@ lib.callback.register("pickle_dealerships:setEmployeeCommissionOverride", functi
     local rate = math.max(0, math.min(100, tonumber(data.rate) or 0))
 
     local existing = MySQL.single.await(
-        "SELECT `id` FROM `dealership_employees` WHERE `dealership_id` = ? AND `identifier` = ? LIMIT 1",
+        "SELECT `id` FROM `pickle_dealership_employees` WHERE `dealership_id` = ? AND `identifier` = ? LIMIT 1",
         { dealershipId, targetIdentifier }
     )
     if existing and existing.id then
         MySQL.update.await(
-            "UPDATE `dealership_employees` SET `commission_rate` = ? WHERE `id` = ?",
+            "UPDATE `pickle_dealership_employees` SET `commission_rate` = ? WHERE `id` = ?",
             { rate, existing.id }
         )
     else
         MySQL.insert.await(
-            "INSERT INTO `dealership_employees` (`dealership_id`, `identifier`, `role`, `commission_rate`) VALUES (?, ?, ?, ?)",
+            "INSERT INTO `pickle_dealership_employees` (`dealership_id`, `identifier`, `role`, `commission_rate`) VALUES (?, ?, ?, ?)",
             { dealershipId, targetIdentifier, 'salesperson', rate }
         )
     end
@@ -344,7 +344,7 @@ lib.callback.register("pickle_dealerships:clockIn", function(source, data)
     else
         -- No job set — check if they're an employee in the DB
         local identifier = GetIdentifier(source)
-        local emp = MySQL.single.await("SELECT id FROM dealership_employees WHERE dealership_id = ? AND identifier = ? LIMIT 1", { dealershipId, identifier })
+        local emp = MySQL.single.await("SELECT id FROM pickle_dealership_employees WHERE dealership_id = ? AND identifier = ? LIMIT 1", { dealershipId, identifier })
         if emp then canClockIn = true end
     end
 

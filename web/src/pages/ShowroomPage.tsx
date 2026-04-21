@@ -6,7 +6,7 @@ import { Badge } from '../components/ui/badge'
 import { Input } from '../components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { fetchNui, formatCurrency, getVehicleImage } from '../lib/utils'
-import { Search, X, CreditCard, Banknote, Car, Loader2, Palette, SlidersHorizontal, ChevronRight, FileText, Gavel, Zap, Package, Warehouse, PenLine } from 'lucide-react'
+import { Search, X, CreditCard, Banknote, Car, Loader2, Palette, SlidersHorizontal, ChevronRight, FileText, Gavel, Zap, Package, Warehouse, PenLine, Wind } from 'lucide-react'
 import VehicleImg from '../components/VehicleImg'
 import { PickleFaxDialog } from '../components/PickleFax'
 import FinancingContractDialog from '../components/FinancingContractDialog'
@@ -105,11 +105,15 @@ export default function ShowroomPage({ data }: Props) {
       if (available.length > 0) {
         // Spot-view mode: seed the selection with the specific stock the player
         // walked up to instead of defaulting to the first item in the list.
+        // Skip the preview-vehicle swap — the physical display car at the spot
+        // is what the player is already looking at.
         const target = data.spotViewStockId
           ? available.find((s) => s.id === data.spotViewStockId) ?? available[0]
           : available[0]
         setSelected(target)
-        fetchNui('showroomSwapVehicle', { model: target.vehicle_model, stockId: target.is_used ? target.id : undefined })
+        if (!data.spotViewStockId) {
+          fetchNui('showroomSwapVehicle', { model: target.vehicle_model, stockId: target.is_used ? target.id : undefined })
+        }
       }
       setLoading(false)
     }).catch(() => setLoading(false))
@@ -845,7 +849,7 @@ export default function ShowroomPage({ data }: Props) {
           </div>
         )
       })() : selected ? (
-        <div className="fixed bottom-0 left-[340px] right-0 pointer-events-auto">
+        <div className={`fixed bottom-0 ${data.spotViewStockId ? 'left-0' : 'left-[340px]'} right-0 pointer-events-auto`}>
           <div className="bg-black/90 border-t border-white/10 px-6 py-3 flex items-center gap-4">
             <div className="flex-1 min-w-0">
               <p className="text-white font-bold text-2xl truncate leading-tight">
@@ -939,6 +943,24 @@ export default function ShowroomPage({ data }: Props) {
                     onClick={() => { if (!selectedInstallments && financingSettings) setSelectedInstallments(financingSettings.installmentOptions[0] ?? 8); setShowContract(true) }}
                   >
                     <PenLine className="h-3.5 w-3.5" /> {t('btn_finance')}
+                  </Button>
+                )}
+
+                {/* Test drives — new and pre-owned only. Auctions opt out. */}
+                {!selected.auction_id && (
+                  <Button
+                    variant="outline"
+                    className="h-9 px-4 gap-1.5 border-white/20 text-white/80 hover:bg-white/10 hover:text-white"
+                    onClick={() => {
+                      fetchNui('startTestDrive', {
+                        dealershipId: data.dealershipId,
+                        location: data.location,
+                        model: selected.vehicle_model,
+                        stockId: selected.id,
+                      }).finally(() => fetchNui('showroomClose', {}))
+                    }}
+                  >
+                    <Wind className="h-3.5 w-3.5" /> {t('btn_test_drive')}
                   </Button>
                 )}
               </>
