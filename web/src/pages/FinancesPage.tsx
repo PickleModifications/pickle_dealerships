@@ -104,6 +104,29 @@ export default function FinancesPage({ data, onClose }: Props) {
       )}
 
       <div className="relative flex-1 flex flex-col overflow-hidden">
+
+      {data.embedded && (
+        <>
+          <div className="flex items-center justify-between p-5 pb-3">
+            <div>
+              <h1 className="text-xl font-bold">{t('tab_finances')}</h1>
+              <p className="text-sm text-muted-foreground">{data.dealershipName}</p>
+            </div>
+            <div className="flex gap-2">
+              {canWithdraw && (
+                <Button variant="outline" size="sm" className="gap-1" onClick={() => { setWithdrawOpen(true); setAmount('') }}>
+                  <ArrowUpRight className="h-4 w-4" /> {t('finances_withdraw')}
+                </Button>
+              )}
+              <Button variant="outline" size="sm" className="gap-1" onClick={() => { setDepositOpen(true); setAmount('') }}>
+                <ArrowDownLeft className="h-4 w-4" /> {t('finances_deposit')}
+              </Button>
+            </div>
+          </div>
+          <Separator />
+        </>
+      )}
+
       <ScrollArea className="flex-1 p-5">
         {loading ? (
           <div className="space-y-5"><div className="rounded-lg border border-border bg-card p-5"><Skeleton className="h-4 w-32 mb-2" /><Skeleton className="h-8 w-48" /></div><SkeletonList count={5} /></div>
@@ -120,16 +143,18 @@ export default function FinancesPage({ data, onClose }: Props) {
                     </p>
                     <p className="text-3xl font-bold mt-1">{formatCurrency(finances.balance)}</p>
                   </div>
-                  <div className="flex gap-2">
-                    {canWithdraw && (
-                      <Button variant="outline" size="sm" className="gap-1" onClick={() => { setWithdrawOpen(true); setAmount('') }}>
-                        <ArrowUpRight className="h-4 w-4" /> {t('finances_withdraw')}
+                  {!data.embedded && (
+                    <div className="flex gap-2">
+                      {canWithdraw && (
+                        <Button variant="outline" size="sm" className="gap-1" onClick={() => { setWithdrawOpen(true); setAmount('') }}>
+                          <ArrowUpRight className="h-4 w-4" /> {t('finances_withdraw')}
+                        </Button>
+                      )}
+                      <Button variant="outline" size="sm" className="gap-1" onClick={() => { setDepositOpen(true); setAmount('') }}>
+                        <ArrowDownLeft className="h-4 w-4" /> {t('finances_deposit')}
                       </Button>
-                    )}
-                    <Button variant="outline" size="sm" className="gap-1" onClick={() => { setDepositOpen(true); setAmount('') }}>
-                      <ArrowDownLeft className="h-4 w-4" /> {t('finances_deposit')}
-                    </Button>
-                  </div>
+                    </div>
+                  )}
                 </div>
               </CardContent>
             </Card>

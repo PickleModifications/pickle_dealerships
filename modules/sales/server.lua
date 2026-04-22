@@ -86,9 +86,14 @@ end
 
 local function MarkStockSold(stockId, identifier, soldBy)
     local stock = MySQL.single.await(
-        "SELECT `quantity` FROM `pickle_dealership_stock` WHERE `id` = ?",
+        "SELECT `quantity`, `acquired_from` FROM `pickle_dealership_stock` WHERE `id` = ?",
         { tonumber(stockId) }
     )
+    -- NPC-seeded stock is intentionally infinite — don't decrement or mark sold
+    -- so the automated dealership keeps offering the vehicle.
+    if stock and stock.acquired_from == 'npc_seed' then
+        return
+    end
     if stock and stock.quantity > 1 then
         MySQL.update(
             "UPDATE `pickle_dealership_stock` SET `quantity` = `quantity` - 1 WHERE `id` = ?",
@@ -236,7 +241,20 @@ local function ProcessSale(source, dealershipId, stockItem, paymentMethod, coupo
         end
         RemoveSocietyMoney(societyName, finalPrice)
     else
-        -- Determine currency
+        -- Cash / bank. Dealerships can disable either to force alt-currency sales
+        -- (e.g. donator-only shops). Default both on when the flag is unset.
+        local basePaymentMeta = dealership.metadata
+        if type(basePaymentMeta) == "string" then basePaymentMeta = json.decode(basePaymentMeta) or {} end
+        local baseCfg = type(basePaymentMeta) == "table" and basePaymentMeta.acceptedBasePayments or nil
+        local cashOn = not baseCfg or baseCfg.cash ~= false
+        local bankOn = not baseCfg or baseCfg.bank ~= false
+        if paymentMethod == "bank" and not bankOn then
+            return false, _L("error_payment_method_disabled") or "This dealership doesn't accept bank payments."
+        end
+        if (paymentMethod == "cash" or paymentMethod == "money") and not cashOn then
+            return false, _L("error_payment_method_disabled") or "This dealership doesn't accept cash payments."
+        end
+
         local currency = "money"
         if paymentMethod == "bank" then
             currency = "bank"
@@ -306,7 +324,12 @@ local function ProcessSale(source, dealershipId, stockItem, paymentMethod, coupo
             end
         end
 
-        local commission = math.floor(finalPrice * commissionRate)
+        -- Commission is a percentage of PROFIT (sale price minus what the
+        -- dealership paid for the unit), not of the sale price itself. Losses
+        -- on a sale yield no commission.
+        local wholesaleCost = tonumber(stockItem.wholesale_cost) or 0
+        local profit = math.max(0, finalPrice - wholesaleCost)
+        local commission = math.floor(profit * commissionRate)
         if commission > 0 then
             -- Deduct commission from dealership balance
             AddDealershipBalance(dealershipId, -commission)
@@ -349,6 +372,20 @@ local function ProcessSale(source, dealershipId, stockItem, paymentMethod, coupo
     -- (sales_purchase_success); skip the server-side dupe.
 
     debugPrint(("[Sales] Player %s purchased %s (stock #%d) for %s"):format(identifier, stockItem.vehicle_model, stockItem.id, GetCurrencyString(finalPrice)))
+
+    LogDiscord("sales", {
+        title = isUsed and "Pre-Owned Sale" or "Vehicle Sale",
+        actor = source,
+        dealershipId = dealershipId,
+        fields = {
+            { name = "Dealership", value = dealership and dealership.name or "?", inline = true },
+            { name = "Vehicle", value = (stockItem.vehicle_label or stockItem.vehicle_model) .. " (`" .. (stockItem.vehicle_model or "?") .. "`)", inline = true },
+            { name = "Plate", value = "`" .. tostring(plate or "?") .. "`", inline = true },
+            { name = "Price", value = GetCurrencyString(finalPrice), inline = true },
+            { name = "Payment", value = tostring(altCurrencyUsed and altCurrencyUsed.key or paymentMethod or "?"), inline = true },
+            { name = "Salesperson", value = tostring(soldByCitizenid and ("`" .. soldByCitizenid .. "`") or "self-service"), inline = true },
+        },
+    })
 
     return true, plate, finalPrice
 end

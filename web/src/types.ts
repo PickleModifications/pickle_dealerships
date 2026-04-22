@@ -43,6 +43,11 @@ export interface DealershipData {
     managementPoint?: { x: number; y: number; z: number; w?: number }
     salesPoint?: { x: number; y: number; z: number; w?: number }
     showroomPoint?: { x: number; y: number; z: number; w?: number }
+    displaySpots?: { x: number; y: number; z: number; w?: number }[]
+    npcSpawnPoints?: { x: number; y: number; z: number; w?: number }[]
+    // Set by adminPlaceDealershipPoint so the panel can scroll the matching row
+    // back into view after the player returns from placing a point.
+    lastField?: string
   }
   editDepotId?: number
   // When set, the showroom opens in "display-spot picker" mode. The Buy/Finance

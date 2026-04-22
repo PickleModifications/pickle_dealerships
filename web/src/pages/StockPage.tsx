@@ -25,6 +25,14 @@ interface Props {
 const COLUMNS = 3
 const GAP = 8
 
+// NPC-seeded stock is intentionally infinite on the server (quantity=999999) —
+// for UI purposes we clamp it to 1 so the "xN" badge and summary counter don't
+// blast players with nonsense numbers.
+function displayQty(item: StockItem): number {
+  if (item.acquired_from === 'npc_seed') return 1
+  return item.quantity || 1
+}
+
 function getStockMinGrade(item: StockItem): number {
   let meta = item.metadata as unknown
   if (typeof meta === 'string') {
@@ -211,9 +219,9 @@ export default function StockPage({ data, onClose }: Props) {
     const key = `${item.vehicle_model}|${item.retail_price}`
     const existing = availableGroups.get(key)
     if (existing) {
-      existing.quantity = (existing.quantity || 1) + (item.quantity || 1)
+      existing.quantity = (existing.quantity || 1) + displayQty(item)
     } else {
-      availableGroups.set(key, { ...item, quantity: item.quantity || 1 })
+      availableGroups.set(key, { ...item, quantity: displayQty(item) })
     }
   }
   const availableNew = Array.from(availableGroups.values())
@@ -252,7 +260,7 @@ export default function StockPage({ data, onClose }: Props) {
         <div className="flex items-center justify-between p-5 pb-0">
           <div>
             <h1 className="text-xl font-bold">{t('title_stock_inventory')}</h1>
-            <p className="text-sm text-muted-foreground">{data.dealershipName} &mdash; {stock.reduce((sum, s) => sum + (s.quantity || 1), 0)} vehicles</p>
+            <p className="text-sm text-muted-foreground">{data.dealershipName} &mdash; {stock.reduce((sum, s) => sum + displayQty(s), 0)} vehicles</p>
           </div>
           <Button variant="ghost" size="icon" onClick={onClose}>
             <X className="h-5 w-5" />
@@ -596,7 +604,7 @@ export default function StockPage({ data, onClose }: Props) {
                   {canManage && selectedItem.is_used && !selectedItem.auction_id && (
                     <StockActionRow icon={<Gavel className="h-4 w-4" />} label={t('title_list_for_auction')} onClick={() => setAuctionListingItem(selectedItem)} />
                   )}
-                  {canManage && selectedItem.is_used && (
+                  {canManage && selectedItem.is_used && !selectedItem.auction_id && (
                     <StockActionRow
                       icon={selectedItem.unlisted ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
                       label={selectedItem.unlisted ? t('title_mark_listed') : t('title_mark_unlisted')}

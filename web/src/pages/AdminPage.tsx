@@ -11,20 +11,22 @@ import { fetchNui, formatCurrency } from '../lib/utils'
 import {
   X, Settings, UserRoundCog, DollarSign, ArrowUpCircle, RotateCcw,
   ToggleLeft, Plus, MapPin, Check, Car, Crosshair, Store, ParkingSquare,
-  Handshake, Building2, BookOpen, Trash2, Briefcase, Users, ShieldAlert, Truck,
+  Handshake, Building2, BookOpen, Trash2, Briefcase, Users, Shield, ShieldAlert, Truck, Download,
 } from 'lucide-react'
 import { SkeletonList } from '../components/ui/skeleton'
 import { t } from '../lib/locale'
 import type { DealershipData, AdminDealership, DealershipMetadata, PositionData, DeliveryDepot, FactionType } from '../types'
 import AdminCatalogPage from './AdminCatalogPage'
+import ImportPage from './ImportPage'
+import SocietyAllowlistSettings from '../components/SocietyAllowlistSettings'
 
 interface Props {
   data: DealershipData
   onClose: () => void
 }
 
-type AdminTab = 'dealerships' | 'catalog' | 'positions' | 'depots'
-type AdminAction = 'transfer' | 'balance' | 'tier' | 'reset' | 'toggle' | 'seize' | 'create' | 'delete' | 'faction' | 'access' | 'payments' | null
+type AdminTab = 'dealerships' | 'catalog' | 'positions' | 'depots' | 'import'
+type AdminAction = 'transfer' | 'balance' | 'tier' | 'reset' | 'toggle' | 'seize' | 'create' | 'delete' | 'faction' | 'access' | 'payments' | 'society' | 'stockAll' | null
 
 function parseMeta(d: AdminDealership | null): DealershipMetadata {
   if (!d) return {}
@@ -62,6 +64,19 @@ export default function AdminPage({ data, onClose }: Props) {
   useEffect(() => {
     if (data.initialTab) setTab(data.initialTab as AdminTab)
   }, [data.initialTab])
+
+  // When the panel re-opens after placing a dealership position, scroll the row
+  // the admin was just interacting with back into view so they can continue
+  // without re-scrolling each time.
+  useEffect(() => {
+    const f = data.pendingDealership?.lastField
+    if (!f) return
+    const t = setTimeout(() => {
+      const el = document.getElementById('pos-' + f)
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 150)
+    return () => clearTimeout(t)
+  }, [data.pendingDealership])
   const [selected, setSelected] = useState<AdminDealership | null>(null)
   const [action, setAction] = useState<AdminAction>(data.pendingDealership ? 'create' : null)
   const [inputValue, setInputValue] = useState('')
@@ -70,6 +85,7 @@ export default function AdminPage({ data, onClose }: Props) {
   const [accessGradeInput, setAccessGradeInput] = useState('0')
   const [altCurrencyOptions, setAltCurrencyOptions] = useState<{ key: string; label: string; type: string; valuePerUnit: number }[]>([])
   const [altAcceptedInput, setAltAcceptedInput] = useState<string[]>([])
+  const [basePaymentsInput, setBasePaymentsInput] = useState<{ cash: boolean; bank: boolean }>({ cash: true, bank: true })
 
   const [dealershipDraft, setDealershipDraft] = useState<{
     name: string
@@ -85,6 +101,8 @@ export default function AdminPage({ data, onClose }: Props) {
     managementPoint?: PositionData
     salesPoint?: PositionData
     showroomPoint?: PositionData
+    displaySpots?: PositionData[]
+    npcSpawnPoints?: PositionData[]
   }>({
     name: data.pendingDealership?.name ?? '',
     mode: data.pendingDealership?.mode ?? 'player-owned',
@@ -99,11 +117,86 @@ export default function AdminPage({ data, onClose }: Props) {
     managementPoint: data.pendingDealership?.managementPoint,
     salesPoint: data.pendingDealership?.salesPoint,
     showroomPoint: data.pendingDealership?.showroomPoint,
+    displaySpots: data.pendingDealership?.displaySpots,
+    npcSpawnPoints: data.pendingDealership?.npcSpawnPoints,
   })
 
   // Player picker state for "Owner" field when mode == 'player-owned'
   const [createOwnerSearch, setCreateOwnerSearch] = useState('')
   const [createOwnerPicker, setCreateOwnerPicker] = useState(false)
+
+  // Confirmation before discarding the create draft when the player closes the
+  // dialog via Cancel / X / backdrop / Escape. Keeps admins from losing a stack
+  // of placed spots to an accidental keypress.
+  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false)
+
+  const hasCreateDraftContent = () => {
+    const d = dealershipDraft
+    return !!(
+      d.name.trim() ||
+      d.factionName.trim() ||
+      d.ownerIdentifier ||
+      d.coords || d.spawnPoint || d.deliveryPoint ||
+      d.managementPoint || d.salesPoint || d.showroomPoint ||
+      (d.displaySpots && d.displaySpots.length > 0) ||
+      (d.npcSpawnPoints && d.npcSpawnPoints.length > 0)
+    )
+  }
+
+  const closeCreateDialog = () => {
+    setAction(null)
+    setDiscardConfirmOpen(false)
+    setDealershipDraft({
+      name: '', mode: 'player-owned', type: 'car', tier: '1',
+      factionType: 'job', factionName: '', ownerIdentifier: '',
+    })
+    setCreateOwnerSearch('')
+    setCreateOwnerPicker(false)
+    fetchNui('adminEndCreateFlow', {})
+  }
+
+  const attemptCloseCreate = () => {
+    if (hasCreateDraftContent()) {
+      setDiscardConfirmOpen(true)
+    } else {
+      closeCreateDialog()
+    }
+  }
+
+  // Sync placed display spots / NPC spawn points to the Lua preview thread so
+  // the admin can see everything they've already placed while the dialog is
+  // open — not only during the moment of gizmo placement.
+  useEffect(() => {
+    if (action !== 'create') {
+      fetchNui('adminEndCreateFlow', {})
+      return
+    }
+    fetchNui('adminUpdateCreateFlow', {
+      draft: {
+        displaySpots: dealershipDraft.displaySpots ?? [],
+        npcSpawnPoints: dealershipDraft.npcSpawnPoints ?? [],
+      },
+    })
+  }, [action, dealershipDraft.displaySpots, dealershipDraft.npcSpawnPoints])
+
+  // Intercept Escape while the create dialog is open: without this, App.tsx's
+  // window-level Escape handler would close the entire NUI and discard the
+  // draft with no confirmation. Capture-phase so we run before App.tsx.
+  useEffect(() => {
+    if (action !== 'create') return
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      e.stopImmediatePropagation()
+      e.preventDefault()
+      if (discardConfirmOpen) {
+        setDiscardConfirmOpen(false)
+      } else {
+        attemptCloseCreate()
+      }
+    }
+    window.addEventListener('keydown', handler, true)
+    return () => window.removeEventListener('keydown', handler, true)
+  }, [action, discardConfirmOpen, dealershipDraft])
 
   // Transfer ownership
   const [onlinePlayers, setOnlinePlayers] = useState<{ source: number; name: string; identifier: string }[]>([])
@@ -259,14 +352,13 @@ export default function AdminPage({ data, onClose }: Props) {
         coords: dealershipDraft.coords,
         spawnPoint: dealershipDraft.spawnPoint,
         deliveryPoint: dealershipDraft.deliveryPoint,
+        managementPoint: dealershipDraft.managementPoint,
+        salesPoint: dealershipDraft.salesPoint,
+        showroomPoint: dealershipDraft.showroomPoint,
+        displaySpots: dealershipDraft.displaySpots,
+        npcSpawnPoints: dealershipDraft.npcSpawnPoints,
       }).then(() => {
-        setAction(null)
-        setDealershipDraft({
-          name: '', mode: 'player-owned', type: 'car', tier: '1',
-          factionType: 'job', factionName: '', ownerIdentifier: '',
-        })
-        setCreateOwnerSearch('')
-        setCreateOwnerPicker(false)
+        closeCreateDialog()
         loadDealerships()
       })
       return
@@ -296,9 +388,11 @@ export default function AdminPage({ data, onClose }: Props) {
       payments: () => fetchNui('adminSetAltCurrencies', {
         dealershipId,
         accepted: altAcceptedInput,
+        base: basePaymentsInput,
       }).then(() => loadDealerships()),
       toggle: () => fetchNui('adminToggleMode', { dealershipId }).then(() => loadDealerships()),
       seize: () => fetchNui('adminToggleSeize', { dealershipId }).then(() => loadDealerships()),
+      stockAll: () => fetchNui('adminStockAllFromCatalog', { dealershipId, quantity: Math.max(1, parseInt(inputValue) || 1) }).then(() => loadDealerships()),
     }
     callbacks[action]?.().then(() => {
       setAction(null)
@@ -496,6 +590,11 @@ export default function AdminPage({ data, onClose }: Props) {
     // Catalog tab
     if (tab === 'catalog') {
       return <AdminCatalogPage />
+    }
+
+    // Import tab
+    if (tab === 'import') {
+      return <ImportPage onImported={() => { loadDealerships(); loadDepots() }} />
     }
 
     // Depots tab
@@ -751,7 +850,7 @@ export default function AdminPage({ data, onClose }: Props) {
                         <span className="text-xs text-orange-400">{t('label_unowned')}</span>
                       </div>
                     )}
-                    {!selected.job && (
+                    {!selected.job && selected.mode !== 'managed' && selected.mode !== 'public' && (
                       <div className="px-3 py-2 rounded-md bg-orange-500/10">
                         <span className="text-xs text-orange-400">{t('label_no_faction')}</span>
                       </div>
@@ -769,17 +868,19 @@ export default function AdminPage({ data, onClose }: Props) {
                         setOnlinePlayers(Array.isArray(res) ? res : [])
                       })
                     }} />
-                    <SettingsRow
-                      icon={<Briefcase className="h-4 w-4" />}
-                      label={t('admin_framework_faction')}
-                      value={selected.job ? `${t(getFactionType(selected) === 'gang' ? 'label_gang' : 'label_job')}: ${selected.job}` : t('label_none')}
-                      accent={!!selected.job}
-                      onClick={() => {
-                        setAction('faction')
-                        setInputValue(selected.job || '')
-                        setFactionTypeInput(getFactionType(selected))
-                      }}
-                    />
+                    {selected.mode !== 'managed' && selected.mode !== 'public' && (
+                      <SettingsRow
+                        icon={<Briefcase className="h-4 w-4" />}
+                        label={t('admin_framework_faction')}
+                        value={selected.job ? `${t(getFactionType(selected) === 'gang' ? 'label_gang' : 'label_job')}: ${selected.job}` : t('label_none')}
+                        accent={!!selected.job}
+                        onClick={() => {
+                          setAction('faction')
+                          setInputValue(selected.job || '')
+                          setFactionTypeInput(getFactionType(selected))
+                        }}
+                      />
+                    )}
                     <SettingsRow
                       icon={<ShieldAlert className="h-4 w-4" />}
                       label={t('admin_customer_access')}
@@ -799,17 +900,27 @@ export default function AdminPage({ data, onClose }: Props) {
                       onClick={() => {
                         setAction('payments')
                         setAltAcceptedInput(getAcceptedAlt(selected))
-                        fetchNui<{ success: boolean; available: { key: string; label: string; type: string; valuePerUnit: number }[] }>('getAcceptedAltCurrencies', {
+                        fetchNui<{ success: boolean; available: { key: string; label: string; type: string; valuePerUnit: number }[]; base?: { cash: boolean; bank: boolean } }>('getAcceptedAltCurrencies', {
                           dealershipId: selected.id,
                         }).then((res) => {
                           setAltCurrencyOptions(res.available || [])
-                        }).catch(() => setAltCurrencyOptions([]))
+                          setBasePaymentsInput({
+                            cash: res.base?.cash !== false,
+                            bank: res.base?.bank !== false,
+                          })
+                        }).catch(() => { setAltCurrencyOptions([]); setBasePaymentsInput({ cash: true, bank: true }) })
                       }}
+                    />
+                    <SettingsRow
+                      icon={<Shield className="h-4 w-4" />}
+                      label={t('tab_society_payments')}
+                      onClick={() => setAction('society')}
                     />
                     <SettingsRow icon={<DollarSign className="h-4 w-4" />} label={t('admin_set_balance')} value={formatCurrency(selected.balance)} onClick={() => { setAction('balance'); setInputValue(String(selected.balance)) }} />
                     <SettingsRow icon={<ArrowUpCircle className="h-4 w-4" />} label={t('admin_set_tier')} value={tierLabelKeys[selected.tier] ? t(tierLabelKeys[selected.tier]) : `${selected.tier}`} onClick={() => { setAction('tier'); setInputValue(String(selected.tier)) }} />
                     <SettingsRow icon={<ToggleLeft className="h-4 w-4" />} label={t('admin_toggle_mode')} value={selected.mode} onClick={() => setAction('toggle')} />
                     <SettingsRow icon={<ShieldAlert className="h-4 w-4" />} label={t('admin_toggle_seize')} value={selected.seize_enabled ? t('label_enabled') : t('label_disabled')} accent={!!selected.seize_enabled} onClick={() => setAction('seize')} />
+                    <SettingsRow icon={<BookOpen className="h-4 w-4" />} label={t('admin_stock_from_catalog')} onClick={() => { setAction('stockAll'); setInputValue('1') }} />
                     <Separator className="my-1" />
                     <SettingsRow icon={<RotateCcw className="h-4 w-4" />} label={t('admin_reset_dealership')} destructive onClick={() => setAction('reset')} />
                     <SettingsRow icon={<Trash2 className="h-4 w-4" />} label={t('admin_delete_dealership')} destructive onClick={() => setAction('delete')} />
@@ -832,9 +943,11 @@ export default function AdminPage({ data, onClose }: Props) {
                 {action === 'delete' && t('admin_delete_dealership')}
                 {action === 'toggle' && t('admin_toggle_mode')}
                 {action === 'seize' && t('admin_toggle_seize')}
+                {action === 'stockAll' && t('admin_stock_from_catalog')}
                 {action === 'faction' && t('admin_framework_faction')}
                 {action === 'access' && t('admin_customer_access')}
                 {action === 'payments' && t('admin_payment_methods')}
+                {action === 'society' && t('tab_society_payments')}
               </DialogTitle>
               <DialogDescription>{selected?.name} (ID: {selected?.id})</DialogDescription>
             </DialogHeader>
@@ -861,7 +974,7 @@ export default function AdminPage({ data, onClose }: Props) {
                         placeholder={t('admin_search_players')}
                       />
                       {playerSearch && !selectedPlayer && (
-                        <div className="absolute z-10 top-full mt-1 left-0 right-0 bg-popover border border-border rounded-md shadow-md max-h-40 overflow-auto">
+                        <div className="absolute z-10 top-full mt-1 left-0 right-0 bg-card border border-border rounded-md shadow-md max-h-40 overflow-auto">
                           {onlinePlayers
                             .filter((p) => p.name.toLowerCase().includes(playerSearch.toLowerCase()) || p.identifier.toLowerCase().includes(playerSearch.toLowerCase()))
                             .map((p) => (
@@ -954,8 +1067,35 @@ export default function AdminPage({ data, onClose }: Props) {
                 </div>
               )}
               {action === 'payments' && (
-                <div className="space-y-2">
+                <div className="space-y-3">
                   <p className="text-xs text-muted-foreground">{t('admin_payment_methods_desc')}</p>
+
+                  {/* Base tenders — disable to make the shop donator-only etc. */}
+                  <div className="space-y-1">
+                    {([
+                      { key: 'bank' as const, label: t('label_bank') },
+                      { key: 'cash' as const, label: t('label_cash') },
+                    ]).map((opt) => {
+                      const checked = basePaymentsInput[opt.key]
+                      return (
+                        <label
+                          key={opt.key}
+                          className={`flex items-center gap-3 rounded-md border px-3 py-2 cursor-pointer transition-colors ${checked ? 'bg-accent/10 border-accent/40' : 'bg-muted/40 border-border hover:bg-muted'}`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => setBasePaymentsInput((prev) => ({ ...prev, [opt.key]: !prev[opt.key] }))}
+                            className="h-4 w-4 accent-accent"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium truncate">{opt.label}</p>
+                          </div>
+                        </label>
+                      )
+                    })}
+                  </div>
+
                   {altCurrencyOptions.length === 0 ? (
                     <p className="text-xs text-muted-foreground">{t('alt_payments_none_configured')}</p>
                   ) : (
@@ -990,20 +1130,34 @@ export default function AdminPage({ data, onClose }: Props) {
                     <SelectItem value="1">1 - {t('tier_1')}</SelectItem><SelectItem value="2">2 - {t('tier_2')}</SelectItem><SelectItem value="3">3 - {t('tier_3')}</SelectItem><SelectItem value="4">4 - {t('tier_4')}</SelectItem>
                   </SelectContent></Select></div>
               )}
+              {action === 'society' && selected && (
+                <SocietyAllowlistSettings dealershipId={selected.id} dealershipName={selected.name} />
+              )}
               {action === 'reset' && <p className="text-sm text-destructive">{t('confirm_reset_warning')}</p>}
               {action === 'delete' && <p className="text-sm text-destructive">{t('confirm_delete_warning')}</p>}
               {action === 'toggle' && <p className="text-sm">{t('confirm_toggle_mode')} {t('admin_currently')}: <strong>{selected?.mode}</strong></p>}
               {action === 'seize' && <p className="text-sm">{t('confirm_toggle_seize')} {t('admin_currently')}: <strong>{selected?.seize_enabled ? t('label_enabled') : t('label_disabled')}</strong></p>}
-              <div className="flex gap-2">
-                <Button variant="outline" className="flex-1" onClick={() => setAction(null)}>{t('btn_cancel')}</Button>
-                <Button className="flex-1" variant={(action === 'reset' || action === 'delete') ? 'destructive' : 'default'} onClick={handleAction} disabled={action === 'transfer' && !selectedPlayer}>{t('btn_confirm')}</Button>
-              </div>
+              {action === 'stockAll' && (
+                <div className="space-y-3">
+                  <p className="text-sm">{t('confirm_stock_from_catalog')}</p>
+                  <div>
+                    <label className="text-sm font-medium">{t('label_quantity_per_vehicle')}</label>
+                    <Input type="number" min={1} value={inputValue} onChange={(e) => setInputValue(e.target.value)} placeholder="1" className="mt-1" />
+                  </div>
+                </div>
+              )}
+              {action !== 'society' && (
+                <div className="flex gap-2">
+                  <Button variant="outline" className="flex-1" onClick={() => setAction(null)}>{t('btn_cancel')}</Button>
+                  <Button className="flex-1" variant={(action === 'reset' || action === 'delete') ? 'destructive' : 'default'} onClick={handleAction} disabled={action === 'transfer' && !selectedPlayer}>{t('btn_confirm')}</Button>
+                </div>
+              )}
             </div>
           </DialogContent>
         </Dialog>
 
-        <Dialog open={action === 'create'} onOpenChange={(open) => { if (!open) setAction(null) }}>
-          <DialogContent onClose={() => setAction(null)} className="max-h-full !grid-rows-[auto_1fr_auto] !gap-0 p-0 overflow-hidden">
+        <Dialog open={action === 'create'} onOpenChange={(open) => { if (!open) attemptCloseCreate() }}>
+          <DialogContent onClose={attemptCloseCreate} className="max-h-full !grid-rows-[auto_1fr_auto] !gap-0 p-0 overflow-hidden">
             <DialogHeader className="p-6 pb-4 border-b border-border">
               <DialogTitle>{t('title_create_dealership')}</DialogTitle>
               <DialogDescription>{t('admin_create_desc')}</DialogDescription>
@@ -1021,7 +1175,7 @@ export default function AdminPage({ data, onClose }: Props) {
               <div className="grid grid-cols-2 gap-3">
                 <div><label className="text-sm font-medium">{t('label_mode')}</label>
                   <Select value={dealershipDraft.mode} onValueChange={(v) => setDealershipDraft({ ...dealershipDraft, mode: v })}><SelectTrigger className="mt-1"><SelectValue /></SelectTrigger><SelectContent>
-                    <SelectItem value="player-owned">{t('label_player_owned')}</SelectItem><SelectItem value="public">{t('label_public')}</SelectItem>
+                    <SelectItem value="player-owned">{t('label_player_owned')}</SelectItem><SelectItem value="managed">{t('label_automated')}</SelectItem>
                   </SelectContent></Select></div>
                 <div><label className="text-sm font-medium">{t('label_type')}</label>
                   <Select value={dealershipDraft.type} onValueChange={(v) => setDealershipDraft({ ...dealershipDraft, type: v })}><SelectTrigger className="mt-1"><SelectValue /></SelectTrigger><SelectContent>
@@ -1042,32 +1196,35 @@ export default function AdminPage({ data, onClose }: Props) {
                 </Select>
               </div>
 
-              {/* Framework faction — same shape as the admin edit dialog. Optional. */}
-              <div className="space-y-2">
-                <label className="text-sm font-medium">{t('admin_framework_faction')}</label>
-                <div className="flex gap-1">
-                  <button
-                    type="button"
-                    onClick={() => setDealershipDraft({ ...dealershipDraft, factionType: 'job' })}
-                    className={`flex-1 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${dealershipDraft.factionType === 'job' ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}
-                  >
-                    {t('label_job')}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setDealershipDraft({ ...dealershipDraft, factionType: 'gang' })}
-                    className={`flex-1 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${dealershipDraft.factionType === 'gang' ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}
-                  >
-                    {t('label_gang')}
-                  </button>
+              {/* Framework faction — same shape as the admin edit dialog. Optional.
+                  Hidden for automated (NPC) dealerships since they aren't tied to a job/gang. */}
+              {dealershipDraft.mode !== 'managed' && (
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">{t('admin_framework_faction')}</label>
+                  <div className="flex gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setDealershipDraft({ ...dealershipDraft, factionType: 'job' })}
+                      className={`flex-1 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${dealershipDraft.factionType === 'job' ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}
+                    >
+                      {t('label_job')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDealershipDraft({ ...dealershipDraft, factionType: 'gang' })}
+                      className={`flex-1 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${dealershipDraft.factionType === 'gang' ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}
+                    >
+                      {t('label_gang')}
+                    </button>
+                  </div>
+                  <Input
+                    value={dealershipDraft.factionName}
+                    onChange={(e) => setDealershipDraft({ ...dealershipDraft, factionName: e.target.value })}
+                    placeholder={dealershipDraft.factionType === 'gang' ? 'e.g. ballas' : 'e.g. police'}
+                    className="mt-1 font-mono"
+                  />
                 </div>
-                <Input
-                  value={dealershipDraft.factionName}
-                  onChange={(e) => setDealershipDraft({ ...dealershipDraft, factionName: e.target.value })}
-                  placeholder={dealershipDraft.factionType === 'gang' ? 'e.g. ballas' : 'e.g. police'}
-                  className="mt-1 font-mono"
-                />
-              </div>
+              )}
 
               {/* Initial owner — only meaningful for player-owned mode. */}
               {dealershipDraft.mode === 'player-owned' && (
@@ -1099,7 +1256,7 @@ export default function AdminPage({ data, onClose }: Props) {
                       className="font-mono"
                     />
                     {createOwnerPicker && !dealershipDraft.ownerIdentifier && createOwnerSearch && (
-                      <div className="absolute z-10 top-full mt-1 left-0 right-0 bg-popover border border-border rounded-md shadow-md max-h-40 overflow-auto">
+                      <div className="absolute z-10 top-full mt-1 left-0 right-0 bg-card border border-border rounded-md shadow-md max-h-40 overflow-auto">
                         {onlinePlayers
                           .filter((p) => p.name.toLowerCase().includes(createOwnerSearch.toLowerCase()) || p.identifier.toLowerCase().includes(createOwnerSearch.toLowerCase()))
                           .map((p) => (
@@ -1129,66 +1286,193 @@ export default function AdminPage({ data, onClose }: Props) {
 
               <div className="space-y-2">
                 <p className="text-xs text-muted-foreground">{t('admin_create_positions_hint')}</p>
-                <PositionRow
-                  icon={<MapPin className="h-4 w-4" />}
-                  label={t('label_dealership_center') + ' *'}
-                  description={t('label_dealership_center_desc')}
-                  placed={!!dealershipDraft.coords}
-                  coords={dealershipDraft.coords}
-                  onPlace={() => fetchNui('adminPlaceDealershipPoint', { field: 'coords', draft: dealershipDraft })}
-                  onRemove={() => setDealershipDraft({ ...dealershipDraft, coords: undefined })}
-                />
-                <PositionRow
-                  icon={<Car className="h-4 w-4" />}
-                  label={t('label_spawn_point')}
-                  description={t('label_spawn_point_desc')}
-                  placed={!!dealershipDraft.spawnPoint}
-                  coords={dealershipDraft.spawnPoint}
-                  onPlace={() => fetchNui('adminPlaceDealershipPoint', { field: 'spawnPoint', draft: dealershipDraft })}
-                  onRemove={() => setDealershipDraft({ ...dealershipDraft, spawnPoint: undefined })}
-                />
-                <PositionRow
-                  icon={<Truck className="h-4 w-4" />}
-                  label={t('label_delivery_point')}
-                  description={t('label_delivery_point_desc')}
-                  placed={!!dealershipDraft.deliveryPoint}
-                  coords={dealershipDraft.deliveryPoint}
-                  onPlace={() => fetchNui('adminPlaceDealershipPoint', { field: 'deliveryPoint', draft: dealershipDraft })}
-                  onRemove={() => setDealershipDraft({ ...dealershipDraft, deliveryPoint: undefined })}
-                />
-                <PositionRow
-                  icon={<Briefcase className="h-4 w-4" />}
-                  label={t('label_management_point') + ' *'}
-                  description={t('label_owner_manager_access')}
-                  placed={!!dealershipDraft.managementPoint}
-                  coords={dealershipDraft.managementPoint}
-                  onPlace={() => fetchNui('adminPlaceDealershipPoint', { field: 'managementPoint', draft: dealershipDraft })}
-                  onRemove={() => setDealershipDraft({ ...dealershipDraft, managementPoint: undefined })}
-                />
-                <PositionRow
-                  icon={<Handshake className="h-4 w-4" />}
-                  label={t('label_sales_point') + ' *'}
-                  description={t('label_view_vehicles_access')}
-                  placed={!!dealershipDraft.salesPoint}
-                  coords={dealershipDraft.salesPoint}
-                  onPlace={() => fetchNui('adminPlaceDealershipPoint', { field: 'salesPoint', draft: dealershipDraft })}
-                  onRemove={() => setDealershipDraft({ ...dealershipDraft, salesPoint: undefined })}
-                />
-                <PositionRow
-                  icon={<Store className="h-4 w-4" />}
-                  label={t('label_showroom_position') + ' *'}
-                  description={t('label_showroom_preview')}
-                  placed={!!dealershipDraft.showroomPoint}
-                  coords={dealershipDraft.showroomPoint}
-                  onPlace={() => fetchNui('adminPlaceDealershipPoint', { field: 'showroomPoint', draft: dealershipDraft })}
-                  onRemove={() => setDealershipDraft({ ...dealershipDraft, showroomPoint: undefined })}
-                />
+                <div id="pos-coords">
+                  <PositionRow
+                    icon={<MapPin className="h-4 w-4" />}
+                    label={t('label_dealership_center') + ' *'}
+                    description={t('label_dealership_center_desc')}
+                    placed={!!dealershipDraft.coords}
+                    coords={dealershipDraft.coords}
+                    onPlace={() => fetchNui('adminPlaceDealershipPoint', { field: 'coords', draft: { ...dealershipDraft, lastField: 'coords' } })}
+                    onRemove={() => setDealershipDraft({ ...dealershipDraft, coords: undefined })}
+                  />
+                </div>
+                <div id="pos-spawnPoint">
+                  <PositionRow
+                    icon={<Car className="h-4 w-4" />}
+                    label={t('label_spawn_point')}
+                    description={t('label_spawn_point_desc')}
+                    placed={!!dealershipDraft.spawnPoint}
+                    coords={dealershipDraft.spawnPoint}
+                    onPlace={() => fetchNui('adminPlaceDealershipPoint', { field: 'spawnPoint', draft: { ...dealershipDraft, lastField: 'spawnPoint' } })}
+                    onRemove={() => setDealershipDraft({ ...dealershipDraft, spawnPoint: undefined })}
+                  />
+                </div>
+                <div id="pos-deliveryPoint">
+                  <PositionRow
+                    icon={<Truck className="h-4 w-4" />}
+                    label={t('label_delivery_point')}
+                    description={t('label_delivery_point_desc')}
+                    placed={!!dealershipDraft.deliveryPoint}
+                    coords={dealershipDraft.deliveryPoint}
+                    onPlace={() => fetchNui('adminPlaceDealershipPoint', { field: 'deliveryPoint', draft: { ...dealershipDraft, lastField: 'deliveryPoint' } })}
+                    onRemove={() => setDealershipDraft({ ...dealershipDraft, deliveryPoint: undefined })}
+                  />
+                </div>
+                <div id="pos-managementPoint">
+                  <PositionRow
+                    icon={<Briefcase className="h-4 w-4" />}
+                    label={t('label_management_point') + ' *'}
+                    description={t('label_owner_manager_access')}
+                    placed={!!dealershipDraft.managementPoint}
+                    coords={dealershipDraft.managementPoint}
+                    onPlace={() => fetchNui('adminPlaceDealershipPoint', { field: 'managementPoint', draft: { ...dealershipDraft, lastField: 'managementPoint' } })}
+                    onRemove={() => setDealershipDraft({ ...dealershipDraft, managementPoint: undefined })}
+                  />
+                </div>
+                <div id="pos-salesPoint">
+                  <PositionRow
+                    icon={<Handshake className="h-4 w-4" />}
+                    label={t('label_sales_point') + ' *'}
+                    description={t('label_view_vehicles_access')}
+                    placed={!!dealershipDraft.salesPoint}
+                    coords={dealershipDraft.salesPoint}
+                    onPlace={() => fetchNui('adminPlaceDealershipPoint', { field: 'salesPoint', draft: { ...dealershipDraft, lastField: 'salesPoint' } })}
+                    onRemove={() => setDealershipDraft({ ...dealershipDraft, salesPoint: undefined })}
+                  />
+                </div>
+                <div id="pos-showroomPoint">
+                  <PositionRow
+                    icon={<Store className="h-4 w-4" />}
+                    label={t('label_showroom_position') + ' *'}
+                    description={t('label_showroom_preview')}
+                    placed={!!dealershipDraft.showroomPoint}
+                    coords={dealershipDraft.showroomPoint}
+                    onPlace={() => fetchNui('adminPlaceDealershipPoint', { field: 'showroomPoint', draft: { ...dealershipDraft, lastField: 'showroomPoint' } })}
+                    onRemove={() => setDealershipDraft({ ...dealershipDraft, showroomPoint: undefined })}
+                  />
+                </div>
+                <div id="pos-displaySpot">
+                  <Card>
+                    <CardContent className="p-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-3">
+                          <div className="h-9 w-9 rounded-md bg-muted flex items-center justify-center">
+                            <ParkingSquare className="h-4 w-4 text-muted-foreground" />
+                          </div>
+                          <div>
+                            <p className="font-medium text-sm">{t('label_display_spots')}</p>
+                            <p className="text-xs text-muted-foreground">{t('admin_spots_placed', String(dealershipDraft.displaySpots?.length ?? 0))}</p>
+                          </div>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="gap-1"
+                          onClick={() => fetchNui('adminPlaceDealershipPoint', { field: 'displaySpot', draft: { ...dealershipDraft, lastField: 'displaySpot' } })}
+                        >
+                          <Plus className="h-3 w-3" /> {t('admin_add')}
+                        </Button>
+                      </div>
+                      {dealershipDraft.displaySpots && dealershipDraft.displaySpots.length > 0 && (
+                        <div className="space-y-1.5 mt-3">
+                          {dealershipDraft.displaySpots.map((spot, i) => (
+                            <div key={i} className="flex items-center justify-between bg-muted/50 rounded px-3 py-2">
+                              <span className="text-xs text-muted-foreground font-mono">
+                                {t('admin_spot')} #{i + 1}: {spot.x.toFixed(1)}, {spot.y.toFixed(1)}, {spot.z.toFixed(1)}
+                              </span>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-6 w-6 text-destructive"
+                                onClick={() => setDealershipDraft({
+                                  ...dealershipDraft,
+                                  displaySpots: dealershipDraft.displaySpots?.filter((_, idx) => idx !== i),
+                                })}
+                              >
+                                <Trash2 className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                </div>
+
+                <div id="pos-npcSpawnPoint">
+                  <Card>
+                    <CardContent className="p-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-3">
+                          <div className="h-9 w-9 rounded-md bg-muted flex items-center justify-center">
+                            <Users className="h-4 w-4 text-muted-foreground" />
+                          </div>
+                          <div>
+                            <p className="font-medium text-sm">{t('label_npc_spawn_points')}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {t('admin_npc_points_desc', String(dealershipDraft.npcSpawnPoints?.length ?? 0))}
+                            </p>
+                          </div>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="gap-1"
+                          onClick={() => fetchNui('adminPlaceDealershipPoint', { field: 'npcSpawnPoint', draft: { ...dealershipDraft, lastField: 'npcSpawnPoint' } })}
+                        >
+                          <Plus className="h-3 w-3" /> {t('admin_add')}
+                        </Button>
+                      </div>
+                      {dealershipDraft.npcSpawnPoints && dealershipDraft.npcSpawnPoints.length > 0 && (
+                        <div className="space-y-1.5 mt-3">
+                          {dealershipDraft.npcSpawnPoints.map((point, i) => (
+                            <div key={i} className="flex items-center justify-between bg-muted/50 rounded px-3 py-2">
+                              <span className="text-xs text-muted-foreground font-mono">
+                                #{i + 1}: {point.x.toFixed(1)}, {point.y.toFixed(1)}, {point.z.toFixed(1)}
+                              </span>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-6 w-6 text-destructive"
+                                onClick={() => setDealershipDraft({
+                                  ...dealershipDraft,
+                                  npcSpawnPoints: dealershipDraft.npcSpawnPoints?.filter((_, idx) => idx !== i),
+                                })}
+                              >
+                                <Trash2 className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                </div>
               </div>
             </div>
             <div className="flex gap-2 p-6 pt-4 border-t border-border bg-card">
-              <Button variant="outline" className="flex-1" onClick={() => setAction(null)}>{t('btn_cancel')}</Button>
+              <Button variant="outline" className="flex-1" onClick={attemptCloseCreate}>{t('btn_cancel')}</Button>
               <Button className="flex-1" onClick={handleAction} disabled={!dealershipDraft.name.trim() || !dealershipDraft.coords || !dealershipDraft.managementPoint || !dealershipDraft.salesPoint || !dealershipDraft.showroomPoint}>
                 <Plus className="h-4 w-4" /> {t('btn_create')}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* Discard-draft confirmation. Nested so it sits above the create dialog. */}
+        <Dialog open={discardConfirmOpen} onOpenChange={(open) => { if (!open) setDiscardConfirmOpen(false) }}>
+          <DialogContent onClose={() => setDiscardConfirmOpen(false)} className="max-w-sm">
+            <DialogHeader>
+              <DialogTitle>{t('admin_discard_draft_title')}</DialogTitle>
+              <DialogDescription>{t('admin_discard_draft_desc')}</DialogDescription>
+            </DialogHeader>
+            <div className="flex gap-2 pt-2">
+              <Button variant="outline" className="flex-1" onClick={() => setDiscardConfirmOpen(false)}>
+                {t('admin_keep_editing')}
+              </Button>
+              <Button variant="destructive" className="flex-1" onClick={closeCreateDialog}>
+                {t('admin_discard')}
               </Button>
             </div>
           </DialogContent>
@@ -1211,6 +1495,7 @@ export default function AdminPage({ data, onClose }: Props) {
           <SidebarButton active={tab === 'dealerships'} icon={<Building2 className="h-4 w-4" />} label={t('admin_dealerships')} onClick={() => setTab('dealerships')} />
           <SidebarButton active={tab === 'catalog'} icon={<BookOpen className="h-4 w-4" />} label={t('admin_vehicle_catalog')} onClick={() => setTab('catalog')} />
           <SidebarButton active={tab === 'depots'} icon={<MapPin className="h-4 w-4" />} label={t('admin_delivery_depots')} onClick={() => setTab('depots')} />
+          <SidebarButton active={tab === 'import'} icon={<Download className="h-4 w-4" />} label={t('admin_import')} onClick={() => setTab('import')} />
           {positionsDealership && (
             <>
               <Separator className="my-2" />

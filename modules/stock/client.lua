@@ -22,7 +22,7 @@ local function ParseSpot(spot)
 end
 
 --- Cleanup ghost vehicles
-local function DeleteGhostVehicles()
+function DeleteGhostVehicles()
     for _, data in ipairs(ghostVehicles) do
         if data.entity and DoesEntityExist(data.entity) then
             DeleteEntity(data.entity)
@@ -276,7 +276,8 @@ local function SpawnDisplayVehicles(locationKey)
     for _, item in ipairs(stock) do
         local isDelivered = item.delivered_at and item.delivered_at ~= "" and not item.sold_at
         local isUnlisted = item.unlisted == 1 or item.unlisted == true
-        if item.display_spot and isDelivered and not isUnlisted then
+        local isAtAuction = item.auction_id ~= nil and item.auction_id ~= json.null
+        if item.display_spot and isDelivered and not isUnlisted and not isAtAuction then
             local spotId = tonumber(item.display_spot)
             local spot
             for _, s in ipairs(cfg.displaySpots) do
@@ -689,18 +690,27 @@ local function StartTradeIn(vehicle)
     local retailPrice = tonumber(input[2])
     if not buyPrice or not retailPrice then return end
 
+    -- Hand the server a network id so it can delete the vehicle even if this
+    -- client (the manager running the target) doesn't own the entity.
+    -- Client-only DeleteEntity silently no-ops on non-owned networked vehicles,
+    -- which is why traded-in cars kept lingering on the street.
+    local netId = NetworkGetNetworkIdFromEntity(vehicle)
+
     local ok, err = lib.callback.await('pickle_dealerships:tradeInVehicle', false, currentDealership, {
         plate = plate,
         properties = properties,
         buyPrice = buyPrice,
         retailPrice = retailPrice,
+        netId = netId,
     })
     if not ok then
         ShowNotification(err or _L('trade_in_failed'))
         return
     end
 
-    -- Despawn the world vehicle now that it's in the lot
+    -- Server handles the authoritative delete (see tradeInVehicle). Local
+    -- follow-up is belt-and-suspenders for the case where this client has
+    -- control and the server-side delete didn't reach us yet.
     if DoesEntityExist(vehicle) then
         SetEntityAsMissionEntity(vehicle, true, true)
         DeleteEntity(vehicle)
@@ -769,19 +779,23 @@ local function StartSeize(vehicle)
     })
     if confirm ~= 'confirm' then return end
 
+    local netId = NetworkGetNetworkIdFromEntity(vehicle)
+
     local ok, err = lib.callback.await('pickle_dealerships:seizeVehicle', false, {
         dealershipId = targetDealership.id,
         plate = plate,
         properties = properties,
         modelName = modelName,
         label = displayLabel,
+        netId = netId,
     })
     if not ok then
         ShowNotification(err or _L('seize_failed'))
         return
     end
 
-    -- Despawn the world vehicle
+    -- Server handles the authoritative delete. Local delete is belt-and-
+    -- suspenders — silently no-ops if we don't own the networked entity.
     if DoesEntityExist(vehicle) then
         SetEntityAsMissionEntity(vehicle, true, true)
         DeleteEntity(vehicle)

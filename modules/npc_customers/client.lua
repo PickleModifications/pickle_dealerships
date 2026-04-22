@@ -5,6 +5,10 @@ local isOnDuty = false
 local currentDealershipId = nil
 local currentLocationKey = nil
 local currentDealershipName = nil
+-- Kept as a module-local so the spawn loop and refresh event read the same
+-- (mutable) reference. Updating this swaps in freshly-added NPC spawn points
+-- without tearing down the running session.
+local currentDealershipConfig = nil
 local npcCam = nil
 
 -- NPC Showroom state
@@ -155,7 +159,7 @@ local function CleanupNPC(npcData)
 end
 
 --- Clean up all active NPCs
-local function CleanupAllNPCs()
+function CleanupAllNPCs()
     for i = #activeNPCs, 1, -1 do
         CleanupNPC(activeNPCs[i])
         table.remove(activeNPCs, i)
@@ -198,8 +202,12 @@ local function FindNPCByEntity(entity)
     return nil
 end
 
---- Spawn an NPC customer at the dealership
-local function SpawnNPCCustomer(dealershipId, dealershipConfig)
+--- Spawn an NPC customer at the dealership. Reads the spawn-point list off
+--- `currentDealershipConfig` (module-local) so that newly added points picked
+--- up mid-session take effect without the spawn loop having to be restarted.
+local function SpawnNPCCustomer(dealershipId)
+    local dealershipConfig = currentDealershipConfig
+    if not dealershipConfig then return end
     local profile = lib.callback.await("pickle_dealerships:generateNPCCustomer", false, dealershipId)
     if not profile then return end
 
@@ -242,7 +250,21 @@ local function SpawnNPCCustomer(dealershipId, dealershipConfig)
         model = "a_m_y_business_01"
     end
 
-    local ped = CreateNPC(model, spawnPoint.x, spawnPoint.y, spawnPoint.z, spawnPoint.w or 0.0)
+    -- Offset the actual spawn 2.0m behind the configured point (along the reverse
+    -- of the point's heading) so the NPC materialises off to the side and then
+    -- walks IN to the intended stand spot. Spawning exactly on the target point
+    -- makes the ped shuffle/rotate to avoid clipping and looks like the classic
+    -- "walk around in circles" bug.
+    local headingDeg = spawnPoint.w or 0.0
+    local headingRad = math.rad(headingDeg)
+    local fwdX = -math.sin(headingRad)
+    local fwdY =  math.cos(headingRad)
+    local SPAWN_OFFSET = 2.0
+    local spawnX = spawnPoint.x - fwdX * SPAWN_OFFSET
+    local spawnY = spawnPoint.y - fwdY * SPAWN_OFFSET
+    local spawnZ = spawnPoint.z
+
+    local ped = CreateNPC(model, spawnX, spawnY, spawnZ, headingDeg)
     if not ped then return end
 
     SetBlockingOfNonTemporaryEvents(ped, true)
@@ -250,11 +272,14 @@ local function SpawnNPCCustomer(dealershipId, dealershipConfig)
     SetPedCombatAttributes(ped, 46, true)
     FreezeEntityPosition(ped, false)
 
-    local waitingAreas = dealershipConfig.npcWaitingArea or dealershipConfig.npcSpawnPoints
-    if waitingAreas and #waitingAreas > 0 then
-        local dest = waitingAreas[math.random(#waitingAreas)]
-        TaskGoStraightToCoord(ped, dest.x, dest.y, dest.z, 1.0, -1, 0.0, 0.0)
-    end
+    -- Walk the NPC to the configured stand point first (the "destination" for
+    -- this spawn). If the dealership also defines a wider waiting area we use
+    -- that; otherwise we use the stand point itself.
+    local waitingAreas = dealershipConfig.npcWaitingArea
+    local dest = waitingAreas and #waitingAreas > 0
+        and waitingAreas[math.random(#waitingAreas)]
+        or spawnPoint
+    TaskGoStraightToCoord(ped, dest.x, dest.y, dest.z, 1.0, -1, headingDeg, 0.5)
 
     local pedCoords = GetEntityCoords(ped)
     local interactionId = CreateInteraction({
@@ -327,7 +352,7 @@ local function SpawnNPCCustomer(dealershipId, dealershipConfig)
 end
 
 --- NPC spawning thread
-local function StartNPCSpawnLoop(dealershipId, dealershipConfig)
+local function StartNPCSpawnLoop(dealershipId)
     CreateThread(function()
         while isOnDuty and currentDealershipId == dealershipId do
             local spawnInterval = Config.NPCCustomers.spawnInterval or {}
@@ -339,18 +364,48 @@ local function StartNPCSpawnLoop(dealershipId, dealershipConfig)
 
             local maxConcurrent = Config.NPCCustomers.maxConcurrent or 3
             if #activeNPCs < maxConcurrent then
-                SpawnNPCCustomer(dealershipId, dealershipConfig)
+                SpawnNPCCustomer(dealershipId)
             end
         end
     end)
 end
 
 RegisterNetEvent("pickle_dealerships:npc:startDuty", function(dealershipId, dealershipConfig)
+    -- Already on duty at the same dealership? Treat this as a config refresh
+    -- (e.g. admin placed a new spawn point). Swap the config and try an
+    -- immediate spawn if the shop currently has none — previously there may
+    -- have been no valid spawn point so nothing could land.
+    if isOnDuty and currentDealershipId == dealershipId then
+        currentDealershipConfig = dealershipConfig
+        currentLocationKey = dealershipConfig.location
+        currentDealershipName = dealershipConfig.dealershipName or currentDealershipName
+        local maxConcurrent = Config.NPCCustomers.maxConcurrent or 3
+        if #activeNPCs < maxConcurrent then
+            SpawnNPCCustomer(dealershipId)
+        end
+        return
+    end
+
     isOnDuty = true
     currentDealershipId = dealershipId
     currentLocationKey = dealershipConfig.location
     currentDealershipName = dealershipConfig.dealershipName or 'Dealership'
-    StartNPCSpawnLoop(dealershipId, dealershipConfig)
+    currentDealershipConfig = dealershipConfig
+    StartNPCSpawnLoop(dealershipId)
+end)
+
+-- Stock arrived / display changed at this dealership. If we're on duty here
+-- and there are no active NPCs, try an immediate spawn — previously the loop
+-- may have skipped spawns because the shop had no eligible stock, and we
+-- don't want the employee to wait a full interval to see customers show up
+-- again now that inventory is available.
+RegisterNetEvent('pickle_dealerships:refreshDisplay', function(locationKey)
+    if not isOnDuty or not currentDealershipId then return end
+    if locationKey and locationKey ~= currentLocationKey then return end
+    local maxConcurrent = Config.NPCCustomers.maxConcurrent or 3
+    if #activeNPCs < maxConcurrent then
+        SpawnNPCCustomer(currentDealershipId)
+    end
 end)
 
 RegisterNetEvent("pickle_dealerships:npc:stopDuty", function()
@@ -358,6 +413,7 @@ RegisterNetEvent("pickle_dealerships:npc:stopDuty", function()
     currentDealershipId = nil
     currentLocationKey = nil
     currentDealershipName = nil
+    currentDealershipConfig = nil
     CleanupAllNPCs()
 end)
 
@@ -397,9 +453,9 @@ RegisterNUICallback("npcStartShowroom", function(_, cb)
 
     StopNPCCamera()
 
-    -- Hide and freeze player
+    -- Freeze the player in place so the orbit cam has a stable anchor; the
+    -- player model stays visible during every interaction on purpose.
     FreezeEntityPosition(playerPed, true)
-    SetEntityVisible(playerPed, false, false)
 
     -- Teleport NPC next to showroom position (offset to the side)
     local npcOffset = vector3(spawnCoords.x + 2.0, spawnCoords.y + 1.0, spawnCoords.z)
@@ -527,6 +583,7 @@ RegisterNUICallback("npcEvaluateOffer", function(data, cb)
         npcProfile    = currentNPCInteraction.profile,
         offerPrice    = data.offerPrice,
         currentStress = data.currentStress,
+        stockId       = data.stockId,
     })
 
     if result then
@@ -662,8 +719,21 @@ RegisterNUICallback("completeNPCSale", function(data, cb)
                         SetEntityVelocity(driveVeh, -math.sin(rad) * 50.0, math.cos(rad) * 50.0, 10.0)
                     end
                 else
-                    Wait(6000)
+                    -- Poll until the NPC is actually seated, then drive off immediately.
+                    -- Previously this was a fixed 6s wait — if they got in faster
+                    -- they'd sit idle in the driver seat for the remainder.
+                    local deadline = GetGameTimer() + 10000
+                    while GetGameTimer() < deadline do
+                        if not DoesEntityExist(driveVeh) or not DoesEntityExist(npcPed) then return end
+                        if GetPedInVehicleSeat(driveVeh, -1) == npcPed then break end
+                        Wait(100)
+                    end
+                    -- Small settle delay so the enter-vehicle anim finishes cleanly
+                    -- before we hand the ped a drive task — otherwise you can see
+                    -- them pulling away mid-close-door.
+                    Wait(1000)
                     if DoesEntityExist(driveVeh) and DoesEntityExist(npcPed) then
+                        SetVehicleEngineOn(driveVeh, true, true, false)
                         TaskVehicleDriveWander(npcPed, driveVeh, 20.0, 786603)
                     end
                 end

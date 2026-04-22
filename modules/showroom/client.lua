@@ -151,7 +151,7 @@ end
 
 --- Clean up the showroom and restore player state
 --- If skipFadeIn is true, the screen stays faded out (caller handles fade-in)
-local function CleanupShowroom(skipFadeIn)
+function CleanupShowroom(skipFadeIn)
     if not ShowroomState then return end
 
     local locationKey = ShowroomState.locationKey
@@ -246,9 +246,9 @@ function StartShowroom(locationKey, dealershipData)
     DoScreenFadeOut(500)
     while not IsScreenFadedOut() do Wait(0) end
 
-    -- Freeze and hide player
+    -- Freeze the player in place (kept visible — the player stays on-screen
+    -- during every interaction).
     FreezeEntityPosition(ped, true)
-    SetEntityVisible(ped, false, false)
     DisplayRadar(false)
     DisplayHud(false)
 
@@ -382,7 +382,6 @@ RegisterNetEvent('pickle_dealerships:openSpotPicker', function(locationKey, spot
     while not IsScreenFadedOut() do Wait(0) end
 
     FreezeEntityPosition(ped, true)
-    SetEntityVisible(ped, false, false)
     DisplayRadar(false)
     DisplayHud(false)
 

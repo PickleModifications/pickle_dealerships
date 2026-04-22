@@ -7,11 +7,12 @@ Config.UseTarget = true
 Config.Currency = { currency = "USD", countryCode = "en-US" }
 Config.ImageDirectory = "nui://ox_inventory/web/images/"
 Config.ImageExtension = "png"
-Config.XPEnabled = false
+
+Config.AdminCommand = "dealerships" -- Command to open the admin panel
 
 -- UI Settings
 Config.UI = {
-    accentColor = "FF1CA717", -- Hex color for accent/primary UI elements (default: rose)
+    accentColor = "FF1CA717", -- Hex color for accent/primary UI elements
 }
 Config.IdentifierPrefix = "license2"
 
@@ -62,10 +63,17 @@ Config.DealershipProgression = {
 --   item          — inventory item name (type = 'item' only)
 Config.AltCurrencies = {
     pickle_store = {
-        enabled      = false,
+        enabled      = true,
         label        = "Store Coins",
         type         = "pickle_store",
-        valuePerUnit = 1,
+        valuePerUnit = 1000,
+        -- Optional: show an icon next to the amount instead of a "$". Use a
+        -- server-reachable URL (NUI can fetch cross-origin images).
+        iconUrl      = "nui://pickle_store/nui/images/diamonds.png",
+        -- How the amount is spoken in the UI. "%s" is substituted with the
+        -- numeric native amount. Leave both unset to fall back to `label`.
+        singular     = "%s coin",
+        plural       = "%s coins",
     },
     -- Example item currency — duplicate and adjust per server.
     -- crypto = {
@@ -74,6 +82,9 @@ Config.AltCurrencies = {
     --     type         = "item",
     --     item         = "cryptostick",
     --     valuePerUnit = 1000,
+    --     iconUrl      = "https://example.com/crypto.png",
+    --     singular     = "%s crypto",
+    --     plural       = "%s crypto",
     -- },
 }
 
@@ -95,12 +106,12 @@ Config.DefaultCommission = 0.08
 Config.SellbackRate = 0.60
 
 -- Delivery Settings
-Config.DeliveryTime = 0.1 -- Minutes per vehicle for expedited (timed) delivery mode
+Config.DeliveryTime = 1 -- Minutes per vehicle for expedited (timed) delivery mode
 
 -- Gameplay delivery system
 Config.Delivery = {
-    expeditedFeePct = 0.15,              -- surcharge on wholesale for Expedited mode — makes local strictly cheaper
-    payoutPct = 0.10,                    -- driver earns this % of retail (paid from within the dealership's wholesale+tax total, not on top)
+    expeditedFeePct = 0.05,              -- surcharge on wholesale for Expedited mode — makes local strictly cheaper
+    payoutPct = 0.05,                    -- driver earns this % of retail (paid from within the dealership's wholesale+tax total, not on top)
     failRefundRate = 0.5,                -- % of wholesale returned to the dealership on failed delivery
     xpPerDelivery = 25,                  -- base XP per successful local delivery
     xpTierMultiplier = {                 -- scales XP by catalog tier of the delivered vehicle
@@ -196,6 +207,30 @@ Config.Trailer = {
         { x = -0.04, y =  0.05, z = 2.94, rotX = -3.49, rotY = -0.19, rotZ = -0.11 }, -- 5: upper-middle (centerline gap)
         { x = -0.00, y = -4.80, z = 3.04, rotX =  1.36, rotY = -0.11, rotZ =  0.26 }, -- 6: upper-front
     },
+}
+
+-- Vehicle Keys Integration
+-- Fires when a player obtains a vehicle (purchase, financing, auction claim,
+-- employee-facilitated sale, test drive, delivery truck). Each entry is
+-- dispatched with the vehicle plate as its single argument.
+--
+--   scope = 'client'  → TriggerEvent(name, plate)
+--   scope = 'server'  → TriggerServerEvent(name, plate)
+--
+-- Safe to list multiple systems side-by-side; the one that's actually running
+-- picks it up and the rest no-op. For anything the defaults don't cover, set
+-- `customHandler = function(veh, plate) ... end` — if present, the default
+-- event list is skipped and your handler runs instead. You can also replace
+-- bridge/vehicle_keys/default/client.lua with your own bridge file to swap
+-- out the whole implementation.
+Config.VehicleKeys = {
+    enabled = true,
+    events = {
+        { name = 'vehiclekeys:client:SetOwner',               scope = 'client' }, -- qb-vehiclekeys / qbx_vehiclekeys
+        { name = 'qb-vehiclekeys:server:AcquireVehicleKeys',  scope = 'server' }, -- qb-vehiclekeys
+        { name = 'vehiclekeys:server:setVehicleOwner',        scope = 'server' }, -- cd_garage / Renewed-Vehiclekeys
+    },
+    customHandler = nil, -- function(veh, plate) ... end
 }
 
 -- Test Drive Settings
@@ -329,7 +364,11 @@ Config.NPCCustomers = {
     xpPerSale = 15,
     reputationPerSale = 1,
     walkAwayPenalty = -1,
-    npcSaleMultiplier = 0.75,
+    -- Every NPC-accepted offer must leave the dealership with at least this
+    -- much profit after commission. The evaluator rejects below-floor offers
+    -- during negotiation, and completeNPCSale re-checks server-side so the
+    -- dealership can never be forced to sell at a loss. 0.05 = 5%.
+    minProfitMargin = 0.05,
 
     tierBudgetMultiplier = {
         [1] = 1.0,
@@ -467,20 +506,9 @@ Config.NPCCustomers = {
     },
 }
 
--- Webhook Configuration
-Config.Webhooks = {
-    enabled = false,
-    url = "",
-    botName = "Dealership Logs",
-    events = {
-        sales = true,
-        stock_orders = true,
-        ownership_changes = true,
-        large_withdrawals = true,
-        employee_changes = true,
-    },
-    largeWithdrawalThreshold = 100000,
-}
+-- Discord webhooks are configured server-side only. See config_sv.lua →
+-- ServerConfig.Webhooks. Webhook URLs are deliberately never replicated to
+-- clients to prevent abuse if a player dumps the shared config.
 
 -- Photo Booth (vehicle catalog photography)
 -- Multiple locations can be defined; each can restrict which vehicle classes use it.
@@ -515,7 +543,7 @@ Config.PhotoBooth = {
 
 -- Auction system — all durations in minutes. Escrow on bid, anti-snipe on late bids.
 Config.Auction = {
-    durations = { 3, 5, 10, 15, 30 },  -- minute presets shown in the list-for-auction dialog
+    durations = { 1, 3, 5, 10, 15 },  -- minute presets shown in the list-for-auction dialog
     defaultDuration = 10,               -- minutes
     antiSnipeSeconds = 30,              -- bids within this window of end push end_at forward by same amount
     minIncrementFloor = 50,             -- seller-chosen min_increment may not be below this

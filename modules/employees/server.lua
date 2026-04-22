@@ -115,6 +115,19 @@ lib.callback.register("pickle_dealerships:hireEmployee", function(source, data)
     local charName = GetPlayerCharacterName(targetId)
     AddLedgerEntry(dealershipId, "employee_hire", 0, ("Hired %s as %s"):format(charName, gradeLabel), GetIdentifier(targetId))
 
+    LogDiscord("employees", {
+        title = "Employee Hired",
+        actor = source,
+        dealershipId = dealershipId,
+        fields = {
+            { name = "Dealership", value = dealership.name or "?", inline = true },
+            { name = "New Hire", value = tostring(charName or "?"), inline = true },
+            { name = "Identifier", value = "`" .. tostring(GetIdentifier(targetId) or "?") .. "`", inline = true },
+            { name = "Faction", value = tostring(faction.name or "?"), inline = true },
+            { name = "Grade", value = ("%s (%d)"):format(gradeLabel or "?", grade), inline = true },
+        },
+    })
+
     -- The target's framework will already emit its own "you've been assigned X" notification
     -- when SetPlayerFaction runs; skip ours to avoid the duplicate toast on the new hire.
 
@@ -188,6 +201,19 @@ lib.callback.register("pickle_dealerships:fireEmployee", function(source, data)
     end
 
     AddLedgerEntry(dealershipId, "employee_fire", 0, ("Fired %s"):format(charName), effectiveIdentifier)
+
+    LogDiscord("employees", {
+        title = "Employee Fired",
+        actor = source,
+        dealershipId = dealershipId,
+        fields = {
+            { name = "Dealership", value = dealership.name or "?", inline = true },
+            { name = "Fired", value = tostring(charName or "?"), inline = true },
+            { name = "Identifier", value = "`" .. tostring(effectiveIdentifier or "?") .. "`", inline = true },
+            { name = "Online", value = targetServerId and "yes" or "no", inline = true },
+        },
+    })
+
     -- Framework notifies online targets via its own job-change flow; skip our duplicate toast.
 
     return { success = true, message = _L("employee_fired_success", charName) }
@@ -318,107 +344,100 @@ lib.callback.register("pickle_dealerships:setEmployeeCommissionOverride", functi
     return { success = true }
 end)
 
--- ─── Clock In/Out ──────────────────────────────────────────────────────────
+-- ─── Auto-Duty (zone-based) ────────────────────────────────────────────────
+-- Fires when a player's dealership-zone presence changes. Eligible players
+-- (admin / owner / matching faction / DB-listed employee) start NPC customer
+-- spawning automatically. Non-eligible players silently no-op.
+RegisterNetEvent("pickle_dealerships:employeeZoneTransition", function(dealershipId, entered)
+    local src = source
+    dealershipId = tonumber(dealershipId)
+    if not dealershipId or not src then return end
 
-lib.callback.register("pickle_dealerships:clockIn", function(source, data)
-    local dealershipId = tonumber(data.dealershipId)
-    if not dealershipId then return { success = false } end
+    if not entered then
+        if OnDutyEmployees[src] and OnDutyEmployees[src].dealershipId == dealershipId then
+            OnDutyEmployees[src] = nil
+            TriggerClientEvent("pickle_dealerships:npc:stopDuty", src)
+        end
+        return
+    end
 
     local dealership = GetDealership(dealershipId)
-    if not dealership then
-        return { success = false, message = _L("dealership_not_found") }
-    end
+    if not dealership then return end
 
-    -- Allow admins, owners, and employees with matching job to clock in
-    local canClockIn = false
-    if IsPlayerAdmin(source) then
-        canClockIn = true
-    elseif dealership.owner_identifier and dealership.owner_identifier == GetIdentifier(source) then
-        canClockIn = true
+    local eligible = false
+    if IsPlayerAdmin(src) then
+        eligible = true
+    elseif dealership.owner_identifier and dealership.owner_identifier == GetIdentifier(src) then
+        eligible = true
     elseif dealership.job then
         local faction = GetDealershipFaction(dealership)
-        local playerFaction = PlayerFactionName(source, faction)
-        if playerFaction == faction.name then
-            canClockIn = true
-        end
+        if PlayerFactionName(src, faction) == faction.name then eligible = true end
     else
-        -- No job set — check if they're an employee in the DB
-        local identifier = GetIdentifier(source)
+        local identifier = GetIdentifier(src)
         local emp = MySQL.single.await("SELECT id FROM pickle_dealership_employees WHERE dealership_id = ? AND identifier = ? LIMIT 1", { dealershipId, identifier })
-        if emp then canClockIn = true end
+        if emp then eligible = true end
     end
 
-    if not canClockIn then
-        print(("[ClockIn] DENIED source=%s dealershipId=%s job=%s playerJob=%s"):format(
-            tostring(source), tostring(dealershipId), tostring(dealership.job), tostring(GetPlayerJobName(source))
-        ))
-        return { success = false, message = _L("employee_not_work_here") }
-    end
+    if not eligible then return end
 
-    local src = tonumber(source)
-    print(("[ClockIn] GRANTED source=%s dealershipId=%s"):format(tostring(src), tostring(dealershipId)))
-
-    -- If already on duty at another dealership, clock out first
-    if OnDutyEmployees[src] then
+    -- If already on duty elsewhere (player walked directly from one zone to another),
+    -- tear the old session down before starting the new one.
+    if OnDutyEmployees[src] and OnDutyEmployees[src].dealershipId ~= dealershipId then
         TriggerClientEvent("pickle_dealerships:npc:stopDuty", src)
     end
 
     OnDutyEmployees[src] = {
-        identifier = GetIdentifier(source),
+        identifier = GetIdentifier(src),
         dealershipId = dealershipId,
-        name = GetPlayerCharacterName(source),
+        name = GetPlayerCharacterName(src),
         clockedInAt = os.time(),
     }
 
-    -- Start NPC customer spawning for this employee
-    if Config.NPCCustomers and Config.NPCCustomers.enabled then
-        local meta = dealership.metadata
-        if type(meta) == "string" then meta = json.decode(meta) or {} end
-        if type(meta) ~= "table" then meta = {} end
+    PushNpcDutyConfig(src, dealership)
+end)
 
-        local npcSpawnPoints = {}
-        if meta.npcSpawnPoints then
-            for _, p in ipairs(meta.npcSpawnPoints) do
-                npcSpawnPoints[#npcSpawnPoints + 1] = vector4(p.x, p.y, p.z, p.w or 0.0)
-            end
-        elseif meta.coords then
-            -- Fallback: spawn near the dealership center
-            npcSpawnPoints[1] = vector4(meta.coords.x + 3.0, meta.coords.y + 3.0, meta.coords.z, meta.coords.w or 0.0)
+--- Serialize a dealership's NPC config and push it to a specific client. Used
+--- both on initial duty start and when admins add a spawn point mid-session —
+--- in the latter case the client side treats it as a refresh (no duplicate
+--- spawn loop) and nudges an immediate spawn if there are none active.
+function PushNpcDutyConfig(src, dealership)
+    if not Config.NPCCustomers or not Config.NPCCustomers.enabled then return end
+    if not src or not dealership then return end
+
+    local meta = dealership.metadata
+    if type(meta) == "string" then meta = json.decode(meta) or {} end
+    if type(meta) ~= "table" then meta = {} end
+
+    local npcSpawnPoints = {}
+    if meta.npcSpawnPoints then
+        for _, p in ipairs(meta.npcSpawnPoints) do
+            npcSpawnPoints[#npcSpawnPoints + 1] = vector4(p.x, p.y, p.z, p.w or 0.0)
         end
-
-        TriggerClientEvent("pickle_dealerships:npc:startDuty", source, dealershipId, {
-            npcSpawnPoints = npcSpawnPoints,
-            location = dealership.location,
-            dealershipName = dealership.name or 'Dealership',
-        })
+    elseif meta.coords then
+        npcSpawnPoints[1] = vector4(meta.coords.x + 3.0, meta.coords.y + 3.0, meta.coords.z, meta.coords.w or 0.0)
     end
 
-    return { success = true, message = _L("employee_on_duty") }
-end)
+    TriggerClientEvent("pickle_dealerships:npc:startDuty", src, dealership.id, {
+        npcSpawnPoints = npcSpawnPoints,
+        location = dealership.location,
+        dealershipName = dealership.name or 'Dealership',
+    })
+end
 
-lib.callback.register("pickle_dealerships:getClockStatus", function(source, data)
-    local src = tonumber(source)
-    local dealershipId = tonumber(data.dealershipId)
-    print(("[ClockStatus] src=%s, dealershipId=%s, OnDutyEmployees[src]=%s"):format(
-        tostring(src), tostring(dealershipId),
-        src and OnDutyEmployees[src] and json.encode(OnDutyEmployees[src]) or "nil"
-    ))
-    if not dealershipId or not src then return { clockedIn = false } end
-    local duty = OnDutyEmployees[src]
-    local result = duty ~= nil and duty.dealershipId == dealershipId
-    print(("[ClockStatus] result=%s"):format(tostring(result)))
-    return { clockedIn = result }
-end)
-
-lib.callback.register("pickle_dealerships:clockOut", function(source, data)
-    local src = tonumber(source)
-    if src and OnDutyEmployees[src] then
-        OnDutyEmployees[src] = nil
-        TriggerClientEvent("pickle_dealerships:npc:stopDuty", src)
-        return { success = true, message = _L("employee_off_duty") }
+--- Re-push the NPC config to every employee currently on duty at a dealership.
+--- Called after metadata changes (spawn point added/removed) so running spawn
+--- loops don't keep using a stale closure of the old point list.
+function RefreshNpcDutyForDealership(dealershipId)
+    dealershipId = tonumber(dealershipId)
+    if not dealershipId then return end
+    local dealership = GetDealership(dealershipId)
+    if not dealership then return end
+    for src, duty in pairs(OnDutyEmployees) do
+        if duty.dealershipId == dealershipId then
+            PushNpcDutyConfig(src, dealership)
+        end
     end
-    return { success = false, message = _L("employee_not_on_duty") }
-end)
+end
 
 -- Clean up on player disconnect
 AddEventHandler('playerDropped', function()

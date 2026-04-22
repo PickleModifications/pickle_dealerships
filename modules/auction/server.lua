@@ -42,11 +42,19 @@ local function UnlockStock(stockId)
     MySQL.update.await("UPDATE `pickle_dealership_stock` SET `auction_id` = NULL WHERE `id` = ?", { tonumber(stockId) })
 end
 
-local function RefundBidder(identifier, amount, note)
+local function RefundBidder(identifier, amount, note, method)
     if not identifier or not amount or amount <= 0 then return end
+    -- Refund in whatever the bidder paid with. Bank is the safe default for
+    -- legacy rows that predate payment_method tracking and for offline bidders
+    -- (always refund to bank so the money can't be lost in a closed cash
+    -- inventory). NOTE: the framework bridge's AddMoney/RemoveMoney expect
+    -- the currency code "money" for cash (not "cash") — passing "cash" falls
+    -- through the bridge's if/elseif chain and silently does nothing, which
+    -- is exactly how cash refunds were being lost.
+    local currency = method == 'cash' and 'money' or 'bank'
     local src = GetSourceFromIdentifier(identifier)
     if src then
-        AddMoney(src, amount, 'bank')
+        AddMoney(src, amount, currency)
         TriggerClientEvent('pickle_dealerships:notify', src, (note or 'Bid refunded') .. ': $' .. amount)
     else
         -- Offline: mark an unrefunded row so the escrow is still tracked; next pickup-on-connect handler can sweep.
@@ -108,7 +116,17 @@ lib.callback.register("pickle_dealerships:createAuction", function(source, data)
     )
     if not id then return false, "Failed to create auction." end
 
-    MySQL.update.await("UPDATE `pickle_dealership_stock` SET `auction_id` = ?, `unlisted` = 0 WHERE `id` = ?", { id, stockId })
+    -- Also clear display_spot so the car is physically taken off the lot for
+    -- the duration of the auction; nobody should be able to walk up and buy
+    -- a vehicle that's currently being auctioned.
+    MySQL.update.await(
+        "UPDATE `pickle_dealership_stock` SET `auction_id` = ?, `unlisted` = 0, `display_spot` = NULL WHERE `id` = ?",
+        { id, stockId }
+    )
+    local dealership = GetDealership(stock.dealership_id)
+    if dealership and dealership.location then
+        TriggerClientEvent('pickle_dealerships:refreshDisplay', -1, dealership.location)
+    end
 
     BroadcastAuctionUpdate(id)
     return true, id
@@ -137,23 +155,36 @@ lib.callback.register("pickle_dealerships:placeBid", function(source, data)
     local isBuyout = auction.buyout_price and amount >= tonumber(auction.buyout_price) or false
     if isBuyout then amount = tonumber(auction.buyout_price) end
 
-    -- Escrow: pull from bank
-    local removed = RemoveMoney(source, amount, 'bank')
-    if not removed then return false, "Insufficient bank balance." end
+    -- Resolve payment method. Default to bank to match legacy behaviour.
+    local paymentMethod = data.paymentMethod == 'cash' and 'cash' or 'bank'
+    local currency = paymentMethod == 'cash' and 'money' or 'bank'
 
-    -- Refund previous top bidder, mark their row refunded
+    -- Pre-check balance so we never leave a bidder at a negative balance. The
+    -- framework's RemoveMoney does not consistently reject overdrafts (qbx
+    -- returns true on insufficient funds depending on config), so gating here
+    -- is the only reliable check.
+    local playerBalance = tonumber(GetMoney(source, currency)) or 0
+    if playerBalance < amount then
+        return false, ("Insufficient %s balance."):format(paymentMethod)
+    end
+
+    -- Escrow: pull from the chosen tender
+    local removed = RemoveMoney(source, amount, currency)
+    if not removed then return false, ("Insufficient %s balance."):format(paymentMethod) end
+
+    -- Refund previous top bidder in whatever method they paid with
     if auction.current_bidder and auction.current_bid and auction.current_bid > 0 then
         MySQL.update.await(
             "UPDATE `pickle_dealership_auction_bids` SET `refunded` = 1 WHERE `auction_id` = ? AND `bidder_identifier` = ? AND `refunded` = 0",
             { auctionId, auction.current_bidder }
         )
-        RefundBidder(auction.current_bidder, tonumber(auction.current_bid), 'Outbid')
+        RefundBidder(auction.current_bidder, tonumber(auction.current_bid), 'Outbid', auction.current_payment_method)
     end
 
     -- Insert bid + update auction
     MySQL.insert.await(
-        "INSERT INTO `pickle_dealership_auction_bids` (auction_id, bidder_identifier, amount) VALUES (?, ?, ?)",
-        { auctionId, identifier, amount }
+        "INSERT INTO `pickle_dealership_auction_bids` (auction_id, bidder_identifier, amount, payment_method) VALUES (?, ?, ?, ?)",
+        { auctionId, identifier, amount, paymentMethod }
     )
 
     -- First bid starts the timer; subsequent bids may extend via anti-snipe
@@ -181,8 +212,8 @@ lib.callback.register("pickle_dealerships:placeBid", function(source, data)
     end
 
     MySQL.update.await(
-        "UPDATE `pickle_dealership_auctions` SET `current_bid` = ?, `current_bidder` = ? WHERE `id` = ?",
-        { amount, identifier, auctionId }
+        "UPDATE `pickle_dealership_auctions` SET `current_bid` = ?, `current_bidder` = ?, `current_payment_method` = ? WHERE `id` = ?",
+        { amount, identifier, paymentMethod, auctionId }
     )
 
     -- Buyout finalizes the auction immediately
@@ -369,7 +400,7 @@ local function FinalizeAuction(row)
                 "UPDATE `pickle_dealership_auction_bids` SET `refunded` = 1 WHERE `auction_id` = ? AND `bidder_identifier` = ? AND `refunded` = 0",
                 { auctionId, row.current_bidder }
             )
-            RefundBidder(row.current_bidder, tonumber(row.current_bid), 'Reserve not met')
+            RefundBidder(row.current_bidder, tonumber(row.current_bid), 'Reserve not met', row.current_payment_method)
         end
         MySQL.update.await(
             "UPDATE `pickle_dealership_auctions` SET `status` = 'no_sale', `ended_at` = NOW() WHERE `id` = ?",

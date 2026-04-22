@@ -456,6 +456,18 @@ CreateThread(function()
                     RemoveOwnedVehicle(financing.identifier, financing.vehicle_plate)
                     AddLedgerEntry(financing.dealership_id, "repossession", 0, ("Vehicle repossessed: plate %s after %d missed payments"):format(financing.vehicle_plate, newMissed), financing.identifier)
 
+                    LogDiscord("financing", {
+                        title = "Vehicle Repossessed",
+                        dealershipId = financing.dealership_id,
+                        fields = {
+                            { name = "Identifier", value = "`" .. tostring(financing.identifier) .. "`", inline = true },
+                            { name = "Plate", value = "`" .. tostring(financing.vehicle_plate) .. "`", inline = true },
+                            { name = "Missed Payments", value = tostring(newMissed), inline = true },
+                            { name = "Total", value = GetCurrencyString(tonumber(financing.total_amount) or 0), inline = true },
+                            { name = "Paid", value = GetCurrencyString(tonumber(financing.amount_paid) or 0), inline = true },
+                        },
+                    })
+
                     local playerSource = GetSourceFromIdentifier(financing.identifier)
                     if playerSource then
                         TriggerClientEvent("pickle_dealerships:vehicleRepossessed", playerSource, {

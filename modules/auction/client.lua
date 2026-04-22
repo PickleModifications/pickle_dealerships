@@ -215,10 +215,11 @@ function OpenAuctionShowcase(locationKey, opts)
     local defaultLoc = Config.PhotoBooth.locations[1]
     local spawnCoords = vector4(defaultLoc.coords.x, defaultLoc.coords.y, defaultLoc.coords.z, defaultLoc.coords.w or 0.0)
 
-    -- Teleport the (invisible) player to the stage so the game streams the area around the camera
+    -- Teleport the player to the stage so the game streams the area around
+    -- the camera. Player remains visible — we never hide the player during
+    -- any interaction.
     SetEntityCoords(ped, spawnCoords.x, spawnCoords.y, spawnCoords.z, false, false, false, true)
     FreezeEntityPosition(ped, true)
-    SetEntityVisible(ped, false, false)
     DisplayRadar(false)
     DisplayHud(false)
 
@@ -317,6 +318,7 @@ RegisterNUICallback("placeBid", function(data, cb)
     local ok, result = lib.callback.await("pickle_dealerships:placeBid", false, {
         auctionId = data.auctionId,
         amount = data.amount,
+        paymentMethod = data.paymentMethod,
     })
     if not ok then ShowNotification(result or _L("auction_bid_failed")) end
     cb({ success = ok, result = result })
@@ -326,6 +328,18 @@ RegisterNUICallback("createAuction", function(data, cb)
     local ok, result = lib.callback.await("pickle_dealerships:createAuction", false, data)
     if not ok then ShowNotification(result or _L("auction_list_failed")) end
     cb({ success = ok, auctionId = ok and result or nil, message = not ok and result or nil })
+end)
+
+--- Hand the auction-dialog presets straight to the NUI. Config is a shared
+--- script so we can read it here without a server roundtrip; the server still
+--- validates the chosen duration on createAuction.
+RegisterNUICallback("getAuctionConfig", function(_, cb)
+    local cfg = Config.Auction or {}
+    cb({
+        durations = cfg.durations or { 10 },
+        defaultDuration = cfg.defaultDuration or (cfg.durations and cfg.durations[1]) or 10,
+        minIncrementFloor = cfg.minIncrementFloor or 50,
+    })
 end)
 
 RegisterNUICallback("cancelAuction", function(data, cb)

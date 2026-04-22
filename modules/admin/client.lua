@@ -70,6 +70,21 @@ RegisterNUICallback("adminSetTier", function(data, cb)
     end
 end)
 
+--- Stock a dealership from the full catalog at the admin-chosen quantity
+RegisterNUICallback("adminStockAllFromCatalog", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:adminStockAllFromCatalog", false, {
+        dealershipId = data.dealershipId,
+        quantity     = data.quantity,
+    })
+    if result and result.success then
+        ShowNotification(result.message)
+        cb({ success = true, inserted = result.inserted })
+    else
+        ShowNotification(result and result.message or _L("admin_stockall_failed") or "Failed to stock from catalog.")
+        cb({ success = false, message = result and result.message })
+    end
+end)
+
 --- Reset dealership
 RegisterNUICallback("adminResetDealership", function(data, cb)
     local result = lib.callback.await("pickle_dealerships:adminResetDealership", false, {
@@ -142,6 +157,8 @@ RegisterNUICallback("adminCreateDealership", function(data, cb)
         managementPoint  = data.managementPoint,
         salesPoint       = data.salesPoint,
         showroomPoint    = data.showroomPoint,
+        displaySpots     = data.displaySpots,
+        npcSpawnPoints   = data.npcSpawnPoints,
     })
     if result and result.success then
         ShowNotification(result.message)
@@ -156,30 +173,193 @@ end)
 --- gizmo for the chosen field, then re-opens the admin panel with a `pendingDealership`
 --- draft so the create dialog can repopulate with the previously entered values plus
 --- the freshly placed coord. Mirrors the depot create flow exactly.
+-- Ped model used to visualize the currently-being-placed NPC spawn point.
+-- Kept generic so it reads as "some customer" regardless of dealership type.
+local NPC_PLACEMENT_PED = `a_m_y_business_01`
+-- Prop for display spots — the lab barrier flipped flat gives an admin the
+-- footprint of a parked vehicle. The -1.26 Z offset must match the natural
+-- ghost-spawn offset used by modules/stock/client.lua (SpawnGhostAt) so the
+-- barrier sits at exactly the same height during placement, in the preview,
+-- and in live dealerships. The barrier's origin is ~1.26m above its bottom
+-- face once it's rotated flat, so this offset is what drops the visible
+-- surface onto the ground.
+local DISPLAY_SPOT_PROP = `xm_prop_lab_barrier02`
+local DISPLAY_SPOT_OFFSET = vector3(0.0, 0.0, 0.0)
+local DISPLAY_SPOT_ROTATION = vector3(90.0, 0.0, 0.0)
+-- Generic car used for placing positions where a vehicle ultimately sits
+-- (spawn point, showroom point). Admin sees the actual footprint/heading
+-- rather than a tiny prop.
+local VEHICLE_PLACEMENT_MODEL = `sultan`
+
+--- Spawn a ghost vehicle in front of the player, hand it to the gizmo, and
+--- clean up. Returns the gizmo result (or nil on model-load failure / cancel).
+local function PlaceGhostVehicleGizmo(model, alpha)
+    RequestModel(model)
+    local deadline = GetGameTimer() + 5000
+    while not HasModelLoaded(model) and GetGameTimer() < deadline do Wait(0) end
+    if not HasModelLoaded(model) then return nil end
+    local ped = PlayerPedId()
+    local spawn = GetEntityCoords(ped) + GetEntityForwardVector(ped) * 6.0
+    local veh = CreateVehicle(model, spawn.x, spawn.y, spawn.z, GetEntityHeading(ped), false, false)
+    SetModelAsNoLongerNeeded(model)
+    if not veh or not DoesEntityExist(veh) then return nil end
+    SetEntityAsMissionEntity(veh, true, true)
+    SetEntityInvincible(veh, true)
+    SetEntityCollision(veh, false, false)
+    SetEntityAlpha(veh, alpha or 160, false)
+    local result = StartGizmoEditor({ entity = veh, enableCancel = true })
+    if DoesEntityExist(veh) then DeleteEntity(veh) end
+    return result
+end
+
+-- Previews for already-placed spots/NPCs during the create dialog. Spawned as
+-- real entities (not markers) so the admin sees the actual prop/ped shapes
+-- they'll live with. Collision is disabled on every preview so the gizmo's
+-- raycast passes straight through to the ground beneath them.
+local previewSpotEntities = {}
+local previewNpcEntities = {}
+
+local function ClearPreviewSpots()
+    for _, ent in ipairs(previewSpotEntities) do
+        if DoesEntityExist(ent) then DeleteEntity(ent) end
+    end
+    previewSpotEntities = {}
+end
+
+local function ClearPreviewNpcs()
+    for _, ent in ipairs(previewNpcEntities) do
+        if DoesEntityExist(ent) then DeleteEntity(ent) end
+    end
+    previewNpcEntities = {}
+end
+
+local function SpawnPreviewSpot(s)
+    RequestModel(DISPLAY_SPOT_PROP)
+    local deadline = GetGameTimer() + 2000
+    while not HasModelLoaded(DISPLAY_SPOT_PROP) and GetGameTimer() < deadline do Wait(0) end
+    if not HasModelLoaded(DISPLAY_SPOT_PROP) then return nil end
+    local obj = CreateObject(
+        DISPLAY_SPOT_PROP,
+        s.x + DISPLAY_SPOT_OFFSET.x,
+        s.y + DISPLAY_SPOT_OFFSET.y,
+        s.z - 1.26,
+        false, false, false
+    )
+    SetModelAsNoLongerNeeded(DISPLAY_SPOT_PROP)
+    if not obj or not DoesEntityExist(obj) then return nil end
+    SetEntityRotation(obj, DISPLAY_SPOT_ROTATION.x, DISPLAY_SPOT_ROTATION.y, (s.w or 0.0) + DISPLAY_SPOT_ROTATION.z, 2, true)
+    FreezeEntityPosition(obj, true)
+    SetEntityCollision(obj, false, false)
+    SetEntityInvincible(obj, true)
+    SetEntityAlpha(obj, 180, false)
+    return obj
+end
+
+local function SpawnPreviewNpc(p)
+    RequestModel(NPC_PLACEMENT_PED)
+    local deadline = GetGameTimer() + 2000
+    while not HasModelLoaded(NPC_PLACEMENT_PED) and GetGameTimer() < deadline do Wait(0) end
+    if not HasModelLoaded(NPC_PLACEMENT_PED) then return nil end
+    local ped = CreatePed(4, NPC_PLACEMENT_PED, p.x, p.y, p.z, p.w or 0.0, false, false)
+    SetModelAsNoLongerNeeded(NPC_PLACEMENT_PED)
+    if not ped or not DoesEntityExist(ped) then return nil end
+    SetBlockingOfNonTemporaryEvents(ped, true)
+    SetEntityInvincible(ped, true)
+    FreezeEntityPosition(ped, true)
+    SetEntityCollision(ped, false, false)
+    SetEntityAlpha(ped, 200, false)
+    return ped
+end
+
+--- Refresh the create-flow preview entities to match the supplied draft. Kept
+--- simple (tear down + respawn) because the lists are small and change only
+--- when the admin adds/removes a point.
+local function UpdateCreateFlowPreviews(draft)
+    ClearPreviewSpots()
+    ClearPreviewNpcs()
+    if not draft then return end
+    if type(draft.displaySpots) == "table" then
+        for _, s in ipairs(draft.displaySpots) do
+            if type(s) == "table" and s.x then
+                local obj = SpawnPreviewSpot(s)
+                if obj then previewSpotEntities[#previewSpotEntities + 1] = obj end
+            end
+        end
+    end
+    if type(draft.npcSpawnPoints) == "table" then
+        for _, p in ipairs(draft.npcSpawnPoints) do
+            if type(p) == "table" and p.x then
+                local ped = SpawnPreviewNpc(p)
+                if ped then previewNpcEntities[#previewNpcEntities + 1] = ped end
+            end
+        end
+    end
+end
+
+local function EndCreateFlow()
+    ClearPreviewSpots()
+    ClearPreviewNpcs()
+end
+
+--- React fires this whenever the create dialog opens or the placed-points list
+--- changes (add, remove). Lua respawns the preview entities to match.
+RegisterNUICallback("adminUpdateCreateFlow", function(payload, cb)
+    UpdateCreateFlowPreviews(payload and payload.draft)
+    cb({ success = true })
+end)
+
+--- React fires this when the create dialog closes for any reason (cancel,
+--- discard-confirmed, successful create, escape).
+RegisterNUICallback("adminEndCreateFlow", function(_, cb)
+    EndCreateFlow()
+    cb({ success = true })
+end)
+
 RegisterNUICallback("adminPlaceDealershipPoint", function(payload, cb)
     CloseNui()
 
-    local field = payload.field   -- 'coords' | 'spawnPoint' | 'deliveryPoint'
+    local field = payload.field   -- 'coords' | 'spawnPoint' | 'deliveryPoint' | 'displaySpot' | 'npcSpawnPoint' | interaction points
     local draft = payload.draft or {}
+
+    -- Make sure the marker render thread knows about whatever's already placed
+    -- before we hand control to the gizmo (NUI closes here; the React side
+    -- can't keep the flow in sync during this window).
+    UpdateCreateFlowPreviews(draft)
 
     local result
     if field == "deliveryPoint" then
-        -- Use a ghost tr2 trailer so the placement shows the exact footprint
-        local model = `tr2`
-        RequestModel(model)
+        -- Ghost tr2 trailer so the admin sees the exact footprint drivers drop into.
+        result = PlaceGhostVehicleGizmo(`tr2`, 160)
+    elseif field == "spawnPoint" or field == "showroomPoint" then
+        -- Ghost sedan so the admin sees the footprint + heading of a parked car.
+        result = PlaceGhostVehicleGizmo(VEHICLE_PLACEMENT_MODEL, 160)
+    elseif field == "displaySpot" then
+        result = StartGizmoEditor({
+            model = DISPLAY_SPOT_PROP,
+            enableCancel = true,
+            deleteEntity = true,
+            coordsOffset = DISPLAY_SPOT_OFFSET,
+            rotationOffset = DISPLAY_SPOT_ROTATION,
+        })
+    elseif field == "npcSpawnPoint" then
+        -- Ped-based placement so the admin sees exactly where the customer
+        -- will appear and which direction they'll face.
+        local playerPed = PlayerPedId()
+        local spawn = GetEntityCoords(playerPed) + GetEntityForwardVector(playerPed) * 2.0
+        RequestModel(NPC_PLACEMENT_PED)
         local t = GetGameTimer() + 5000
-        while not HasModelLoaded(model) and GetGameTimer() < t do Wait(0) end
-        if HasModelLoaded(model) then
-            local ped = PlayerPedId()
-            local spawn = GetEntityCoords(ped) + GetEntityForwardVector(ped) * 6.0
-            local trailer = CreateVehicle(model, spawn.x, spawn.y, spawn.z, GetEntityHeading(ped), false, false)
-            SetModelAsNoLongerNeeded(model)
-            SetEntityAsMissionEntity(trailer, true, true)
-            SetEntityInvincible(trailer, true)
-            SetEntityCollision(trailer, false, false)
-            SetEntityAlpha(trailer, 160, false)
-            result = StartGizmoEditor({ entity = trailer, enableCancel = true })
-            if DoesEntityExist(trailer) then DeleteEntity(trailer) end
+        while not HasModelLoaded(NPC_PLACEMENT_PED) and GetGameTimer() < t do Wait(0) end
+        if HasModelLoaded(NPC_PLACEMENT_PED) then
+            local previewPed = CreatePed(4, NPC_PLACEMENT_PED, spawn.x, spawn.y, spawn.z, GetEntityHeading(playerPed), false, false)
+            SetModelAsNoLongerNeeded(NPC_PLACEMENT_PED)
+            if previewPed and DoesEntityExist(previewPed) then
+                SetEntityInvincible(previewPed, true)
+                SetBlockingOfNonTemporaryEvents(previewPed, true)
+                SetEntityCollision(previewPed, false, false)
+                SetEntityAsMissionEntity(previewPed, true, true)
+                result = StartGizmoEditor({ entity = previewPed, enableCancel = true })
+                if DoesEntityExist(previewPed) then DeleteEntity(previewPed) end
+            end
         end
     else
         result = StartGizmoEditor({
@@ -201,7 +381,14 @@ RegisterNUICallback("adminPlaceDealershipPoint", function(payload, cb)
         elseif field == "deliveryPoint" then draft.deliveryPoint = coord
         elseif field == "managementPoint" then draft.managementPoint = coord
         elseif field == "salesPoint" then draft.salesPoint = coord
-        elseif field == "showroomPoint" then draft.showroomPoint = coord end
+        elseif field == "showroomPoint" then draft.showroomPoint = coord
+        elseif field == "displaySpot" then
+            draft.displaySpots = draft.displaySpots or {}
+            draft.displaySpots[#draft.displaySpots + 1] = coord
+        elseif field == "npcSpawnPoint" then
+            draft.npcSpawnPoints = draft.npcSpawnPoints or {}
+            draft.npcSpawnPoints[#draft.npcSpawnPoints + 1] = coord
+        end
     end
 
     OpenNui('admin', {
@@ -222,45 +409,43 @@ RegisterNUICallback("adminStartGizmo", function(data, cb)
 
     local isDisplaySpot = data.field == "displaySpot"
     local isDeliveryPoint = data.field == "deliveryPoint"
+    local isNpcSpawn = data.field == "npcSpawnPoint"
+    local isVehiclePoint = data.field == "spawnPoint" or data.field == "showroomPoint"
     local result
 
     if isDeliveryPoint then
-        -- Delivery point is placed using a ghost tr2 trailer so the admin sees the exact footprint
-        -- drivers will drop their trailer into. Pass the pre-spawned entity to the gizmo so it
-        -- moves the trailer directly instead of a placeholder prop.
-        local model = `tr2`
-        RequestModel(model)
+        -- Ghost tr2 trailer so the admin sees the exact footprint drivers drop into.
+        result = PlaceGhostVehicleGizmo(`tr2`, 160)
+    elseif isVehiclePoint then
+        -- Ghost sedan so the admin sees the footprint + heading of a parked car.
+        result = PlaceGhostVehicleGizmo(VEHICLE_PLACEMENT_MODEL, 160)
+    elseif isNpcSpawn then
+        -- Ped-based placement so the admin sees the customer and can aim the heading.
+        local playerPed = PlayerPedId()
+        local spawn = GetEntityCoords(playerPed) + GetEntityForwardVector(playerPed) * 2.0
+        RequestModel(NPC_PLACEMENT_PED)
         local t = GetGameTimer() + 5000
-        while not HasModelLoaded(model) and GetGameTimer() < t do Wait(0) end
-        if not HasModelLoaded(model) then
-            ShowNotification(_L("admin_placement_cancelled"))
-            OpenNui('admin', { dealershipId = 0, dealershipName = 'Dealership Panel', role = 'admin', tier = 4, positionsDealershipId = data.dealershipId })
-            cb({ success = false })
-            return
+        while not HasModelLoaded(NPC_PLACEMENT_PED) and GetGameTimer() < t do Wait(0) end
+        if HasModelLoaded(NPC_PLACEMENT_PED) then
+            local previewPed = CreatePed(4, NPC_PLACEMENT_PED, spawn.x, spawn.y, spawn.z, GetEntityHeading(playerPed), false, false)
+            SetModelAsNoLongerNeeded(NPC_PLACEMENT_PED)
+            if previewPed and DoesEntityExist(previewPed) then
+                SetEntityInvincible(previewPed, true)
+                SetBlockingOfNonTemporaryEvents(previewPed, true)
+                SetEntityCollision(previewPed, false, false)
+                SetEntityAsMissionEntity(previewPed, true, true)
+                result = StartGizmoEditor({ entity = previewPed, enableCancel = true })
+                if DoesEntityExist(previewPed) then DeleteEntity(previewPed) end
+            end
         end
-        local ped = PlayerPedId()
-        local spawn = GetEntityCoords(ped) + GetEntityForwardVector(ped) * 6.0
-        local trailer = CreateVehicle(model, spawn.x, spawn.y, spawn.z, GetEntityHeading(ped), false, false)
-        SetModelAsNoLongerNeeded(model)
-        SetEntityAsMissionEntity(trailer, true, true)
-        SetEntityInvincible(trailer, true)
-        SetEntityCollision(trailer, false, false)
-        SetEntityAlpha(trailer, 160, false)
-
-        result = StartGizmoEditor({
-            entity = trailer,
-            enableCancel = true,
-        })
-
-        if DoesEntityExist(trailer) then DeleteEntity(trailer) end
     else
-        local model = isDisplaySpot and `xm_prop_lab_barrier02` or `prop_tennis_ball`
+        local model = isDisplaySpot and DISPLAY_SPOT_PROP or `prop_tennis_ball`
         result = StartGizmoEditor({
             model = model,
             enableCancel = true,
             deleteEntity = true,
-            coordsOffset = isDisplaySpot and vector3(0.0, 0.0, -0.03) or nil,
-            rotationOffset = isDisplaySpot and vector3(90.0, 0.0, 0.0) or nil,
+            coordsOffset = isDisplaySpot and DISPLAY_SPOT_OFFSET or nil,
+            rotationOffset = isDisplaySpot and DISPLAY_SPOT_ROTATION or nil,
         })
     end
 
@@ -331,6 +516,11 @@ RegisterNUICallback("adminSetAltCurrencies", function(data, cb)
     local result = lib.callback.await("pickle_dealerships:setAcceptedAltCurrencies", false, {
         dealershipId = data.dealershipId,
         accepted     = data.accepted,
+        -- Forward the base cash/bank toggles so "donator-only" shops stick.
+        -- Previously this wrapper dropped `base`, so the server only saw the
+        -- alt-currency list and the defaults ({ cash = true, bank = true })
+        -- re-applied on the next read.
+        base         = data.base,
     })
     if result and result.success then
         ShowNotification(result.message)
@@ -595,10 +785,11 @@ RegisterNUICallback("adminStartPhotoCapture", function(data, cb)
     -- Move to isolated routing bucket
     lib.callback.await("pickle_dealerships:adminSetPhotoBucket", false, { bucket = Config.PhotoBooth.routingBucket })
 
-    -- Teleport player to booth and load the area
+    -- Teleport player to booth and load the area. Player stays visible on
+    -- purpose — they'll appear next to the vehicle in shot, which is the
+    -- expected behaviour since we never hide the player in any interaction.
     SetEntityCoords(ped, boothCoords.x, boothCoords.y, boothCoords.z, false, false, false, true)
     FreezeEntityPosition(ped, true)
-    SetEntityVisible(ped, false, false)
 
     -- Request collision and wait for the area to fully load
     RequestCollisionAtCoord(boothCoords.x, boothCoords.y, boothCoords.z)

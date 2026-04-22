@@ -11,6 +11,7 @@ import { getCached, setCache, buildKey } from '../lib/cache'
 import { SkeletonStatGrid, SkeletonCardGrid } from '../components/ui/skeleton'
 import { X, TrendingUp, DollarSign, ShoppingCart, Users, Package, Award } from 'lucide-react'
 import type { DealershipData, DashboardStats } from '../types'
+import RevenueReport from '../components/RevenueReport'
 
 interface Props {
   data: DealershipData
@@ -66,40 +67,22 @@ export default function DashboardPage({ data, onClose }: Props) {
               <StatCard icon={<Award className="h-4 w-4" />} label={t('label_total_commission')} value={formatCurrency(stats.totalCommission)} />
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {data.mode !== 'managed' && <RevenueReport dealershipId={data.dealershipId} />}
+
+            {stats.topSeller && (
               <Card>
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium text-muted-foreground">{t('label_this_week')}</CardTitle>
+                  <CardTitle className="text-sm font-medium text-muted-foreground">{t('label_top_seller')}</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="flex justify-between items-center">
-                    <div>
-                      <p className="text-2xl font-bold">{stats.salesThisWeek}</p>
-                      <p className="text-xs text-muted-foreground">{t('label_sales')}</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-2xl font-bold">{formatCurrency(stats.revenueThisWeek)}</p>
-                      <p className="text-xs text-muted-foreground">{t('label_revenue_lower')}</p>
-                    </div>
-                  </div>
+                  <p className="text-lg font-bold">{stats.topSeller.name}</p>
+                  <p className="text-sm text-muted-foreground">
+                    {stats.topSeller.sales} {t('label_sales')}
+                    {stats.topSeller.revenue ? ` · ${formatCurrency(stats.topSeller.revenue)}` : ''}
+                  </p>
                 </CardContent>
               </Card>
-
-              {stats.topSeller && (
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-sm font-medium text-muted-foreground">{t('label_top_seller')}</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <p className="text-lg font-bold">{stats.topSeller.name}</p>
-                    <p className="text-sm text-muted-foreground">
-                      {stats.topSeller.sales} {t('label_sales')}
-                      {stats.topSeller.revenue ? ` · ${formatCurrency(stats.topSeller.revenue)}` : ''}
-                    </p>
-                  </CardContent>
-                </Card>
-              )}
-            </div>
+            )}
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <Card>

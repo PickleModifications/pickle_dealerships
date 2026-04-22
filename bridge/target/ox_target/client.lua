@@ -44,28 +44,35 @@ function GetOptionNames(options)
     return optionNames
 end
 
+-- Gate NetworkGetNetworkIdFromEntity on NetworkGetEntityIsNetworked — calling the
+-- former on a purely-local entity (e.g. display vehicles spawned with
+-- isNetwork=false) spams "no net object for entity (script id N)" in console.
 function AddTargetPed(entity, options, defaultIcon)
     for i = 1, #options do
         if not options[i].icon and defaultIcon then
             options[i].icon = defaultIcon
         end
     end
-    local netId = NetworkGetNetworkIdFromEntity(entity)
-    if netId and netId > 0 then
-        exports.ox_target:addEntity(netId, options)
-    else
-        exports.ox_target:addLocalEntity(entity, options)
+    if NetworkGetEntityIsNetworked(entity) then
+        local netId = NetworkGetNetworkIdFromEntity(entity)
+        if netId and netId > 0 then
+            exports.ox_target:addEntity(netId, options)
+            return
+        end
     end
+    exports.ox_target:addLocalEntity(entity, options)
 end
 
 function RemoveTargetPed(entity, options)
     local names = GetOptionNames(options)
-    local netId = NetworkGetNetworkIdFromEntity(entity)
-    if netId and netId > 0 then
-        exports.ox_target:removeEntity(netId, names)
-    else
-        exports.ox_target:removeLocalEntity(entity, names)
+    if NetworkGetEntityIsNetworked(entity) then
+        local netId = NetworkGetNetworkIdFromEntity(entity)
+        if netId and netId > 0 then
+            exports.ox_target:removeEntity(netId, names)
+            return
+        end
     end
+    exports.ox_target:removeLocalEntity(entity, names)
 end
 
 function AddTargetNetworkId(networkId, options)

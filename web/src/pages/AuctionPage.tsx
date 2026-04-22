@@ -36,6 +36,7 @@ export default function AuctionPage({ onClose }: Props) {
   const [bidInput, setBidInput] = useState('')
   const [bidding, setBidding] = useState(false)
   const [bidError, setBidError] = useState<string | null>(null)
+  const [paymentMethod, setPaymentMethod] = useState<'bank' | 'cash'>('bank')
   const [, setTick] = useState(0)
   const [pickleFaxStockId, setPickleFaxStockId] = useState<number | null>(null)
   const [myIdentifier, setMyIdentifier] = useState<string | null>(null)
@@ -100,15 +101,17 @@ export default function AuctionPage({ onClose }: Props) {
     })
   }, [selectedId])
 
-  // Poll selected + refresh list every 2s
+  // Poll selected + refresh list every 2s. Pickups is polled unconditionally
+  // so the "Pickups (N)" tab badge reflects wins the player hasn't noticed yet
+  // even while they're sitting on the Live tab.
   useEffect(() => {
     const poll = setInterval(() => {
       loadAuctions()
+      loadPickups()
       if (selectedId !== null) loadSelected(selectedId)
-      if (tab === 'pickups') loadPickups()
     }, 2000)
     return () => clearInterval(poll)
-  }, [selectedId, tab, loadAuctions, loadSelected, loadPickups])
+  }, [selectedId, loadAuctions, loadSelected, loadPickups])
 
   // Countdown tick every second
   useEffect(() => {
@@ -116,9 +119,12 @@ export default function AuctionPage({ onClose }: Props) {
     return () => clearInterval(t)
   }, [])
 
-  // Live update from server broadcast
+  // Live update from server broadcast. Also refresh pickups so a just-won
+  // auction appears in the winner's pickups list without waiting for the 2s
+  // tab-gated poll.
   useNuiEvent<{ auctionId: number }>('auctionUpdate', (payload) => {
     loadAuctions()
+    loadPickups()
     if (selectedId !== null && payload?.auctionId === selectedId) loadSelected(selectedId)
   })
 
@@ -179,6 +185,7 @@ export default function AuctionPage({ onClose }: Props) {
     fetchNui<{ success: boolean; result?: { extended: boolean; buyout: boolean }; message?: string }>('placeBid', {
       auctionId: selected.id,
       amount,
+      paymentMethod,
     }).then((res) => {
       if (!res?.success) {
         setBidError(res?.message || 'Bid rejected.')
@@ -355,6 +362,18 @@ export default function AuctionPage({ onClose }: Props) {
                     </button>
                   )
                 })}
+              </div>
+
+              <div className="flex gap-1 mt-2">
+                {(['bank', 'cash'] as const).map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => setPaymentMethod(m)}
+                    className={`flex-1 py-1 rounded text-[10px] font-medium transition-colors ${paymentMethod === m ? 'bg-accent text-accent-foreground' : 'bg-white/5 text-white/60 hover:bg-white/10'}`}
+                  >
+                    {m === 'bank' ? t('label_bank') : t('label_cash')}
+                  </button>
+                ))}
               </div>
 
               {bidError && <p className="text-rose-400 text-[11px] mt-2">{bidError}</p>}

@@ -144,8 +144,6 @@ lib.callback.register('pickle_dealerships:getDealershipData', function(source, l
         employees = employeeResults or {}
     end
 
-    local tierCfg = Config.Tiers[cached and cached.tier or 1]
-
     return {
         id = cached and cached.id or nil,
         location = locationKey,
@@ -162,7 +160,9 @@ lib.callback.register('pickle_dealerships:getDealershipData', function(source, l
         selfService = resolved.selfService or false,
         stock = stock,
         employees = employees,
-        stockCapacity = tierCfg and tierCfg.stockCap or 20,
+        -- "How many models the store could ever carry" (all tiers unlocked) —
+        -- denominator on the dashboard stock bar.
+        stockCapacity = GetDealershipCatalogMax({ type = resolved.type or 'car' }),
     }
 end)
 

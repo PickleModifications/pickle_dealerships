@@ -72,6 +72,8 @@ function SpawnPurchasedVehicle(model, spawnPoint, color, secondaryColor, propert
     FreezeEntityPosition(veh, false)
     SetEntityInvincible(veh, false)
 
+    GiveVehicleKeys(veh)
+
     return veh
 end
 
@@ -167,6 +169,8 @@ local function EndTestDrive()
     if not testDriveActive then return end
     testDriveActive = false
 
+    SendNUIMessage({ action = "testDriveSubtitle", data = { visible = false } })
+
     -- Restore original routing bucket before teardown so the player rejoins
     -- the main instance cleanly.
     TriggerServerEvent('pickle_dealerships:leaveTestDriveBucket')
@@ -243,25 +247,55 @@ RegisterNUICallback("startTestDrive", function(data, cb)
         color = json.decode(color)
     end
 
+    -- Tear the showroom scene down FIRST (ped restoration, camera, fade). If
+    -- we spawn the vehicle and warp the player while the showroom still has
+    -- them frozen off-world, CleanupShowroom runs afterwards and teleports
+    -- them back to the interaction point — clobbering the warp. Running it
+    -- inline here serializes the transition cleanly.
+    if CleanupShowroom then
+        CleanupShowroom(true) -- skip fade-in; we'll handle it after the spawn
+        Wait(100)
+    end
+
     -- Move the player to a dedicated routing bucket BEFORE spawning so the
     -- test-drive vehicle is created in the same instance. Everyone else at
     -- the dealership stays in the default bucket — no cross-player collisions
     -- during the drive.
     TriggerServerEvent('pickle_dealerships:enterTestDriveBucket')
-    Wait(100) -- let the server-side bucket change take effect
+    Wait(200) -- let the server-side bucket change take effect
 
     -- Spawn test drive vehicle
     local veh = SpawnPurchasedVehicle(model, spawnPoint, color)
     if not veh then
         TriggerServerEvent('pickle_dealerships:leaveTestDriveBucket')
+        DoScreenFadeIn(300)
         cb({ success = false, message = "Failed to spawn test drive vehicle." })
         return
     end
+
+    -- Force the player into the driver seat. SpawnPurchasedVehicle already
+    -- issues TaskWarpPedIntoVehicle, but SetPedIntoVehicle is the synchronous
+    -- "just put them there" call — run both and retry a couple of times, since
+    -- bucket transitions can drop the first assignment.
+    local ped = PlayerPedId()
+    local attempts = 0
+    while attempts < 5 and GetVehiclePedIsIn(ped, false) ~= veh do
+        local vc = GetEntityCoords(veh)
+        SetEntityCoords(ped, vc.x, vc.y, vc.z, false, false, false, false)
+        SetPedIntoVehicle(ped, veh, -1)
+        Wait(100)
+        attempts = attempts + 1
+    end
+    DoScreenFadeIn(400)
 
     -- Lock vehicle so only the player can enter
     SetVehicleDoorsLocked(veh, 2)
     SetVehicleDoorsLockedForAllPlayers(veh, true)
     SetVehicleDoorsLockedForPlayer(veh, PlayerId(), false)
+
+    -- SpawnPurchasedVehicle already handed out keys; re-issue here so the
+    -- test driver still owns the plate after any lock/bucket reshuffle above.
+    GiveVehicleKeys(veh)
 
     testDriveActive = true
     testDriveVehicle = veh
@@ -288,7 +322,27 @@ RegisterNUICallback("startTestDrive", function(data, cb)
     end
 
     ShowNotification(_L("sales_test_drive_started", testDriveTimer))
+    SendNUIMessage({
+        action = "testDriveSubtitle",
+        data = { visible = true, text = _L("sales_test_drive_end_hint") },
+    })
     cb({ success = true })
+end)
+
+-- NUI-driven subtitle. Lua fires one message on start/end; the React overlay
+-- (components/TestDriveSubtitle.tsx) handles the actual drawing. Keybind
+-- listener runs at per-frame cadence only while a drive is active.
+CreateThread(function()
+    while true do
+        if testDriveActive then
+            if IsControlJustReleased(0, 177) then -- INPUT_FRONTEND_CANCEL (Backspace on PC)
+                EndTestDrive()
+            end
+            Wait(0)
+        else
+            Wait(500)
+        end
+    end
 end)
 
 -- ─── Test Drive Monitor Thread ──────────────────────────────────────────────

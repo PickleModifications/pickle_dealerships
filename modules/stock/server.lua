@@ -99,9 +99,12 @@ lib.callback.register('pickle_dealerships:getStock', function(source, locationKe
     ProcessDeliveredOrders(dealership.id)
 
     local isManager = CanPlayerManage(source, dealership.id)
+    -- Managers see every stock row (including auctioned items so they can manage
+    -- them). Customers never see auctioned vehicles in the normal pre-owned /
+    -- new lists — those live exclusively in the Auctions tab.
     local stockQuery = isManager
         and 'SELECT ds.*, wc.image, wc.class FROM pickle_dealership_stock ds LEFT JOIN pickle_wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL ORDER BY ds.ordered_at DESC'
-        or  'SELECT ds.*, wc.image, wc.class FROM pickle_dealership_stock ds LEFT JOIN pickle_wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.unlisted = 0 ORDER BY ds.ordered_at DESC'
+        or  'SELECT ds.*, wc.image, wc.class FROM pickle_dealership_stock ds LEFT JOIN pickle_wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.unlisted = 0 AND ds.auction_id IS NULL ORDER BY ds.ordered_at DESC'
     local stock = MySQL.query.await(stockQuery, { dealership.id }) or {}
 
     -- Include pending orders as in-transit stock cards.
@@ -205,7 +208,7 @@ lib.callback.register('pickle_dealerships:getShowroomStock', function(source, da
     }
     local orderBy = sortMap[sortBy] or 'ds.vehicle_label ASC'
 
-    local where = 'ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.unlisted = 0 AND ds.delivered_at IS NOT NULL AND ds.delivered_at <= NOW()'
+    local where = 'ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.unlisted = 0 AND ds.auction_id IS NULL AND ds.delivered_at IS NOT NULL AND ds.delivered_at <= NOW()'
     local params = { dealership.id }
 
     if search ~= '' then
@@ -249,7 +252,7 @@ lib.callback.register('pickle_dealerships:getShowroomStock', function(source, da
     local highestPrice = 0
     if page == 1 and search == '' and classFilter == 'all' and not minPrice and not maxPrice then
         local classRows = MySQL.query.await(
-            'SELECT DISTINCT wc.class FROM pickle_dealership_stock ds LEFT JOIN pickle_wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.unlisted = 0 AND ds.delivered_at IS NOT NULL AND ds.delivered_at <= NOW() AND wc.class IS NOT NULL ORDER BY wc.class',
+            'SELECT DISTINCT wc.class FROM pickle_dealership_stock ds LEFT JOIN pickle_wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.unlisted = 0 AND ds.auction_id IS NULL AND ds.delivered_at IS NOT NULL AND ds.delivered_at <= NOW() AND wc.class IS NOT NULL ORDER BY wc.class',
             { dealership.id }
         )
         if classRows then
@@ -259,7 +262,7 @@ lib.callback.register('pickle_dealerships:getShowroomStock', function(source, da
         end
 
         highestPrice = MySQL.scalar.await(
-            'SELECT COALESCE(MAX(ds.retail_price), 0) FROM pickle_dealership_stock ds WHERE ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.unlisted = 0 AND ds.delivered_at IS NOT NULL AND ds.delivered_at <= NOW()',
+            'SELECT COALESCE(MAX(ds.retail_price), 0) FROM pickle_dealership_stock ds WHERE ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.unlisted = 0 AND ds.auction_id IS NULL AND ds.delivered_at IS NOT NULL AND ds.delivered_at <= NOW()',
             { dealership.id }
         ) or 0
     end
@@ -282,10 +285,11 @@ local function NormalizeDeliveryMode(mode)
 end
 
 --- Pure cost calculator used both by the stock order flow and by the UI cost-preview callback.
---- Local mode: FREE for the dealership — the server foots the driver's payout.
---- This is the incentive to route orders through real players instead of expedited.
---- Expedited mode: wholesale + import tax + configurable surcharge (Config.Delivery.expeditedFeePct).
----                  The surcharge sinks to the server (no player receives it).
+--- Both modes: the dealership pays the wholesale cost (+ import tax) for the
+--- vehicle itself — that's the cost of the inventory and can't be free.
+--- Expedited adds a configurable surcharge (Config.Delivery.expeditedFeePct)
+--- on top; that surcharge sinks to the server (no player receives it).
+--- Local adds a driver delivery fee routed to the player who fulfils the run.
 --- Returns: { unitCost, totalCost, deliveryFee, retailPrice } (all integers, per-order totals).
 function ResolveOwnerOrderCost(mode, wholesalePrice, retailPrice, qty)
     mode = NormalizeDeliveryMode(mode)
@@ -296,9 +300,10 @@ function ResolveOwnerOrderCost(mode, wholesalePrice, retailPrice, qty)
     if mode == 'expedited' then
         unitCost = wholesalePrice * (1 + importTax) + wholesalePrice * (cfg.expeditedFeePct or 0)
     elseif mode == 'local' then
-        -- Dealership pays $0. The driver's payout is still calculated (for display
-        -- and for the driver earnings pipeline) but paid by the server, not the lot.
-        unitCost = 0
+        -- Dealership pays straight wholesale (MSRP) for the vehicle — no tax
+        -- or surcharge. The driver's payout is tracked separately and routed
+        -- through the earnings pipeline when the run is fulfilled.
+        unitCost = wholesalePrice
         deliveryFee = math.floor(retailPrice * (cfg.payoutPct or 0))
     end
 
@@ -395,27 +400,11 @@ lib.callback.register('pickle_dealerships:orderVehicle', function(source, locati
         end
     end
 
-    -- Finalize any delivered orders first so stock counts are accurate
+    -- Finalize any delivered orders first so stock counts stay consistent even
+    -- though we no longer gate on capacity here.
     ProcessDeliveredOrders(dealership.id)
 
-    -- Check stock capacity
-    local tierCfg = Config.Tiers[dealership.tier or 1]
-    local stockCapacity = (tierCfg and tierCfg.stockCap) or 20
-    local stockCount = MySQL.scalar.await(
-        'SELECT COALESCE(SUM(quantity), 0) FROM pickle_dealership_stock WHERE dealership_id = ? AND sold_at IS NULL',
-        { dealership.id }
-    ) or 0
-    local pendingCount = MySQL.scalar.await(
-        'SELECT COALESCE(SUM(quantity), 0) FROM pickle_dealership_orders WHERE dealership_id = ?',
-        { dealership.id }
-    ) or 0
-    local currentCount = tonumber(stockCount) + tonumber(pendingCount)
-
     local qty = math.max(1, math.min(100, tonumber(orderQuantity) or 1))
-
-    if tonumber(currentCount or 0) + qty > stockCapacity then
-        return false, 'Stock capacity reached. Sell or remove vehicles first.'
-    end
 
     -- Shared cost resolver (one source of truth for UI previews and order writes)
     local retailPrice = math.floor(wholesalePrice * 1.3)
@@ -484,6 +473,20 @@ lib.callback.register('pickle_dealerships:orderVehicle', function(source, locati
     -- Success toast is delivered by the NUI wrapper; avoid double-notifying.
     TriggerClientEvent('pickle_dealerships:refreshDisplay', -1, locationKey)
     TriggerClientEvent('pickle_dealerships:deliveryQueueChanged', -1)
+
+    LogDiscord("stock", {
+        title = "Stock Order Placed",
+        actor = source,
+        dealershipId = dealership.id,
+        fields = {
+            { name = "Dealership", value = dealership.name or "?", inline = true },
+            { name = "Vehicle", value = (catalogEntry.label or model) .. " (`" .. tostring(model) .. "`)", inline = true },
+            { name = "Qty", value = tostring(qty), inline = true },
+            { name = "Mode", value = tostring(resolvedMode), inline = true },
+            { name = "Wholesale", value = GetCurrencyString(wholesalePrice), inline = true },
+            { name = "Total Cost", value = GetCurrencyString(totalCost), inline = true },
+        },
+    })
 
     return true, stockId
 end)
@@ -612,22 +615,12 @@ lib.callback.register('pickle_dealerships:toggleUnlisted', function(source, loca
 
     local newValue = (stock.unlisted == 1 or stock.unlisted == true) and 0 or 1
 
-    -- If unlisting and the vehicle is at auction, cancel the auction (only if no bids)
+    -- While a vehicle is tied to an auction, unlisting is blocked entirely.
+    -- Tearing down the auction from here raced with the auction viewer and
+    -- could leave the car in a glitched state; owners must cancel/end the
+    -- auction from the auction UI before they can unlist.
     if newValue == 1 and stock.auction_id then
-        local auction = MySQL.single.await(
-            "SELECT id, current_bid, status FROM pickle_dealership_auctions WHERE id = ?",
-            { stock.auction_id }
-        )
-        if auction and auction.status == 'active' then
-            if auction.current_bid and auction.current_bid > 0 then
-                return false, 'Cannot unlist while auction has active bids.'
-            end
-            MySQL.update.await(
-                "UPDATE pickle_dealership_auctions SET status = 'cancelled', ended_at = NOW() WHERE id = ?",
-                { stock.auction_id }
-            )
-            MySQL.update.await("UPDATE pickle_dealership_stock SET auction_id = NULL WHERE id = ?", { stockId })
-        end
+        return false, 'Cannot unlist while the vehicle is at auction. Cancel the auction first.'
     end
 
     -- If unlisting, also remove from display spot
@@ -665,6 +658,7 @@ lib.callback.register('pickle_dealerships:getStockAtSpot', function(_, locationK
           AND ds.delivered_at IS NOT NULL
           AND ds.delivered_at <= NOW()
           AND (ds.unlisted IS NULL OR ds.unlisted = 0)
+          AND ds.auction_id IS NULL
         LIMIT 1
     ]], { dealership.id, tonumber(spotId) })
 
@@ -861,21 +855,8 @@ lib.callback.register('pickle_dealerships:tradeInVehicle', function(source, loca
         return false, 'This vehicle is under active financing and cannot be traded in.'
     end
 
-    -- Capacity check
+    -- Reconcile any delivered orders before balance checks.
     ProcessDeliveredOrders(dealership.id)
-    local tierCfg = Config.Tiers[dealership.tier or 1]
-    local stockCapacity = (tierCfg and tierCfg.stockCap) or 20
-    local stockCount = MySQL.scalar.await(
-        'SELECT COALESCE(SUM(quantity), 0) FROM pickle_dealership_stock WHERE dealership_id = ? AND sold_at IS NULL',
-        { dealership.id }
-    ) or 0
-    local pendingCount = MySQL.scalar.await(
-        'SELECT COALESCE(SUM(quantity), 0) FROM pickle_dealership_orders WHERE dealership_id = ?',
-        { dealership.id }
-    ) or 0
-    if (tonumber(stockCount) + tonumber(pendingCount) + 1) > stockCapacity then
-        return false, 'Stock capacity reached.'
-    end
 
     -- Balance check
     if dealership.balance < buyPrice then
@@ -915,6 +896,17 @@ lib.callback.register('pickle_dealerships:tradeInVehicle', function(source, loca
 
     ShowNotification(source, _L('stock_trade_in_buyer', label, GetCurrencyString(buyPrice)))
     TriggerClientEvent('pickle_dealerships:refreshDisplay', -1, locationKey)
+
+    -- Authoritative server-side delete. Client-side DeleteEntity silently
+    -- fails when the manager running the trade-in doesn't own the vehicle's
+    -- network entity; deleting from the server handles it regardless of owner.
+    local netId = tonumber(payload.netId)
+    if netId then
+        local ent = NetworkGetEntityFromNetworkId(netId)
+        if ent and ent ~= 0 and DoesEntityExist(ent) then
+            DeleteEntity(ent)
+        end
+    end
 
     return true, stockId
 end)
@@ -968,21 +960,8 @@ lib.callback.register('pickle_dealerships:seizeVehicle', function(source, data)
     end
     if not model then return false, 'Could not resolve vehicle model.' end
 
-    -- Capacity check
+    -- Reconcile any delivered orders so counts stay consistent.
     ProcessDeliveredOrders(dealership.id)
-    local tierCfg = Config.Tiers[dealership.tier or 1]
-    local stockCapacity = (tierCfg and tierCfg.stockCap) or 20
-    local stockCount = MySQL.scalar.await(
-        'SELECT COALESCE(SUM(quantity), 0) FROM pickle_dealership_stock WHERE dealership_id = ? AND sold_at IS NULL',
-        { dealership.id }
-    ) or 0
-    local pendingCount = MySQL.scalar.await(
-        'SELECT COALESCE(SUM(quantity), 0) FROM pickle_dealership_orders WHERE dealership_id = ?',
-        { dealership.id }
-    ) or 0
-    if (tonumber(stockCount) + tonumber(pendingCount) + 1) > stockCapacity then
-        return false, 'Stock capacity reached.'
-    end
 
     -- Derive condition from health
     local props = properties
@@ -1034,6 +1013,15 @@ lib.callback.register('pickle_dealerships:seizeVehicle', function(source, data)
 
     ShowNotification(source, _L('seize_success', label, plate))
     TriggerClientEvent('pickle_dealerships:refreshDisplay', -1, dealership.location)
+
+    -- Authoritative server-side delete (see tradeInVehicle for rationale).
+    local netId = tonumber(data.netId)
+    if netId then
+        local ent = NetworkGetEntityFromNetworkId(netId)
+        if ent and ent ~= 0 and DoesEntityExist(ent) then
+            DeleteEntity(ent)
+        end
+    end
 
     return true, stockId
 end)

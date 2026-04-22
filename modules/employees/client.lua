@@ -24,32 +24,6 @@ RegisterNUICallback("getEmployees", function(data, cb)
     cb(result)
 end)
 
-RegisterNUICallback("getClockStatus", function(data, cb)
-    print(("[ClockStatus:Client] Requesting for dealershipId=%s"):format(tostring(data.dealershipId)))
-    local result = lib.callback.await("pickle_dealerships:getClockStatus", false, data)
-    print(("[ClockStatus:Client] Got result=%s"):format(json.encode(result or {})))
-    cb(result or { clockedIn = false })
-end)
-
-RegisterNUICallback("clockIn", function(data, cb)
-    print(("[ClockIn:Client] dealershipId=%s"):format(tostring(data.dealershipId)))
-    local result = lib.callback.await("pickle_dealerships:clockIn", false, data)
-    print(("[ClockIn:Client] result=%s"):format(json.encode(result or {})))
-    if result and result.message then
-        ShowNotification(result.message)
-    end
-    cb(result)
-end)
-
-
-RegisterNUICallback("clockOut", function(data, cb)
-    local result = lib.callback.await("pickle_dealerships:clockOut", false, data)
-    if result and result.message then
-        ShowNotification(result.message)
-    end
-    cb(result)
-end)
-
 RegisterNUICallback("setEmployeeRole", function(data, cb)
     local result = lib.callback.await("pickle_dealerships:setEmployeeRole", false, {
         dealershipId = data.dealershipId,

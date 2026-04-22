@@ -12,11 +12,12 @@ import type { FinancingSettings, FinancingAgreement } from '../types'
 
 interface Props {
   dealershipId: number
+  dealershipName?: string
 }
 
 const ALL_INSTALLMENT_OPTIONS = [2, 4, 6, 8, 12, 16, 24]
 
-export default function FinancingSettingsPanel({ dealershipId }: Props) {
+export default function FinancingSettingsPanel({ dealershipId, dealershipName }: Props) {
   const [settings, setSettings] = useState<FinancingSettings | null>(null)
   const [agreements, setAgreements] = useState<FinancingAgreement[]>([])
   const [loading, setLoading] = useState(true)
@@ -83,6 +84,14 @@ export default function FinancingSettingsPanel({ dealershipId }: Props) {
   const otherAgreements = agreements.filter((a) => a.status !== 'active')
 
   return (
+    <div className="flex flex-col flex-1 overflow-hidden">
+      <div className="p-5 pb-3">
+        <h1 className="text-xl font-bold">{t('tab_financing')}</h1>
+        <p className="text-sm text-muted-foreground">
+          {dealershipName ? `${dealershipName} — ` : ''}{t('label_financing_settings')}
+        </p>
+      </div>
+      <Separator />
     <div className="p-5 space-y-5 overflow-auto flex-1">
       {/* Settings */}
       <Card>
@@ -203,6 +212,7 @@ export default function FinancingSettingsPanel({ dealershipId }: Props) {
           </div>
         </div>
       )}
+    </div>
     </div>
   )
 }

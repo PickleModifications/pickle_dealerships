@@ -125,6 +125,11 @@ RegisterNUICallback("setCommissionRates", function(data, cb)
     end
 end)
 
+RegisterNUICallback("getShowroomAltCurrencies", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:getShowroomAltCurrencies", false, data.dealershipId)
+    cb(result or {})
+end)
+
 RegisterNUICallback("getAcceptedAltCurrencies", function(data, cb)
     local result = lib.callback.await("pickle_dealerships:getAcceptedAltCurrencies", false, data.dealershipId)
     if result then
@@ -183,4 +188,9 @@ RegisterNUICallback("getDashboardStats", function(data, cb)
     else
         cb({ success = false, message = _L("management_dashboard_failed") })
     end
+end)
+
+RegisterNUICallback("getRevenueReport", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:getRevenueReport", false, data)
+    cb(result)
 end)

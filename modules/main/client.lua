@@ -89,6 +89,14 @@ local function CleanupAllDealerships()
     dealershipInteractions = {}
 
     DealershipConfigs = {}
+
+    -- Display vehicles + ghost spots normally persist between zone enters,
+    -- so a dealership deletion (which fires reloadWorld while the player may
+    -- still be standing in the zone) would otherwise leave orphaned display
+    -- cars and NPC customers until resource restart. Tear them down here.
+    if DeleteDisplayVehicles then DeleteDisplayVehicles() end
+    if DeleteGhostVehicles then DeleteGhostVehicles() end
+    if CleanupAllNPCs then CleanupAllNPCs() end
 end
 
 --- Sets up a single dealership from server data
@@ -144,6 +152,13 @@ end
 -- Initial load on resource start
 CreateThread(function()
     Wait(1000)
+    LoadDealershipWorld()
+end)
+
+-- Full reload — fired by the server whenever the dealership roster changes
+-- (create, delete, bulk import) so clients don't have to reconnect to see
+-- newly placed dealerships.
+RegisterNetEvent('pickle_dealerships:reloadWorld', function()
     LoadDealershipWorld()
 end)
 
@@ -233,6 +248,13 @@ function OnEnterDealership(locationKey)
     currentDealership = locationKey
     dealershipData = lib.callback.await('pickle_dealerships:getDealershipData', false, locationKey)
     TriggerEvent('pickle_dealerships:enteredDealership', locationKey, dealershipData)
+    -- Zone presence replaces the old clock-in button: the server decides if this
+    -- player is eligible (admin/owner/faction/employee) and starts NPC duty for them.
+    -- `getDealershipData` returns the id under `.id`, not `.dealershipId` — the old
+    -- key never existed, so the server event was silently skipped on every entry.
+    if dealershipData and dealershipData.id then
+        TriggerServerEvent('pickle_dealerships:employeeZoneTransition', dealershipData.id, true)
+    end
     debugPrint("[Dealerships] Entered zone: " .. locationKey)
 end
 
@@ -240,6 +262,9 @@ end
 function OnExitDealership(locationKey)
     if currentDealership == locationKey then
         TriggerEvent('pickle_dealerships:exitedDealership', locationKey)
+        if dealershipData and dealershipData.id then
+            TriggerServerEvent('pickle_dealerships:employeeZoneTransition', dealershipData.id, false)
+        end
         currentDealership = nil
         dealershipData = nil
         -- Showcase UIs (auction, photo booth) teleport the player far from the dealership zone
@@ -276,8 +301,9 @@ function OpenManagementMenu(locationKey)
         end
     end
 
-    -- If no role access, deny
-    if not role then
+    -- Only owners and admins may open the management menu. Managers/salespersons
+    -- are employees — they sell via the sales tablet but have no management rights.
+    if role ~= 'owner' and role ~= 'admin' then
         ShowNotification(_L("no_permission"))
         return
     end
@@ -420,10 +446,4 @@ end)
 
 exports('IsNuiOpen', function()
     return isNuiOpen
-end)
-
-CreateThread(function()
-    -- REMOVE THIS THREAD BEFORE DEPLOYMENT
-    Wait(1000)
-    DoScreenFadeIn(0)
 end)

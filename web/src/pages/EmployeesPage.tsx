@@ -35,7 +35,6 @@ export default function EmployeesPage({ data, onClose }: Props) {
   const [nearbyPlayers, setNearbyPlayers] = useState<NearbyPlayer[]>([])
   const [loadingPlayers, setLoadingPlayers] = useState(false)
   const [selectedPlayer, setSelectedPlayer] = useState<string>('')
-  const [isClockedIn, setIsClockedIn] = useState(false)
   // Grade level (numeric key) → configured rate (%). Populated from dealership metadata.
   const [gradeRates, setGradeRates] = useState<Record<number, number>>({})
   const [defaultRate, setDefaultRate] = useState<number>(8)
@@ -156,27 +155,22 @@ export default function EmployeesPage({ data, onClose }: Props) {
       )}
 
       <div className="relative flex-1 flex flex-col overflow-hidden">
-      {/* Action bar for embedded mode */}
+
       {data.embedded && (
-        <div className="p-4 pb-0 flex justify-between">
-          <Button
-            size="sm"
-            variant={isClockedIn ? 'outline' : 'default'}
-            onClick={() => {
-              fetchNui(isClockedIn ? 'clockOut' : 'clockIn', { dealershipId: data.dealershipId }).then((res: any) => {
-                if (res?.success) setIsClockedIn(!isClockedIn)
-              })
-            }}
-            className="gap-1"
-          >
-            <Clock className="h-4 w-4" /> {isClockedIn ? t('clock_out') : t('clock_in')}
-          </Button>
-          {canManage && (
-            <Button size="sm" onClick={openHireDialog} className="gap-1">
-              <UserPlus className="h-4 w-4" /> {t('employees_hire')}
-            </Button>
-          )}
-        </div>
+        <>
+          <div className="flex items-center justify-between p-5 pb-3">
+            <div>
+              <h1 className="text-xl font-bold">{t('tab_employees')}</h1>
+              <p className="text-sm text-muted-foreground">{data.dealershipName} &mdash; {employees.length} {t('employees_staff')}</p>
+            </div>
+            {canManage && (
+              <Button size="sm" onClick={openHireDialog} className="gap-1">
+                <UserPlus className="h-4 w-4" /> {t('employees_hire')}
+              </Button>
+            )}
+          </div>
+          <Separator />
+        </>
       )}
 
       <ScrollArea className="flex-1 p-5">

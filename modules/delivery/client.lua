@@ -11,8 +11,6 @@ local depotBlips = {}
 
 -- Drop-off visuals spawned per mission and torn down on completion/cancel.
 local dropoffGhost = nil       -- translucent no-collide tr2 at the delivery point for alignment
-local dropoffRenderThread = false -- draws the rectangle each frame while the mission is active
-local dropoffFootprint = nil   -- { halfX, halfY } half-extents of the tr2 bounding box for the polyzone
 
 --- Loads a model synchronously (short-circuit return nil on timeout).
 local function LoadModel(modelHash)
@@ -101,6 +99,7 @@ local function SpawnMissionRig(pickupCoords, plan, vehicles)
         if truckEntity and DoesEntityExist(truckEntity) then
             SetEntityAsMissionEntity(truckEntity, true, true)
             SetVehicleDoorsLocked(truckEntity, 1) -- unlocked for the driver
+            GiveVehicleKeys(truckEntity)
         end
         SetModelAsNoLongerNeeded(truckHash)
     end
@@ -203,9 +202,9 @@ RegisterNetEvent('pickle_dealerships:startDeliveryMission', function(data)
     CreateThread(MissionMonitorLoop)
 end)
 
---- Spawns a translucent no-collide tr2 at the drop-off point and starts the overlay rectangle
---- thread. The ghost gives the driver a visible target to back up into; the rectangle is sized
---- from the tr2 model's bounding box so it matches the actual footprint exactly.
+--- Spawns a translucent no-collide tr2 at the drop-off point. The ghost gives
+--- the driver a clear visual target to back the trailer into; no additional
+--- green zone / outline is drawn — the translucent trailer alone marks the spot.
 function SpawnDropoffVisuals(coords)
     if not coords or not coords.x then return end
     local model = `tr2`
@@ -213,13 +212,6 @@ function SpawnDropoffVisuals(coords)
     local t = GetGameTimer() + 5000
     while not HasModelLoaded(model) and GetGameTimer() < t do Wait(0) end
     if HasModelLoaded(model) then
-        -- GetModelDimensions returns min/max in local space; half-extents feed the polyzone size.
-        local minV, maxV = GetModelDimensions(model)
-        dropoffFootprint = {
-            halfX = (maxV.x - minV.x) * 0.5,
-            halfY = (maxV.y - minV.y) * 0.5,
-        }
-
         dropoffGhost = CreateVehicle(model, coords.x, coords.y, coords.z, coords.w or 0.0, false, false)
         SetModelAsNoLongerNeeded(model)
         if DoesEntityExist(dropoffGhost) then
@@ -231,60 +223,14 @@ function SpawnDropoffVisuals(coords)
             SetVehicleDoorsLocked(dropoffGhost, 4)
         end
     end
-
-    if not dropoffRenderThread then
-        dropoffRenderThread = true
-        CreateThread(function()
-            while activeMission and dropoffRenderThread do
-                local c = activeMission.dropoffCoords
-                local fp = dropoffFootprint
-                if c and fp then
-                    -- Marker type 1 draws an axis-aligned box on the ground. Rotated fill isn't
-                    -- supported by the native, so we approximate the rotated rectangle by drawing
-                    -- four thin boxes along the tr2's rotated perimeter. Cheap, readable, and
-                    -- aligned with the ghost trailer behind it.
-                    local heading = math.rad(c.w or 0.0)
-                    local cosH, sinH = math.cos(heading), math.sin(heading)
-                    local hx, hy = fp.halfX, fp.halfY
-                    local corners = {
-                        { x =  hx, y =  hy },
-                        { x = -hx, y =  hy },
-                        { x = -hx, y = -hy },
-                        { x =  hx, y = -hy },
-                    }
-                    -- Rotate into world space
-                    local world = {}
-                    for i, p in ipairs(corners) do
-                        world[i] = {
-                            x = c.x + (p.x * cosH - p.y * sinH),
-                            y = c.y + (p.x * sinH + p.y * cosH),
-                        }
-                    end
-                    for i = 1, 4 do
-                        local a, b = world[i], world[(i % 4) + 1]
-                        DrawLine(a.x, a.y, c.z + 0.05, b.x, b.y, c.z + 0.05, 80, 220, 80, 200)
-                        DrawLine(a.x, a.y, c.z + 1.5,  b.x, b.y, c.z + 1.5,  80, 220, 80, 180)
-                    end
-                    -- Ground highlight (axis-aligned box scaled to roughly fit the tr2 footprint).
-                    DrawMarker(1, c.x, c.y, (c.z or 0.0) - 1.0, 0, 0, 0, 0, 0, 0,
-                        fp.halfX * 2.0, fp.halfY * 2.0, 1.0,
-                        80, 220, 80, 50, false, false, 2, false, nil, nil, false)
-                end
-                Wait(0)
-            end
-            dropoffRenderThread = false
-        end)
-    end
 end
 
---- Tears down the drop-off ghost trailer + render thread; safe to call multiple times.
+--- Tears down the drop-off ghost trailer; safe to call multiple times.
 function ClearDropoffVisuals()
-    dropoffRenderThread = false
     if dropoffGhost and DoesEntityExist(dropoffGhost) then
         DeleteEntity(dropoffGhost)
     end
     dropoffGhost = nil
-    dropoffFootprint = nil
 end
 
 --- Main mission loop: track distance to dealership, push live overlay, and watch for the
@@ -707,95 +653,6 @@ local function dbgPrint()
     dbgNotify('Printed offsets to F8 console.')
 end
 
-RegisterCommand('debug_trailer', function(_, args)
-    local sub = args[1]
-
-    if not sub or sub == '' then
-        if debugTrailer and DoesEntityExist(debugTrailer) then dbgClear(); dbgNotify('Cleared.') else dbgSpawn() end
-        return
-    end
-    if sub == 'clear'   then dbgClear(); dbgNotify('Cleared.'); return end
-    if sub == 'spawn'   then dbgSpawn(); return end
-    if sub == 'testcar' then dbgSpawnTestCar(); dbgNotify('Test car respawned.'); return end
-    if sub == 'preview' then dbgPreview(); return end
-    if sub == 'print'   then dbgPrint(); return end
-    if sub == 'model' then
-        if args[2] then debugModel = args[2]; dbgNotify('Model set to ' .. debugModel .. ' — /debug_trailer testcar to apply.') end
-        return
-    end
-    if sub == 'capture' then
-        local idx = tonumber(args[2])
-        if not idx or idx < 1 or idx > 6 then dbgNotify('Usage: /debug_trailer capture <1-6>'); return end
-        dbgCapture(idx)
-        return
-    end
-    if sub == 'door' then
-        if not debugTrailer or not DoesEntityExist(debugTrailer) then dbgNotify('No trailer.'); return end
-        local d = tonumber(args[2])
-        if not d then dbgNotify('Usage: /debug_trailer door <0-7>'); return end
-        -- Toggle: if currently open, close; otherwise open
-        local ratio = GetVehicleDoorAngleRatio(debugTrailer, d)
-        if ratio > 0.01 then
-            SetVehicleDoorShut(debugTrailer, d, false)
-            dbgNotify(('Door %d closed.'):format(d))
-        else
-            SetVehicleDoorOpen(debugTrailer, d, false, false)
-            dbgNotify(('Door %d opened.'):format(d))
-        end
-        return
-    end
-    if sub == 'extra' then
-        if not debugTrailer or not DoesEntityExist(debugTrailer) then dbgNotify('No trailer.'); return end
-        local e = tonumber(args[2])
-        if not e then dbgNotify('Usage: /debug_trailer extra <1-12>'); return end
-        if not DoesExtraExist(debugTrailer, e) then dbgNotify(('Extra %d does not exist on tr2.'):format(e)); return end
-        -- SetVehicleExtra toggle: arg 3 false = enabled (shown), true = disabled (hidden)
-        local isOn = IsVehicleExtraTurnedOn(debugTrailer, e)
-        SetVehicleExtra(debugTrailer, e, isOn)
-        dbgNotify(('Extra %d → %s.'):format(e, isOn and 'off' or 'on'))
-        return
-    end
-    if sub == 'set' then
-        local idx = tonumber(args[2])
-        local x, y, z = tonumber(args[3]), tonumber(args[4]), tonumber(args[5])
-        local rotX = tonumber(args[6]) or 0.0
-        local rotY = tonumber(args[7]) or 0.0
-        local rotZ = tonumber(args[8]) or 0.0
-        if not idx or idx < 1 or idx > 6 or not x or not y or not z then
-            dbgNotify('Usage: /debug_trailer set <1-6> <x> <y> <z> [rotX rotY rotZ]')
-            return
-        end
-        debugOffsets[idx] = { x = x, y = y, z = z, rotX = rotX, rotY = rotY, rotZ = rotZ }
-        dbgReattachGhost(idx)
-        dbgNotify(('Slot %d → x=%.2f y=%.2f z=%.2f rotX=%.2f rotY=%.2f rotZ=%.2f'):format(idx, x, y, z, rotX, rotY, rotZ))
-        return
-    end
-
-    -- Shorthand nudge: /debug_trailer <idx> <axis> <delta>
-    -- axis ∈ { x, y, z, rotx, roty, rotz }
-    local idx = tonumber(sub)
-    if idx and idx >= 1 and idx <= 6 then
-        local axis = (args[2] or ''):lower()
-        local delta = tonumber(args[3])
-        local keyMap = { x = 'x', y = 'y', z = 'z', rotx = 'rotX', roty = 'rotY', rotz = 'rotZ' }
-        local key = keyMap[axis]
-        if not delta or not key then
-            dbgNotify('Usage: /debug_trailer <1-6> <x|y|z|rotx|roty|rotz> <delta>')
-            return
-        end
-        debugOffsets[idx][key] = (debugOffsets[idx][key] or 0.0) + delta
-        if key == 'rotX' or key == 'rotY' or key == 'rotZ' then
-            debugOffsets[idx][key] = normalizeAngle(debugOffsets[idx][key])
-        end
-        dbgReattachGhost(idx)
-        local o = debugOffsets[idx]
-        dbgNotify(('Slot %d → x=%.2f y=%.2f z=%.2f rotX=%.2f rotY=%.2f rotZ=%.2f'):format(idx, o.x, o.y, o.z, o.rotX or 0.0, o.rotY or 0.0, o.rotZ or 0.0))
-        return
-    end
-
-    dbgNotify('Commands: [spawn|clear|testcar|capture <i>|preview|print|model <name>|set|<i> <axis> <delta>|door <d>|extra <e>]')
-end, false)
-
 AddEventHandler('onResourceStop', function(res)
     if res == GetCurrentResourceName() then dbgClear() end
 end)
@@ -803,50 +660,50 @@ end)
 --- /debug_vtp — teleports the active delivery rig (truck + trailer, with the player still
 --- in the driver seat) to the destination dealership. Useful for skipping the drive when
 --- testing drop-off logic.
-RegisterCommand('debug_vtp', function()
-    if not activeMission then
-        TriggerEvent('chat:addMessage', { args = { '[debug_vtp]', 'No active delivery.' } })
-        return
-    end
-    local dest = activeMission.dropoffCoords or activeMission.dealershipCoords
-    if not dest or not dest.x then
-        TriggerEvent('chat:addMessage', { args = { '[debug_vtp]', 'No destination coords on active mission.' } })
-        return
-    end
-    if not truckEntity or not DoesEntityExist(truckEntity) then
-        TriggerEvent('chat:addMessage', { args = { '[debug_vtp]', 'Truck entity missing.' } })
-        return
-    end
+-- RegisterCommand('debug_vtp', function()
+--     if not activeMission then
+--         TriggerEvent('chat:addMessage', { args = { '[debug_vtp]', 'No active delivery.' } })
+--         return
+--     end
+--     local dest = activeMission.dropoffCoords or activeMission.dealershipCoords
+--     if not dest or not dest.x then
+--         TriggerEvent('chat:addMessage', { args = { '[debug_vtp]', 'No destination coords on active mission.' } })
+--         return
+--     end
+--     if not truckEntity or not DoesEntityExist(truckEntity) then
+--         TriggerEvent('chat:addMessage', { args = { '[debug_vtp]', 'Truck entity missing.' } })
+--         return
+--     end
 
-    local ped = PlayerPedId()
-    local ground, z = GetGroundZFor_3dCoord(dest.x + 0.0, dest.y + 0.0, (dest.z or 0.0) + 50.0, false)
-    local tz = ground and z or (dest.z or 0.0)
+--     local ped = PlayerPedId()
+--     local ground, z = GetGroundZFor_3dCoord(dest.x + 0.0, dest.y + 0.0, (dest.z or 0.0) + 50.0, false)
+--     local tz = ground and z or (dest.z or 0.0)
 
-    -- Detach the trailer momentarily so teleporting the truck doesn't fight the physics link,
-    -- then re-hitch at the new location.
-    if trailerEntity and DoesEntityExist(trailerEntity) then
-        DetachVehicleFromTrailer(truckEntity)
-    end
+--     -- Detach the trailer momentarily so teleporting the truck doesn't fight the physics link,
+--     -- then re-hitch at the new location.
+--     if trailerEntity and DoesEntityExist(trailerEntity) then
+--         DetachVehicleFromTrailer(truckEntity)
+--     end
 
-    SetEntityCoords(truckEntity, dest.x, dest.y, tz, false, false, false, false)
-    SetEntityHeading(truckEntity, dest.w or 0.0)
-    SetVehicleOnGroundProperly(truckEntity)
+--     SetEntityCoords(truckEntity, dest.x, dest.y, tz, false, false, false, false)
+--     SetEntityHeading(truckEntity, dest.w or 0.0)
+--     SetVehicleOnGroundProperly(truckEntity)
 
-    if trailerEntity and DoesEntityExist(trailerEntity) then
-        local behind = GetOffsetFromEntityInWorldCoords(truckEntity, 0.0, -10.0, 0.0)
-        SetEntityCoords(trailerEntity, behind.x, behind.y, tz, false, false, false, false)
-        SetEntityHeading(trailerEntity, dest.w or 0.0)
-        SetVehicleOnGroundProperly(trailerEntity)
-        AttachVehicleToTrailer(truckEntity, trailerEntity, 20.0)
-    end
+--     if trailerEntity and DoesEntityExist(trailerEntity) then
+--         local behind = GetOffsetFromEntityInWorldCoords(truckEntity, 0.0, -10.0, 0.0)
+--         SetEntityCoords(trailerEntity, behind.x, behind.y, tz, false, false, false, false)
+--         SetEntityHeading(trailerEntity, dest.w or 0.0)
+--         SetVehicleOnGroundProperly(trailerEntity)
+--         AttachVehicleToTrailer(truckEntity, trailerEntity, 20.0)
+--     end
 
-    -- Pull the player into the driver seat if they aren't already, so they land in the cab.
-    if GetVehiclePedIsIn(ped, false) ~= truckEntity then
-        SetPedIntoVehicle(ped, truckEntity, -1)
-    end
+--     -- Pull the player into the driver seat if they aren't already, so they land in the cab.
+--     if GetVehiclePedIsIn(ped, false) ~= truckEntity then
+--         SetPedIntoVehicle(ped, truckEntity, -1)
+--     end
 
-    TriggerEvent('chat:addMessage', { args = { '[debug_vtp]', 'Teleported to destination.' } })
-end, false)
+--     TriggerEvent('chat:addMessage', { args = { '[debug_vtp]', 'Teleported to destination.' } })
+-- end, false)
 
 -- ─── Admin: Depot Management NUI bridges ─────────────────────────────────────
 -- Depots are managed from the /dealership admin panel; these wire up the React UI to the server.

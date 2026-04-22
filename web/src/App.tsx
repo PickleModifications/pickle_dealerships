@@ -20,6 +20,7 @@ import NpcShowroomPage from './pages/NpcShowroomPage'
 import DeliveryPage from './pages/DeliveryPage'
 import InteractText from './components/InteractText'
 import MissionOverlay from './components/MissionOverlay'
+import TestDriveSubtitle from './components/TestDriveSubtitle'
 import { PickleFaxDialog } from './components/PickleFax'
 
 function App() {
@@ -175,6 +176,7 @@ function App() {
     <>
       <InteractText />
       <MissionOverlay />
+      <TestDriveSubtitle />
       {visible && page && (
         page === 'photoBooth' || page === 'showroom' || page === 'negotiation' || page === 'npcShowroom' || page === 'pickleFax' ? (
           <div key={openKey} className="fixed inset-0 z-50">

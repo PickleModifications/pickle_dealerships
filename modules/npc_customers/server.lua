@@ -23,7 +23,7 @@ local function GenerateNPCProfile(dealershipId)
 
     -- Query actual available stock with wholesale costs and classes
     local availableStock = MySQL.query.await(
-        'SELECT ds.wholesale_cost, wc.class FROM pickle_dealership_stock ds LEFT JOIN pickle_wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.unlisted = 0 AND ds.delivered_at IS NOT NULL AND ds.delivered_at <= NOW()',
+        'SELECT ds.wholesale_cost, wc.class FROM pickle_dealership_stock ds LEFT JOIN pickle_wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.unlisted = 0 AND ds.auction_id IS NULL AND ds.delivered_at IS NOT NULL AND ds.delivered_at <= NOW()',
         { dealershipId }
     )
 
@@ -262,6 +262,29 @@ end)
 
 --- Evaluate a player's price offer against the NPC's secret max willingness
 --- Returns stress increase, whether they accept, and dialogue
+--- Minimum sale price that still leaves the dealership with its target profit
+--- margin after paying commission. Commission is charged on PROFIT, not on the
+--- sale price (see modules/sales/server.lua), so the floor is:
+---
+---   profit          = finalPrice - wholesale
+---   netProfit       = profit * (1 - commissionRate)   -- commission off profit
+---   netProfit       >= wholesale * minProfitMargin    -- dealership's cut
+---   => finalPrice   >= wholesale * (1 + minProfitMargin / (1 - commissionRate))
+---
+--- minProfitMargin lives in Config.NPCCustomers.minProfitMargin (see config.lua)
+--- so servers can tune how aggressive this floor is without touching code.
+local function MinimumAcceptableOffer(wholesaleCost, commissionRate)
+    local cost = tonumber(wholesaleCost) or 0
+    if cost <= 0 then return 0 end
+    local commission = tonumber(commissionRate) or Config.DefaultCommission or 0.08
+    local minProfit = tonumber(Config.NPCCustomers and Config.NPCCustomers.minProfitMargin) or 0.05
+    -- Clamp commission to leave at least 10% of profit for the dealership —
+    -- otherwise a 100% commission rate would make the floor unreachable.
+    if commission >= 0.9 then commission = 0.9 end
+    local markup = minProfit / (1 - commission)
+    return math.ceil(cost * (1 + markup))
+end
+
 lib.callback.register("pickle_dealerships:evaluateOffer", function(source, data)
     local npcProfile = data.npcProfile
     local offerPrice = tonumber(data.offerPrice) or 0
@@ -269,6 +292,40 @@ lib.callback.register("pickle_dealerships:evaluateOffer", function(source, data)
 
     if not npcProfile then
         return { accepted = false, walkaway = true, stress = 100, dialogue = "Something went wrong." }
+    end
+
+    -- Dealership-side floor: refuse any accept that would leave the shop with
+    -- less than `minProfitMargin` after commission. Rejection bumps stress like
+    -- any other push-back, but the NPC doesn't walk away — the player can still
+    -- raise their ask.
+    if data.stockId then
+        local stock = MySQL.single.await(
+            "SELECT wholesale_cost FROM pickle_dealership_stock WHERE id = ? LIMIT 1",
+            { tonumber(data.stockId) }
+        )
+        if stock then
+            local floor = MinimumAcceptableOffer(stock.wholesale_cost)
+            if offerPrice > 0 and offerPrice < floor then
+                local bump = 12
+                local newStress = currentStress + bump
+                -- If a below-floor rejection pushes the NPC past 100% stress,
+                -- they walk out the same as any other stress-out. Previously
+                -- this path clamped to 100 without setting walkaway, so the
+                -- customer could sit pinned at 100% indefinitely.
+                local walkaway = newStress >= 100
+                return {
+                    accepted = false,
+                    walkaway = walkaway,
+                    stress = math.min(100, newStress),
+                    stressIncrease = bump,
+                    dialogue = walkaway
+                        and "Forget it — the price keeps coming in below what they'll take. I'm done."
+                        or "The dealership won't accept that — it's below what they need to break even.",
+                    belowFloor = true,
+                    floor = floor,
+                }
+            end
+        end
     end
 
     local budget = npcProfile.budget or 0
@@ -387,18 +444,37 @@ lib.callback.register("pickle_dealerships:completeNPCSale", function(source, dat
         return { success = false, message = _L("npc_player_identifier_not_found") }
     end
 
-    -- Apply NPC sale multiplier
-    local multiplier = Config.NPCCustomers.npcSaleMultiplier or 1.0
-    local adjustedAmount = math.floor(saleAmount * multiplier)
+    -- Credit the full negotiated price. The old silent `npcSaleMultiplier`
+    -- scaled what we credited, which made negotiated offers mysteriously
+    -- produce losses — the floor check below (matching the one in
+    -- evaluateOffer) is the right way to keep sales profitable.
+    local adjustedAmount = math.floor(tonumber(saleAmount) or 0)
 
-    -- Add to dealership balance
-    local newBalance = (dealership.balance or 0) + adjustedAmount
+    -- Server-side floor safety net: never persist a sale below the dealership's
+    -- minimum profitable price, regardless of what the client sent.
+    local sourceRowCheck = MySQL.single.await(
+        "SELECT wholesale_cost FROM pickle_dealership_stock WHERE id = ? LIMIT 1",
+        { stockId }
+    )
+    if sourceRowCheck then
+        local floor = MinimumAcceptableOffer(sourceRowCheck.wholesale_cost)
+        if adjustedAmount < floor then
+            return { success = false, message = _L("npc_sale_below_floor") or "Offer is below the dealership's minimum sale price." }
+        end
+    end
+
+    -- Commission is a percentage of PROFIT (sale - wholesale), matching the
+    -- player-sale flow in modules/sales/server.lua. Losses yield no commission.
+    local commissionRate = Config.DefaultCommission or 0.08
+    local wholesaleForComm = tonumber(sourceRowCheck and sourceRowCheck.wholesale_cost) or 0
+    local profitForComm = math.max(0, adjustedAmount - wholesaleForComm)
+    local commission = math.floor(profitForComm * commissionRate)
+    local netToDealership = adjustedAmount - commission
+
+    local newBalance = (dealership.balance or 0) + netToDealership
     MySQL.update("UPDATE pickle_dealerships SET balance = ? WHERE id = ?", { newBalance, dealershipId })
     UpdateDealershipCache(dealershipId, { balance = newBalance })
 
-    -- Calculate and pay commission
-    local commissionRate = Config.DefaultCommission or 0.08
-    local commission = math.floor(adjustedAmount * commissionRate)
     if commission > 0 then
         AddMoney(source, commission, "bank")
         -- Success toast is delivered by the NUI wrapper via result.message; no server dupe.
@@ -413,19 +489,65 @@ lib.callback.register("pickle_dealerships:completeNPCSale", function(source, dat
         end
     end
 
-    -- Always deduct from stock
-    local stock = MySQL.single.await("SELECT quantity FROM pickle_dealership_stock WHERE id = ?", { stockId })
-    if stock and stock.quantity > 1 then
-        MySQL.update("UPDATE pickle_dealership_stock SET quantity = quantity - 1 WHERE id = ?", { stockId })
-    else
-        MySQL.update("UPDATE pickle_dealership_stock SET sold_at = NOW(), sold_to = 'NPC', sold_by = ? WHERE id = ?", { identifier, stockId })
+    -- Record the sale so the dashboard picks it up. We need a *row* with
+    -- sold_at set (the dashboard aggregates by row, not by quantity), so:
+    --   - multi-quantity source rows are decremented AND a historical sold
+    --     row is inserted at the negotiated price
+    --   - single-quantity source rows are marked sold with the negotiated price
+    --   - npc_seed rows stay intact (infinite inventory) but we still insert a
+    --     historical sold row so revenue/transaction counts reflect the sale
+    local sourceRow = MySQL.single.await(
+        "SELECT vehicle_model, vehicle_label, wholesale_cost, acquired_from, quantity FROM pickle_dealership_stock WHERE id = ?",
+        { stockId }
+    )
+    if sourceRow then
+        local insertSoldRow = function()
+            MySQL.insert.await([[
+                INSERT INTO pickle_dealership_stock
+                    (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, quantity,
+                     ordered_at, delivered_at, sold_at, sold_to, sold_by, acquired_from)
+                VALUES (?, ?, ?, ?, ?, 1, NOW(), NOW(), NOW(), 'NPC', ?, 'npc_sale')
+            ]], {
+                dealershipId,
+                sourceRow.vehicle_model,
+                sourceRow.vehicle_label or sourceRow.vehicle_model,
+                tonumber(sourceRow.wholesale_cost) or 0,
+                adjustedAmount,
+                identifier,
+            })
+        end
+
+        if sourceRow.acquired_from == 'npc_seed' then
+            insertSoldRow()
+        elseif (tonumber(sourceRow.quantity) or 1) > 1 then
+            MySQL.update.await("UPDATE pickle_dealership_stock SET quantity = quantity - 1 WHERE id = ?", { stockId })
+            insertSoldRow()
+        else
+            MySQL.update.await(
+                "UPDATE pickle_dealership_stock SET sold_at = NOW(), sold_to = 'NPC', sold_by = ?, retail_price = ? WHERE id = ?",
+                { identifier, adjustedAmount, stockId }
+            )
+        end
     end
 
-    -- Add XP if pickle_xp is available
-    if Config.XPEnabled and GetResourceState("pickle_xp") == "started" then
-        local xpAmount = Config.NPCCustomers.xpPerSale or 15
-        exports["pickle_xp"]:AddPlayerXP(source, xpAmount)
+    -- Ledger entries so the Finances tab and commission totals pick up NPC sales too.
+    local vehLabel = sourceRow and (sourceRow.vehicle_label or sourceRow.vehicle_model) or "vehicle"
+    AddLedgerEntry(dealershipId, "sale", adjustedAmount,
+        ("NPC sale: %s for %s"):format(vehLabel, GetCurrencyString(adjustedAmount)),
+        identifier
+    )
+    if commission > 0 then
+        AddLedgerEntry(dealershipId, "commission", -commission,
+            ("NPC sale commission: %s"):format(vehLabel),
+            identifier
+        )
     end
+
+    -- -- Add XP if pickle_xp is available
+    -- if Config.XPEnabled and GetResourceState("pickle_xp") == "started" then
+    --     local xpAmount = Config.NPCCustomers.xpPerSale or 15
+    --     exports["pickle_xp"]:AddPlayerXP(source, xpAmount)
+    -- end
 
     -- Update dealership reputation
     local repGain = (Config.NPCCustomers.reputationPerSale or 1) + bonusRep

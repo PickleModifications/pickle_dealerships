@@ -6,7 +6,8 @@ import { Badge } from '../components/ui/badge'
 import { Input } from '../components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { fetchNui, formatCurrency, getVehicleImage } from '../lib/utils'
-import { Search, X, CreditCard, Banknote, Car, Loader2, Palette, SlidersHorizontal, ChevronRight, FileText, Gavel, Zap, Package, Warehouse, PenLine, Wind } from 'lucide-react'
+import { formatAltText, resolveAltCurrency, type AltCurrencyDef } from '../lib/altCurrency'
+import { Search, X, CreditCard, Banknote, Car, Coins, Loader2, Palette, SlidersHorizontal, ChevronRight, FileText, Gavel, Zap, Package, Warehouse, PenLine, Wind } from 'lucide-react'
 import VehicleImg from '../components/VehicleImg'
 import { PickleFaxDialog } from '../components/PickleFax'
 import FinancingContractDialog from '../components/FinancingContractDialog'
@@ -49,7 +50,9 @@ export default function ShowroomPage({ data }: Props) {
   const [tab, setTab] = useState<'new' | 'preowned' | 'auctions'>('new')
   const [expandedModel, setExpandedModel] = useState<string | null>(null)
   const [selected, setSelected] = useState<StockItem | null>(null)
-  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'bank' | 'financing'>('bank')
+  const [paymentMethod, setPaymentMethod] = useState<string>('bank')
+  const [altCurrencies, setAltCurrencies] = useState<AltCurrencyDef[]>([])
+  const [basePayments, setBasePayments] = useState<{ cash: boolean; bank: boolean }>({ cash: true, bank: true })
   const [purchasing, setPurchasing] = useState(false)
   const [swapping, setSwapping] = useState(false)
   const [primaryColor, setPrimaryColor] = useState<VehicleColor | null>(null)
@@ -61,6 +64,7 @@ export default function ShowroomPage({ data }: Props) {
   const [auctions, setAuctions] = useState<Auction[]>([])
   const [selectedAuction, setSelectedAuction] = useState<(Auction & { bids?: Array<{ id: number; bidder_identifier: string; amount: number; placed_at: string; refunded: number }> }) | null>(null)
   const [bidInput, setBidInput] = useState('')
+  const [bidPaymentMethod, setBidPaymentMethod] = useState<'bank' | 'cash'>('bank')
   const [bidding, setBidding] = useState(false)
   const [bidError, setBidError] = useState<string | null>(null)
   const [myIdentifier, setMyIdentifier] = useState<string | null>(null)
@@ -90,6 +94,35 @@ export default function ShowroomPage({ data }: Props) {
   const draggingRef = useRef(false)
   const lastMouseRef = useRef<{ x: number; y: number } | null>(null)
 
+  // Fetch the alt currencies this dealership accepts so the payment tabs show
+  // up alongside bank/cash. Fires once per dealership.
+  useEffect(() => {
+    fetchNui<{ currencies: AltCurrencyDef[]; base: { cash: boolean; bank: boolean } } | AltCurrencyDef[]>('getShowroomAltCurrencies', {
+      dealershipId: data.dealershipId,
+    }).then((res) => {
+      // Back-compat: old server returned a bare array.
+      if (Array.isArray(res)) {
+        setAltCurrencies(res)
+        setBasePayments({ cash: true, bank: true })
+      } else if (res) {
+        setAltCurrencies(Array.isArray(res.currencies) ? res.currencies : [])
+        setBasePayments({ cash: res.base?.cash !== false, bank: res.base?.bank !== false })
+      }
+    }).catch(() => { setAltCurrencies([]); setBasePayments({ cash: true, bank: true }) })
+  }, [data.dealershipId])
+
+  // Keep the default paymentMethod valid — if bank/cash are turned off we
+  // fall back to cash, then to the first alt currency. Only fires when the
+  // current selection is no longer available.
+  useEffect(() => {
+    const altValid = paymentMethod.startsWith('alt:') && altCurrencies.some((c) => `alt:${c.key}` === paymentMethod)
+    const baseValid = (paymentMethod === 'bank' && basePayments.bank) || (paymentMethod === 'cash' && basePayments.cash)
+    if (altValid || baseValid || paymentMethod === 'financing') return
+    if (basePayments.bank) setPaymentMethod('bank')
+    else if (basePayments.cash) setPaymentMethod('cash')
+    else if (altCurrencies.length > 0) setPaymentMethod(`alt:${altCurrencies[0].key}`)
+  }, [basePayments, altCurrencies, paymentMethod])
+
   // Single fetch on mount — all filtering/sorting is client-side
   useEffect(() => {
     fetchNui<StockItem[] | { stock: StockItem[] }>('getStock', {
@@ -97,7 +130,10 @@ export default function ShowroomPage({ data }: Props) {
       location: data.location,
     }).then((res) => {
       const items = Array.isArray(res) ? res : (res && 'stock' in res ? res.stock : [])
-      const available = items.filter((s) => !s.sold_at && !s.unlisted && s.delivered_at && new Date(s.delivered_at) <= new Date())
+      // Auctioned rows live in the Auctions tab only; hide them from the
+      // new/pre-owned showcase lists even when the viewer is a manager (the
+      // StockPage is where managers handle auctioned stock).
+      const available = items.filter((s) => !s.sold_at && !s.unlisted && !s.auction_id && s.delivered_at && new Date(s.delivered_at) <= new Date())
       setAllStock(available)
       const highest = available.reduce((max, s) => Math.max(max, s.retail_price), 0)
       setMaxRetailPrice(highest)
@@ -155,19 +191,27 @@ export default function ShowroomPage({ data }: Props) {
     }).catch(() => {})
   }, [loadAuctions, loadPickups, loadMyLoans, data.dealershipId])
 
-  // Poll auctions + countdown tick when on auctions tab
+  // Poll auctions + countdown tick when on auctions tab. Pickups are polled
+  // on every tab so the "Won" banner appears the moment a player's own
+  // auction finalizes, even if they're sitting on the pre-owned/new tab.
   useEffect(() => {
-    if (tab !== 'auctions') return
     const poll = setInterval(() => {
-      loadAuctions()
-      if (selectedAuction) loadAuctionState(selectedAuction.id)
+      loadPickups()
+      if (tab === 'auctions') {
+        loadAuctions()
+        if (selectedAuction) loadAuctionState(selectedAuction.id)
+      }
     }, 2000)
     const tick = setInterval(() => setAuctionTick((v) => v + 1), 1000)
     return () => { clearInterval(poll); clearInterval(tick) }
-  }, [tab, selectedAuction?.id, loadAuctions, loadAuctionState])
+  }, [tab, selectedAuction?.id, loadAuctions, loadAuctionState, loadPickups])
 
+  // Server broadcasts auctionUpdate whenever an auction status flips (bid,
+  // finalize, win). Reload pickups so the winner sees their "Won" CTA without
+  // leaving and re-entering the showcase.
   useNuiEvent<{ auctionId: number }>('auctionUpdate', () => {
     loadAuctions()
+    loadPickups()
     if (selectedAuction) loadAuctionState(selectedAuction.id)
   })
 
@@ -194,7 +238,7 @@ export default function ShowroomPage({ data }: Props) {
     if (!amount || amount <= 0) return
     setBidding(true)
     setBidError(null)
-    fetchNui<{ success: boolean; message?: string }>('placeBid', { auctionId: selectedAuction.id, amount }).then((res) => {
+    fetchNui<{ success: boolean; message?: string }>('placeBid', { auctionId: selectedAuction.id, amount, paymentMethod: bidPaymentMethod }).then((res) => {
       if (!res?.success) {
         setBidError(res?.message || t('error_bid_rejected'))
       } else {
@@ -203,7 +247,7 @@ export default function ShowroomPage({ data }: Props) {
         loadAuctionState(selectedAuction.id)
       }
     }).finally(() => setBidding(false))
-  }, [selectedAuction, bidInput, loadAuctions, loadAuctionState])
+  }, [selectedAuction, bidInput, bidPaymentMethod, loadAuctions, loadAuctionState])
 
   const handleSendToGarage = useCallback((auctionId: number) => {
     setClaimingId(auctionId)
@@ -300,8 +344,13 @@ export default function ShowroomPage({ data }: Props) {
     return Array.from(map.values())
   })()
 
-  // Deselect when the current selection is no longer in the rendered list
+  // Deselect when the current selection is no longer in the rendered list.
+  // Spot-view mode has no tab switcher and is always viewing the specific
+  // stock row the player walked up to, so the tab-pool check would mis-fire
+  // (e.g. a used car is not in the "new" pool) and clear the selection —
+  // which reads to the player as a blank screen / crash.
   useEffect(() => {
+    if (data.spotViewStockId) return
     if (tab === 'auctions') {
       if (selectedAuction && !auctions.some((a) => a.id === selectedAuction.id)) {
         setSelectedAuction(null)
@@ -830,6 +879,18 @@ export default function ShowroomPage({ data }: Props) {
                 })}
               </div>
 
+              <div className="flex gap-0.5 shrink-0 bg-white/5 rounded-md p-0.5">
+                {(['bank', 'cash'] as const).map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => setBidPaymentMethod(m)}
+                    className={`h-8 px-2.5 rounded text-[11px] font-medium transition-colors ${bidPaymentMethod === m ? 'bg-accent text-accent-foreground' : 'text-white/60 hover:text-white'}`}
+                  >
+                    {m === 'bank' ? t('label_bank') : t('label_cash')}
+                  </button>
+                ))}
+              </div>
+
               {bidError && <p className="text-rose-400 text-[10px] shrink-0">{bidError}</p>}
 
               <Button className="h-9 px-4 gap-1.5 bg-amber-600 hover:bg-amber-700 shrink-0" disabled={bidding || !bidInput} onClick={() => handleBid()}>
@@ -858,7 +919,18 @@ export default function ShowroomPage({ data }: Props) {
               <p className="text-white/40 text-lg capitalize">{selected.class || t('label_vehicle')}</p>
             </div>
 
-            <p className="text-accent font-bold text-lg shrink-0">{formatCurrency(selected.retail_price)}</p>
+            {(() => {
+              const alt = resolveAltCurrency(paymentMethod, altCurrencies)
+              if (alt) {
+                return (
+                  <p className="text-white font-bold text-lg shrink-0 flex items-center gap-1.5">
+                    {alt.iconUrl ? <img src={alt.iconUrl} alt="" className="h-5 w-5 object-contain" /> : null}
+                    {formatAltText(alt, selected.retail_price)}
+                  </p>
+                )
+              }
+              return <p className="text-accent font-bold text-lg shrink-0">{formatCurrency(selected.retail_price)}</p>
+            })()}
 
             {!selected.is_used && (
             <div className="flex items-center gap-1.5 shrink-0">
@@ -912,15 +984,31 @@ export default function ShowroomPage({ data }: Props) {
                 <Tabs
                   defaultValue="bank"
                   value={paymentMethod}
-                  onValueChange={(v) => setPaymentMethod(v as typeof paymentMethod)}
+                  onValueChange={(v) => setPaymentMethod(v)}
                 >
                   <TabsList className="h-9 bg-white/5 border border-white/10">
-                    <TabsTrigger value="bank" className="gap-1.5 text-xs data-[state=active]:bg-white/10">
-                      <CreditCard className="h-3.5 w-3.5" /> {t('label_bank')}
-                    </TabsTrigger>
-                    <TabsTrigger value="cash" className="gap-1.5 text-xs data-[state=active]:bg-white/10">
-                      <Banknote className="h-3.5 w-3.5" /> {t('label_cash')}
-                    </TabsTrigger>
+                    {basePayments.bank && (
+                      <TabsTrigger value="bank" className="gap-1.5 text-xs data-[state=active]:bg-white/10">
+                        <CreditCard className="h-3.5 w-3.5" /> {t('label_bank')}
+                      </TabsTrigger>
+                    )}
+                    {basePayments.cash && (
+                      <TabsTrigger value="cash" className="gap-1.5 text-xs data-[state=active]:bg-white/10">
+                        <Banknote className="h-3.5 w-3.5" /> {t('label_cash')}
+                      </TabsTrigger>
+                    )}
+                    {altCurrencies.map((cur) => (
+                      <TabsTrigger
+                        key={cur.key}
+                        value={`alt:${cur.key}`}
+                        className="gap-1.5 text-xs data-[state=active]:bg-white/10"
+                      >
+                        {cur.iconUrl
+                          ? <img src={cur.iconUrl} alt="" className="h-3.5 w-3.5 object-contain" />
+                          : <Coins className="h-3.5 w-3.5" />}
+                        {cur.label}
+                      </TabsTrigger>
+                    ))}
                   </TabsList>
                 </Tabs>
 
@@ -952,12 +1040,14 @@ export default function ShowroomPage({ data }: Props) {
                     variant="outline"
                     className="h-9 px-4 gap-1.5 border-white/20 text-white/80 hover:bg-white/10 hover:text-white"
                     onClick={() => {
+                      // startTestDrive handles the showroom teardown internally
+                      // so the ped restoration doesn't race the vehicle warp.
                       fetchNui('startTestDrive', {
                         dealershipId: data.dealershipId,
                         location: data.location,
                         model: selected.vehicle_model,
                         stockId: selected.id,
-                      }).finally(() => fetchNui('showroomClose', {}))
+                      })
                     }}
                   >
                     <Wind className="h-3.5 w-3.5" /> {t('btn_test_drive')}

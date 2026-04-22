@@ -1,3 +1,48 @@
+--- NPC-operated dealerships don't use the order/delivery flow. At creation (and
+--- on tier upgrades) we seed one stock row per wholesale catalog entry that
+--- matches the dealership's vehicle type + catalog access tier, with a very
+--- large quantity so it reads as effectively infinite. Owners/admins can then
+--- tune retail prices per row on the stock tab.
+local function seedManagedDealershipStock(dealershipId, vehicleType, tier)
+    local types = {}
+    if vehicleType == 'mixed' or not vehicleType or vehicleType == '' then
+        types = { 'car', 'boat', 'air' }
+    else
+        types = { vehicleType }
+    end
+
+    local tierDef = Config.Tiers and Config.Tiers[tonumber(tier) or 1] or nil
+    local accessLevel = tierDef and tierDef.catalogAccess or 'basic'
+    local hierarchy = { 'basic', 'expanded', 'full', 'exclusive' }
+    local levelIdx = ({ basic = 1, expanded = 2, full = 3, exclusive = 4 })[accessLevel] or 1
+    local allowedTiers = {}
+    for i = 1, levelIdx do allowedTiers[#allowedTiers + 1] = hierarchy[i] end
+
+    if #types == 0 or #allowedTiers == 0 then return 0 end
+
+    local typeMarks = string.rep('?,', #types):sub(1, -2)
+    local tierMarks = string.rep('?,', #allowedTiers):sub(1, -2)
+    local sql = ([[
+        INSERT INTO pickle_dealership_stock
+            (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, quantity, ordered_at, delivered_at, acquired_from)
+        SELECT ?, model, label, wholesale, ROUND(wholesale * 1.3), 999999, NOW(), NOW(), 'npc_seed'
+        FROM pickle_wholesale_catalog
+        WHERE vehicle_type IN (%s) AND tier IN (%s)
+        AND NOT EXISTS (
+            SELECT 1 FROM pickle_dealership_stock ds
+            WHERE ds.dealership_id = ? AND ds.vehicle_model = pickle_wholesale_catalog.model
+              AND ds.acquired_from = 'npc_seed' AND ds.sold_at IS NULL
+        )
+    ]]):format(typeMarks, tierMarks)
+
+    local params = { dealershipId }
+    for _, tval in ipairs(types) do params[#params + 1] = tval end
+    for _, tval in ipairs(allowedTiers) do params[#params + 1] = tval end
+    params[#params + 1] = dealershipId
+
+    return MySQL.update.await(sql, params) or 0
+end
+
 --- Get all dealerships (admin only)
 lib.callback.register("pickle_dealerships:adminGetAllDealerships", function(source)
     if not IsPlayerAdmin(source) then
@@ -60,6 +105,7 @@ lib.callback.register("pickle_dealerships:adminTransferOwnership", function(sour
         return { success = false, message = _L("dealership_not_found") }
     end
 
+    local previousOwner = dealership.owner_identifier or "none"
     MySQL.update.await("UPDATE pickle_dealerships SET owner_identifier = ? WHERE id = ?", { newOwnerId, dealershipId })
     UpdateDealershipCache(dealershipId, { owner_identifier = newOwnerId })
 
@@ -67,6 +113,17 @@ lib.callback.register("pickle_dealerships:adminTransferOwnership", function(sour
     AddLedgerEntry(dealershipId, "admin", 0, "Ownership transferred to " .. newOwnerId .. " by admin " .. adminName, GetIdentifier(source))
 
     debugPrint("Admin " .. adminName .. " transferred dealership #" .. dealershipId .. " to " .. newOwnerId)
+
+    LogDiscord("admin", {
+        title = "Ownership Transferred",
+        actor = source,
+        dealershipId = dealershipId,
+        fields = {
+            { name = "Dealership Name", value = dealership.name or "?", inline = true },
+            { name = "Previous Owner", value = "`" .. tostring(previousOwner) .. "`", inline = true },
+            { name = "New Owner", value = "`" .. tostring(newOwnerId) .. "`", inline = true },
+        },
+    })
 
     return { success = true, message = _L("admin_ownership_transferred_msg") }
 end)
@@ -98,6 +155,17 @@ lib.callback.register("pickle_dealerships:adminSetBalance", function(source, dat
 
     local adminName = GetPlayerCharacterName(source) or GetPlayerName(source)
     AddLedgerEntry(dealershipId, "admin", amount, "Balance set to " .. GetCurrencyString(amount) .. " by admin " .. adminName, GetIdentifier(source))
+
+    LogDiscord("finances", {
+        title = "Admin Balance Override",
+        actor = source,
+        dealershipId = dealershipId,
+        fields = {
+            { name = "Dealership", value = dealership.name or "?", inline = true },
+            { name = "Previous Balance", value = GetCurrencyString(dealership.balance or 0), inline = true },
+            { name = "New Balance", value = GetCurrencyString(amount), inline = true },
+        },
+    })
 
     return { success = true, newBalance = amount, message = _L("admin_balance_set_to", GetCurrencyString(amount)) }
 end)
@@ -208,6 +276,23 @@ lib.callback.register("pickle_dealerships:adminDeleteDealership", function(sourc
     -- Seize-cache refresh covers clients that had this dealership flagged for seizure.
     TriggerClientEvent('pickle_dealerships:refreshSeizeCache', -1)
 
+    -- Rebuild world on every client so blips, zones, interactions, display
+    -- vehicles, and NPC customers for the deleted dealership get torn down
+    -- without a resource restart.
+    TriggerClientEvent('pickle_dealerships:reloadWorld', -1)
+
+    LogDiscord("admin", {
+        title = "Dealership Deleted",
+        actor = source,
+        dealershipId = dealershipId,
+        description = "All associated stock, employees, ledger, auctions, and financing rows were purged.",
+        fields = {
+            { name = "Name", value = dealership.name or "?", inline = true },
+            { name = "Owner", value = "`" .. tostring(dealership.owner_identifier or "none") .. "`", inline = true },
+            { name = "Mode", value = tostring(dealership.mode or "?"), inline = true },
+        },
+    })
+
     return { success = true, message = _L("admin_dealership_deleted_msg") }
 end)
 
@@ -227,14 +312,44 @@ lib.callback.register("pickle_dealerships:adminToggleMode", function(source, dat
         return { success = false, message = _L("dealership_not_found") }
     end
 
-    local currentMode = dealership.mode or "public"
-    local newMode = currentMode == "public" and "player_owned" or "public"
+    -- Canonical values: 'player-owned' and 'managed' (NPC/automated). Anything
+    -- else (legacy 'public' rows, stray 'player_owned' underscore form) is
+    -- normalized on the next toggle.
+    local currentMode = dealership.mode or "managed"
+    local newMode = currentMode == "player-owned" and "managed" or "player-owned"
 
     MySQL.update.await("UPDATE pickle_dealerships SET mode = ? WHERE id = ?", { newMode, dealershipId })
     UpdateDealershipCache(dealershipId, { mode = newMode })
 
+    -- A player-owned dealership must always start with zero inventory —
+    -- otherwise converting a fully-stocked NPC shop would hand the new owner
+    -- hundreds of free vehicles. Purge the seed rows and zero the balance on
+    -- the transition. Converting back to managed re-seeds the auto-stock.
+    if newMode == "player-owned" then
+        MySQL.update.await(
+            "DELETE FROM pickle_dealership_stock WHERE dealership_id = ? AND acquired_from = 'npc_seed'",
+            { dealershipId }
+        )
+    elseif newMode == "managed" then
+        seedManagedDealershipStock(dealershipId, dealership.type, dealership.tier)
+    end
+
     local adminName = GetPlayerCharacterName(source) or GetPlayerName(source)
     AddLedgerEntry(dealershipId, "admin", 0, "Mode changed to " .. newMode .. " by admin " .. adminName, GetIdentifier(source))
+
+    LogDiscord("admin", {
+        title = "Dealership Mode Changed",
+        actor = source,
+        dealershipId = dealershipId,
+        fields = {
+            { name = "Dealership", value = dealership.name or "?", inline = true },
+            { name = "Previous", value = tostring(currentMode), inline = true },
+            { name = "New", value = tostring(newMode), inline = true },
+        },
+    })
+
+    -- Clients need to re-fetch so stock pages/blips reflect the new state.
+    TriggerClientEvent('pickle_dealerships:reloadWorld', -1)
 
     return { success = true, newMode = newMode, message = _L("admin_mode_set_to", newMode) }
 end)
@@ -309,6 +424,33 @@ lib.callback.register("pickle_dealerships:adminCreateDealership", function(sourc
     collectInteraction("sales", data.salesPoint)
     collectInteraction("showroom", data.showroomPoint)
 
+    -- Display spots placed inline during creation. Each carries an id so the
+    -- positions tab can remove individual spots later.
+    if type(data.displaySpots) == "table" and #data.displaySpots > 0 then
+        metadata.displaySpots = {}
+        metadata._nextSpotId = 0
+        for _, s in ipairs(data.displaySpots) do
+            if type(s) == "table" and s.x then
+                metadata._nextSpotId = metadata._nextSpotId + 1
+                metadata.displaySpots[#metadata.displaySpots + 1] = {
+                    x = s.x, y = s.y, z = s.z, w = s.w or 0.0, id = metadata._nextSpotId,
+                }
+            end
+        end
+    end
+
+    -- NPC spawn points placed inline during creation.
+    if type(data.npcSpawnPoints) == "table" and #data.npcSpawnPoints > 0 then
+        metadata.npcSpawnPoints = {}
+        for _, p in ipairs(data.npcSpawnPoints) do
+            if type(p) == "table" and p.x then
+                metadata.npcSpawnPoints[#metadata.npcSpawnPoints + 1] = {
+                    x = p.x, y = p.y, z = p.z, w = p.w or 0.0,
+                }
+            end
+        end
+    end
+
     -- Framework faction (job OR gang). Faction name goes in the top-level `job` column;
     -- the type disambiguator lives in metadata.factionType.
     local factionName = data.factionName
@@ -336,10 +478,33 @@ lib.callback.register("pickle_dealerships:adminCreateDealership", function(sourc
         local location = "dealership_" .. id
         MySQL.update.await("UPDATE pickle_dealerships SET location = ? WHERE id = ?", { location, id })
 
+        -- NPC-operated dealerships get auto-seeded infinite stock based on their
+        -- type + tier. Owners/admins tune prices in the stock tab.
+        if mode == "managed" then
+            seedManagedDealershipStock(id, dealershipType, tier)
+        end
+
         LoadDealerships()
+        -- Tell every client to re-fetch and set up the new dealership in-world.
+        -- Without this, blips/zones/interactions only appear after a resource restart.
+        TriggerClientEvent('pickle_dealerships:reloadWorld', -1)
 
         local adminName = GetPlayerCharacterName(source) or GetPlayerName(source)
         debugPrint("Admin " .. adminName .. " created dealership #" .. id .. " (" .. data.label .. ")")
+
+        LogDiscord("admin", {
+            title = "Dealership Created",
+            actor = source,
+            dealershipId = id,
+            fields = {
+                { name = "Name", value = tostring(data.label or "?"), inline = true },
+                { name = "Mode", value = tostring(mode), inline = true },
+                { name = "Type", value = tostring(dealershipType), inline = true },
+                { name = "Owner", value = "`" .. tostring(ownerIdentifier or "none") .. "`", inline = true },
+                { name = "Faction", value = tostring(factionName or "none"), inline = true },
+                { name = "Tier", value = tostring(tier), inline = true },
+            },
+        })
 
         return { success = true, dealershipId = id, message = _L("admin_dealership_created_msg", data.label) }
     else
@@ -408,6 +573,13 @@ lib.callback.register("pickle_dealerships:adminSavePosition", function(source, d
     -- Tell clients exactly what changed so they can surgically update
     local location = dealership.location
     TriggerClientEvent('pickle_dealerships:positionUpdated', -1, location, data.field, data.pointType)
+
+    -- Adding an NPC spawn point after an employee is already on duty means
+    -- their spawn loop was holding a stale (possibly empty) point list — push
+    -- the refreshed config so the new location comes into play immediately.
+    if data.field == "npcSpawnPoint" and RefreshNpcDutyForDealership then
+        RefreshNpcDutyForDealership(dealershipId)
+    end
 
     return { success = true, metadata = metadata, message = _L("admin_position_saved") }
 end)
@@ -614,6 +786,94 @@ lib.callback.register("pickle_dealerships:adminRemoveCatalogVehicle", function(s
     return { success = true, message = _L("admin_vehicle_removed") }
 end)
 
+--- Stock a dealership with the entire catalog that matches its vehicle type +
+--- tier-based access level. The admin supplies a single `quantity` that is
+--- applied to every inserted row. Models already present (unsold) on this lot
+--- are skipped, so re-running after adding new catalog entries just fills in
+--- the new ones.
+lib.callback.register("pickle_dealerships:adminStockAllFromCatalog", function(source, data)
+    if not IsPlayerAdmin(source) then
+        return { success = false, message = _L("admin_no_permission") }
+    end
+
+    local dealershipId = tonumber(data and data.dealershipId)
+    if not dealershipId then
+        return { success = false, message = _L("admin_missing_dealership_id") }
+    end
+
+    local quantity = math.max(1, math.floor(tonumber(data and data.quantity) or 1))
+
+    local dealership = GetDealership(dealershipId)
+    if not dealership then
+        return { success = false, message = _L("dealership_not_found") }
+    end
+
+    -- Resolve which catalog tiers this dealership has access to, mirroring the
+    -- logic in seedManagedDealershipStock above.
+    local tierDef = Config.Tiers and Config.Tiers[tonumber(dealership.tier) or 1] or nil
+    local accessLevel = tierDef and tierDef.catalogAccess or 'basic'
+    local hierarchy = { 'basic', 'expanded', 'full', 'exclusive' }
+    local levelIdx = ({ basic = 1, expanded = 2, full = 3, exclusive = 4 })[accessLevel] or 1
+    local allowedTiers = {}
+    for i = 1, levelIdx do allowedTiers[#allowedTiers + 1] = hierarchy[i] end
+
+    local vehicleType = dealership.type
+    local types = {}
+    if vehicleType == 'mixed' or not vehicleType or vehicleType == '' then
+        types = { 'car', 'boat', 'air' }
+    else
+        types = { vehicleType }
+    end
+
+    if #types == 0 or #allowedTiers == 0 then
+        return { success = false, message = _L("admin_no_catalog_vehicles") }
+    end
+
+    local typeMarks = string.rep('?,', #types):sub(1, -2)
+    local tierMarks = string.rep('?,', #allowedTiers):sub(1, -2)
+
+    -- Only insert models that don't already have an unsold stock row on this
+    -- lot, so re-running after adding new catalog entries is safe.
+    local sql = ([[
+        INSERT INTO pickle_dealership_stock
+            (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, quantity, ordered_at, delivered_at, acquired_from)
+        SELECT ?, model, label, wholesale, ROUND(wholesale * (1 + ?)), ?, NOW(), NOW(), 'admin_seed'
+        FROM pickle_wholesale_catalog
+        WHERE vehicle_type IN (%s) AND tier IN (%s)
+        AND NOT EXISTS (
+            SELECT 1 FROM pickle_dealership_stock ds
+            WHERE ds.dealership_id = ?
+              AND ds.vehicle_model = pickle_wholesale_catalog.model
+              AND ds.sold_at IS NULL
+        )
+    ]]):format(typeMarks, tierMarks)
+
+    local params = { dealershipId, 0.30, quantity } -- retail = wholesale * 1.3 by default
+    for _, tval in ipairs(types) do params[#params + 1] = tval end
+    for _, tval in ipairs(allowedTiers) do params[#params + 1] = tval end
+    params[#params + 1] = dealershipId
+
+    local inserted = MySQL.update.await(sql, params) or 0
+
+    local adminName = GetPlayerCharacterName(source) or GetPlayerName(source)
+    AddLedgerEntry(dealershipId, "admin", 0,
+        ("Seeded %d catalog vehicles into stock by admin %s"):format(inserted, adminName),
+        GetIdentifier(source))
+
+    LogDiscord("admin", {
+        title = "Catalog Stocked",
+        actor = source,
+        dealershipId = dealershipId,
+        fields = {
+            { name = "Dealership", value = dealership.name or "?", inline = true },
+            { name = "Rows Inserted", value = tostring(inserted), inline = true },
+            { name = "Access Tier", value = tostring(accessLevel), inline = true },
+        },
+    })
+
+    return { success = true, inserted = inserted, message = _L("admin_stockall_complete", inserted, dealershipId) }
+end)
+
 --- Set dealership faction (job OR gang). `factionType` must be "job" or "gang".
 --- The faction name is stored in `pickle_dealerships.job` (legacy column kept for back-compat);
 --- the type lives in metadata.factionType.
@@ -774,7 +1034,7 @@ lib.callback.register("pickle_dealerships:adminSetPhotoBucket", function(source,
 end)
 
 --- Admin command to open admin panel
-RegisterCommand("dealership", function(source, args, rawCommand)
+RegisterCommand(Config.AdminCommand or "dealerships", function(source, args, rawCommand)
     if source == 0 then
         print("This command cannot be used from the console.")
         return
@@ -786,53 +1046,4 @@ RegisterCommand("dealership", function(source, args, rawCommand)
     end
 
     TriggerClientEvent("pickle_dealerships:openAdminPanel", source)
-end, false)
-
---- Debug: add all catalog vehicles to a dealership's stock
-RegisterCommand("dealership_stockall", function(source, args, rawCommand)
-    if source == 0 then
-        print("This command cannot be used from the console.")
-        return
-    end
-
-    if not IsPlayerAdmin(source) then
-        ShowNotification(source, _L("admin_no_command_permission"))
-        return
-    end
-
-    local dealershipId = tonumber(args[1])
-    if not dealershipId then
-        ShowNotification(source, _L("admin_stockall_usage"))
-        return
-    end
-
-    local dealership = MySQL.single.await("SELECT * FROM pickle_dealerships WHERE id = ?", { dealershipId })
-    if not dealership then
-        ShowNotification(source, _L("dealership_not_found"))
-        return
-    end
-
-    local catalog = MySQL.query.await("SELECT * FROM pickle_wholesale_catalog", {})
-    if not catalog or #catalog == 0 then
-        ShowNotification(source, _L("admin_no_catalog_vehicles"))
-        return
-    end
-
-    local count = 0
-    for _, v in ipairs(catalog) do
-        local exists = MySQL.single.await(
-            "SELECT id FROM pickle_dealership_stock WHERE dealership_id = ? AND vehicle_model = ? AND sold_at IS NULL",
-            { dealershipId, v.model }
-        )
-        if not exists then
-            MySQL.insert.await(
-                "INSERT INTO pickle_dealership_stock (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, ordered_at, delivered_at) VALUES (?, ?, ?, ?, ?, NOW(), NOW())",
-                { dealershipId, v.model, v.label or v.model, v.wholesale, math.floor(v.wholesale * 1.3) }
-            )
-            count = count + 1
-        end
-    end
-
-    ShowNotification(source, _L("admin_stockall_complete", count, dealershipId))
-    TriggerClientEvent('pickle_dealerships:refreshDisplay', -1, dealership.location)
 end, false)

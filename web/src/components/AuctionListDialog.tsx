@@ -1,14 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './ui/dialog'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { fetchNui, formatCurrency } from '../lib/utils'
 import { t } from '../lib/locale'
 import type { StockItem } from '../types'
-
-// Kept in sync with Config.Auction.durations (minutes)
-const DURATION_PRESETS = [3, 5, 10, 15, 30]
-const DEFAULT_DURATION = 10
 
 interface Props {
   item: StockItem
@@ -17,13 +13,26 @@ interface Props {
 }
 
 export default function AuctionListDialog({ item, onClose, onListed }: Props) {
+  const [durationPresets, setDurationPresets] = useState<number[]>([])
+  const [duration, setDuration] = useState<number | null>(null)
   const [startingBid, setStartingBid] = useState('')
   const [minIncrement, setMinIncrement] = useState('250')
   const [reservePrice, setReservePrice] = useState('')
   const [buyoutPrice, setBuyoutPrice] = useState('')
-  const [duration, setDuration] = useState<number>(DEFAULT_DURATION)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Pull the presets from Config.Auction so the dialog always matches what the
+  // server accepts. Without this, the NUI and Lua drift (the server rejected
+  // the hardcoded 30-minute option that NUI was offering).
+  useEffect(() => {
+    fetchNui<{ durations?: number[]; defaultDuration?: number }>('getAuctionConfig', {}).then((cfg) => {
+      const list = (cfg?.durations && cfg.durations.length > 0) ? cfg.durations : [10]
+      setDurationPresets(list)
+      const def = cfg?.defaultDuration
+      setDuration(def && list.includes(def) ? def : list[0])
+    })
+  }, [])
 
   const startingNum = parseInt(startingBid) || 0
   const reserveNum = parseInt(reservePrice) || 0
@@ -31,6 +40,7 @@ export default function AuctionListDialog({ item, onClose, onListed }: Props) {
   const incrementNum = parseInt(minIncrement) || 0
 
   const canSubmit = startingNum > 0 && incrementNum >= 50 && !submitting
+    && duration !== null
     && (!reserveNum || reserveNum >= startingNum)
     && (!buyoutNum || buyoutNum >= startingNum)
 
@@ -102,7 +112,7 @@ export default function AuctionListDialog({ item, onClose, onListed }: Props) {
           <div>
             <label className="text-xs font-medium">{t('label_duration')}</label>
             <div className="flex flex-wrap gap-1 mt-1">
-              {DURATION_PRESETS.map((mins) => (
+              {durationPresets.map((mins) => (
                 <button
                   key={mins}
                   onClick={() => setDuration(mins)}

@@ -76,17 +76,17 @@ lib.callback.register("pickle_dealerships:withdrawFunds", function(source, data)
     local playerName = GetPlayerCharacterName(source) or "Unknown"
     AddLedgerEntry(dealershipId, "withdrawal", -amount, "Withdrawal by " .. playerName, identifier)
 
-    -- Webhook for large withdrawals
-    local webhookThreshold = Config.Management and Config.Management.largeWithdrawalThreshold or 100000
-    if amount >= webhookThreshold and Config.Webhooks and Config.Webhooks.management then
-        PerformHttpRequest(Config.Webhooks.management, function() end, "POST", json.encode({
-            embeds = {{
-                title = "Large Withdrawal",
-                description = string.format("%s withdrew %s from dealership #%d", playerName, GetCurrencyString(amount), dealershipId),
-                color = 16711680,
-            }}
-        }), { ["Content-Type"] = "application/json" })
-    end
+    local threshold = (ServerConfig and ServerConfig.Webhooks and ServerConfig.Webhooks.largeWithdrawalThreshold) or 100000
+    LogDiscord("finances", {
+        title = amount >= threshold and "Large Withdrawal" or "Withdrawal",
+        actor = source,
+        dealershipId = dealershipId,
+        fields = {
+            { name = "Dealership", value = dealership.name or "?", inline = true },
+            { name = "Amount", value = GetCurrencyString(amount), inline = true },
+            { name = "New Balance", value = GetCurrencyString(newBalance), inline = true },
+        },
+    })
 
     return { success = true, newBalance = newBalance, message = "Successfully withdrew " .. GetCurrencyString(amount) .. "." }
 end)
@@ -124,6 +124,17 @@ lib.callback.register("pickle_dealerships:depositFunds", function(source, data)
     local identifier = GetIdentifier(source)
     local playerName = GetPlayerCharacterName(source) or "Unknown"
     AddLedgerEntry(dealershipId, "deposit", amount, "Deposit by " .. playerName, identifier)
+
+    LogDiscord("finances", {
+        title = "Deposit",
+        actor = source,
+        dealershipId = dealershipId,
+        fields = {
+            { name = "Dealership", value = dealership.name or "?", inline = true },
+            { name = "Amount", value = GetCurrencyString(amount), inline = true },
+            { name = "New Balance", value = GetCurrencyString(newBalance), inline = true },
+        },
+    })
 
     return { success = true, newBalance = newBalance, message = "Successfully deposited " .. GetCurrencyString(amount) .. "." }
 end)
@@ -342,6 +353,38 @@ lib.callback.register("pickle_dealerships:getCommissionRates", function(source, 
     }
 end)
 
+--- Customer-facing: returns only the alt currencies this dealership actually
+--- accepts, enriched with label/type/valuePerUnit from the global registry.
+--- No permission gate — any player in the showroom needs this to pick a tender.
+lib.callback.register("pickle_dealerships:getShowroomAltCurrencies", function(source, dealershipId)
+    local dealership = GetDealership(dealershipId)
+    if not dealership then return { currencies = {}, base = { cash = true, bank = true } } end
+    local meta = dealership.metadata
+    if type(meta) == "string" then meta = json.decode(meta) or {} end
+    if type(meta) ~= "table" then meta = {} end
+    local acceptedKeys = {}
+    if type(meta.acceptedAltCurrencies) == "table" then
+        for _, k in ipairs(meta.acceptedAltCurrencies) do
+            if type(k) == "string" then acceptedKeys[k] = true end
+        end
+    end
+    local currencies = {}
+    for _, cur in ipairs(ListAltCurrencies and ListAltCurrencies() or {}) do
+        if acceptedKeys[cur.key] then currencies[#currencies + 1] = cur end
+    end
+    -- Cash/bank are accepted unless an admin explicitly toggled them off
+    -- (donator-coin-only shops). Default to both on when unset for back-compat.
+    local base = meta.acceptedBasePayments
+    if type(base) ~= "table" then base = { cash = true, bank = true } end
+    return {
+        currencies = currencies,
+        base = {
+            cash = base.cash ~= false,
+            bank = base.bank ~= false,
+        },
+    }
+end)
+
 --- Returns the list of server-wide alt currencies along with the subset this dealership accepts.
 lib.callback.register("pickle_dealerships:getAcceptedAltCurrencies", function(source, dealershipId)
     if not CanPlayerManage(source, dealershipId) then return nil end
@@ -359,8 +402,18 @@ lib.callback.register("pickle_dealerships:getAcceptedAltCurrencies", function(so
         end
     end
 
+    local base = meta.acceptedBasePayments
+    if type(base) ~= "table" then base = { cash = true, bank = true } end
+
     local available = ListAltCurrencies and ListAltCurrencies() or {}
-    return { available = available, accepted = accepted }
+    return {
+        available = available,
+        accepted = accepted,
+        base = {
+            cash = base.cash ~= false,
+            bank = base.bank ~= false,
+        },
+    }
 end)
 
 --- Admin-only update of the dealership's accepted alt currencies. Silently drops unknown keys.
@@ -390,6 +443,15 @@ lib.callback.register("pickle_dealerships:setAcceptedAltCurrencies", function(so
         end
     end
     meta.acceptedAltCurrencies = cleaned
+
+    -- Base payment toggles (cash / bank). If `base` is omitted entirely, leave
+    -- whatever was previously saved so the caller can update only currencies.
+    if type(data.base) == "table" then
+        meta.acceptedBasePayments = {
+            cash = data.base.cash ~= false,
+            bank = data.base.bank ~= false,
+        }
+    end
 
     MySQL.update.await("UPDATE pickle_dealerships SET metadata = ? WHERE id = ?", { json.encode(meta), dealershipId })
     UpdateDealershipCache(dealershipId, { metadata = meta })
@@ -656,8 +718,161 @@ lib.callback.register("pickle_dealerships:getDashboardStats", function(source, d
         revenueThisWeek  = revenueThisWeek,
         topSeller        = topSeller,
         stockCount       = stockCount,
-        stockCapacity    = tierCfg and tierCfg.stockCap or 20,
+        -- "How many models the store could ever carry" (all tiers unlocked) —
+        -- displayed on the dashboard in place of the old tiered cap.
+        stockCapacity    = GetDealershipCatalogMax(dealership),
         employeeCount    = employeeCount,
         employeeCapacity = tierCfg and tierCfg.employeeCap or 2,
+    }
+end)
+
+--- Day-by-day revenue report for the Revenue chart on the dashboard. Player
+--- dealerships only (NPC shops skip the management panel entirely).
+--- Returns { daily = [{ date, revenue, sales }, ...], totals, previous,
+--- topSeller, popularVehicle, avgPrice, transactions }.
+lib.callback.register("pickle_dealerships:getRevenueReport", function(source, data)
+    local dealershipId = tonumber(data and data.dealershipId)
+    local days = tonumber(data and data.days) or 30
+    if days < 7 then days = 7 end
+    if days > 90 then days = 90 end
+
+    if not dealershipId or not CanPlayerManage(source, dealershipId) then return nil end
+
+    -- Bucket sales by UTC date for the last N days. Days with no sales get a
+    -- zero row via the client-side fill; we only return actual data here to
+    -- keep the payload small.
+    -- DATE_FORMAT guarantees a 'YYYY-MM-DD' string regardless of the oxmysql /
+    -- MariaDB driver's DATE column handling (which can return Date objects or
+    -- otherwise-formatted values that don't match our Lua keys).
+    local rows = MySQL.query.await([[
+        SELECT DATE_FORMAT(sold_at, '%Y-%m-%d') AS day,
+               COUNT(*) AS sales,
+               COALESCE(SUM(retail_price), 0) AS revenue
+        FROM pickle_dealership_stock
+        WHERE dealership_id = ?
+          AND sold_at IS NOT NULL
+          AND sold_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+        GROUP BY day
+        ORDER BY day ASC
+    ]], { dealershipId, days - 1 }) or {}
+
+    -- Back-fill missing days with 0 so the chart line stays continuous.
+    -- IMPORTANT: MySQL's `DATE(sold_at)` uses the session time zone. Previously
+    -- we formatted bucket keys with os.date('!...') (UTC), so on any server
+    -- whose MySQL TZ wasn't UTC every key missed and the chart showed zeros
+    -- while the summary totals were correct. Use local time in both places.
+    local byDay = {}
+    for _, r in ipairs(rows) do
+        byDay[tostring(r.day)] = {
+            revenue = tonumber(r.revenue) or 0,
+            sales = tonumber(r.sales) or 0,
+        }
+    end
+    local daily = {}
+    for i = days - 1, 0, -1 do
+        local key = os.date('%Y-%m-%d', os.time() - i * 86400)
+        local b = byDay[key] or { revenue = 0, sales = 0 }
+        daily[#daily + 1] = { date = key, revenue = b.revenue, sales = b.sales }
+    end
+
+    -- Pull totals directly from the DB so stats are accurate even if the
+    -- day-by-day bucket keys can't be matched (e.g. TZ quirks). This also
+    -- serves as the authoritative "X transactions in the window" figure.
+    local totals = MySQL.single.await([[
+        SELECT COUNT(*) AS sales,
+               COALESCE(SUM(retail_price), 0) AS revenue
+        FROM pickle_dealership_stock
+        WHERE dealership_id = ?
+          AND sold_at IS NOT NULL
+          AND sold_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+    ]], { dealershipId, days - 1 }) or { sales = 0, revenue = 0 }
+
+    local totalRevenue = tonumber(totals.revenue) or 0
+    local totalSales = tonumber(totals.sales) or 0
+
+    -- Previous equivalent window (days ago → 2*days ago) for delta comparison.
+    local prev = MySQL.single.await([[
+        SELECT COUNT(*) AS sales,
+               COALESCE(SUM(retail_price), 0) AS revenue
+        FROM pickle_dealership_stock
+        WHERE dealership_id = ?
+          AND sold_at IS NOT NULL
+          AND sold_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+          AND sold_at <  DATE_SUB(CURDATE(), INTERVAL ? DAY)
+    ]], { dealershipId, days * 2 - 1, days - 1 }) or { sales = 0, revenue = 0 }
+
+    -- Most popular vehicle (by number of units moved) in the selected window.
+    local popular = MySQL.single.await([[
+        SELECT vehicle_model AS model,
+               vehicle_label AS label,
+               COUNT(*) AS sales,
+               COALESCE(SUM(retail_price), 0) AS revenue
+        FROM pickle_dealership_stock
+        WHERE dealership_id = ?
+          AND sold_at IS NOT NULL
+          AND sold_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+        GROUP BY vehicle_model, vehicle_label
+        ORDER BY sales DESC
+        LIMIT 1
+    ]], { dealershipId, days - 1 })
+
+    local popularVehicle
+    if popular then
+        popularVehicle = {
+            model = popular.model,
+            label = popular.label or popular.model,
+            sales = tonumber(popular.sales) or 0,
+            revenue = tonumber(popular.revenue) or 0,
+        }
+    end
+
+    -- Top seller within the window (character-name resolved for online+offline).
+    local topRow = MySQL.single.await([[
+        SELECT ds.sold_by AS identifier,
+               COUNT(*) AS sales,
+               COALESCE(SUM(ds.retail_price), 0) AS revenue,
+               p.charinfo AS charinfo
+        FROM pickle_dealership_stock ds
+        LEFT JOIN players p ON p.citizenid = ds.sold_by
+        WHERE ds.dealership_id = ?
+          AND ds.sold_at IS NOT NULL
+          AND ds.sold_by IS NOT NULL
+          AND ds.sold_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+        GROUP BY ds.sold_by
+        ORDER BY sales DESC
+        LIMIT 1
+    ]], { dealershipId, days - 1 })
+
+    local topSeller
+    if topRow then
+        local name = topRow.identifier
+        if topRow.charinfo then
+            local info = type(topRow.charinfo) == "string" and (json.decode(topRow.charinfo) or {}) or topRow.charinfo
+            if info.firstname or info.lastname then
+                name = ((info.firstname or "") .. " " .. (info.lastname or "")):gsub("^%s+", ""):gsub("%s+$", "")
+            end
+        end
+        topSeller = {
+            name = name,
+            sales = tonumber(topRow.sales) or 0,
+            revenue = tonumber(topRow.revenue) or 0,
+        }
+    end
+
+    local avgPrice = totalSales > 0 and math.floor(totalRevenue / totalSales) or 0
+
+    return {
+        days = days,
+        daily = daily,
+        totalRevenue = totalRevenue,
+        totalSales = totalSales,
+        transactions = totalSales,
+        avgPrice = avgPrice,
+        previous = {
+            revenue = tonumber(prev.revenue) or 0,
+            sales = tonumber(prev.sales) or 0,
+        },
+        topSeller = topSeller,
+        popularVehicle = popularVehicle,
     }
 end)

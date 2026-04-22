@@ -256,6 +256,7 @@ CreateThread(function()
                 `duration_minutes`    INT NOT NULL DEFAULT 10,
                 `current_bid`         BIGINT DEFAULT NULL,
                 `current_bidder`      VARCHAR(50) DEFAULT NULL,
+                `current_payment_method` VARCHAR(16) DEFAULT NULL,
                 `started_at`          DATETIME DEFAULT CURRENT_TIMESTAMP,
                 `ends_at`             DATETIME DEFAULT NULL,
                 `ended_at`            DATETIME DEFAULT NULL,
@@ -275,11 +276,24 @@ CreateThread(function()
                 `auction_id`          INT NOT NULL,
                 `bidder_identifier`   VARCHAR(50) NOT NULL,
                 `amount`              BIGINT NOT NULL,
+                `payment_method`      VARCHAR(16) NOT NULL DEFAULT 'bank',
                 `placed_at`           DATETIME DEFAULT CURRENT_TIMESTAMP,
                 `refunded`            TINYINT(1) NOT NULL DEFAULT 0,
                 KEY `idx_auction` (`auction_id`),
                 KEY `idx_bidder`  (`bidder_identifier`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ]])
+
+        -- Defensive migrations: older installs already have these tables without
+        -- the payment-method columns we now depend on. Both servers we target
+        -- (MariaDB and MySQL 8.0.29+) support ADD COLUMN IF NOT EXISTS.
+        MySQL.Async.execute([[
+            ALTER TABLE `pickle_dealership_auctions`
+            ADD COLUMN IF NOT EXISTS `current_payment_method` VARCHAR(16) DEFAULT NULL
+        ]])
+        MySQL.Async.execute([[
+            ALTER TABLE `pickle_dealership_auction_bids`
+            ADD COLUMN IF NOT EXISTS `payment_method` VARCHAR(16) NOT NULL DEFAULT 'bank'
         ]])
 
         -- Seed default wholesale catalog (INSERT IGNORE skips existing entries)
@@ -478,6 +492,22 @@ end
 function GetDealership(id)
     if not id then return nil end
     return DealershipCache[tonumber(id)]
+end
+
+--- How many catalog entries this dealership could theoretically sell if every
+--- tier were unlocked. Used as the denominator on the dashboard stock bar so
+--- owners see "models for sale / models the store could ever carry" instead of
+--- an arbitrary per-tier cap.
+function GetDealershipCatalogMax(dealership)
+    local vehicleType = dealership and dealership.type or 'car'
+    local types = vehicleType == 'mixed' and { 'car', 'boat', 'air' } or { vehicleType }
+    local placeholders = {}
+    for i = 1, #types do placeholders[i] = '?' end
+    local count = MySQL.scalar.await(
+        ('SELECT COUNT(*) FROM pickle_wholesale_catalog WHERE vehicle_type IN (%s)'):format(table.concat(placeholders, ',')),
+        types
+    ) or 0
+    return tonumber(count) or 0
 end
 
 --- Returns the dealership's progression state from metadata.xp and the
@@ -680,9 +710,12 @@ function GetPlayerDealershipRole(source, dealershipId)
 end
 
 function CanPlayerManage(source, dealershipId)
+    -- Management rights are strictly limited to the dealership owner and server
+    -- admins. Managers are still employees — they can sell via the sales tablet
+    -- but cannot touch funds, stock ordering, hires, commissions, etc.
     if IsPlayerAdmin(source) then return true end
     local role = GetPlayerDealershipRole(source, dealershipId)
-    return role == "owner" or role == "manager"
+    return role == "owner"
 end
 
 function CanPlayerSell(source, dealershipId)
@@ -779,4 +812,74 @@ function GetDriverStreakMultiplier(identifier)
     local bonus = (cfg.perStreakBonusPct or 0) * streak
     local cap = (cfg.maxMultiplier or 1.0) - 1.0
     return 1.0 + math.min(bonus, cap)
+end
+
+-- ─── Discord Logging ───────────────────────────────────────────────────────
+-- Server-only. URLs live in ServerConfig.Webhooks (config_sv.lua) and are never
+-- exposed to clients. All callers must pass at least a category and title; the
+-- helper auto-enriches the embed with actor metadata (player name, identifier,
+-- source, timestamp) when an actor source is provided.
+
+local webhookColors = {
+    sales     = 3066993,  -- green
+    stock     = 3447003,  -- blue
+    admin     = 15105570, -- orange
+    finances  = 15844367, -- gold
+    employees = 10181046, -- purple
+    financing = 15158332, -- red-orange
+    security  = 15158332, -- red
+}
+
+--- Send a structured log entry to the Discord webhook mapped to `category`.
+---@param category string  One of 'sales' | 'stock' | 'admin' | 'finances' | 'employees' | 'financing' | 'security'
+---@param opts table       { title, description, actor (source|number|nil), fields = { { name, value, inline? }, ... }, dealershipId? }
+function LogDiscord(category, opts)
+    local cfg = ServerConfig and ServerConfig.Webhooks
+    if not cfg or not cfg.enabled then return end
+
+    local url = (cfg.urls and cfg.urls[category]) or cfg.fallback
+    if not url or url == "" then return end
+
+    opts = opts or {}
+    local fields = {}
+    -- Copy caller-provided fields first so they render above the auto-enrichment.
+    if type(opts.fields) == "table" then
+        for _, f in ipairs(opts.fields) do
+            fields[#fields + 1] = { name = tostring(f.name or "?"), value = tostring(f.value or "-"), inline = f.inline ~= false }
+        end
+    end
+
+    -- Auto-enrich with actor metadata. Pass opts.actor = source (number) to
+    -- attach the triggering player's name/identifier/source.
+    local actorSrc = tonumber(opts.actor)
+    if actorSrc then
+        local name = GetPlayerCharacterName and GetPlayerCharacterName(actorSrc) or GetPlayerName(actorSrc) or "Unknown"
+        local identifier = GetIdentifier and GetIdentifier(actorSrc) or "?"
+        fields[#fields + 1] = { name = "Player", value = tostring(name), inline = true }
+        fields[#fields + 1] = { name = "Identifier", value = "`" .. tostring(identifier) .. "`", inline = true }
+        fields[#fields + 1] = { name = "Source", value = tostring(actorSrc), inline = true }
+    end
+
+    if opts.dealershipId then
+        fields[#fields + 1] = { name = "Dealership", value = "#" .. tostring(opts.dealershipId), inline = true }
+    end
+
+    local embed = {
+        title = tostring(opts.title or category),
+        description = opts.description and tostring(opts.description) or nil,
+        color = webhookColors[category] or 7506394,
+        fields = fields,
+        timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+        footer = { text = "pickle_dealerships" },
+    }
+
+    local payload = {
+        username = cfg.botName or "Pickle Dealerships",
+        avatar_url = cfg.avatar and cfg.avatar ~= "" and cfg.avatar or nil,
+        embeds = { embed },
+    }
+
+    PerformHttpRequest(url, function() end, "POST", json.encode(payload), {
+        ["Content-Type"] = "application/json",
+    })
 end

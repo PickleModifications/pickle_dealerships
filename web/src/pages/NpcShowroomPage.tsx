@@ -57,7 +57,7 @@ export default function NpcShowroomPage({ data, profile, greeting, onClose }: Pr
       location: data.location,
     }).then((res) => {
       const items = Array.isArray(res) ? res : (res && 'stock' in res ? res.stock : [])
-      const available = items.filter((s) => !s.sold_at && !s.unlisted && s.delivered_at && new Date(s.delivered_at) <= new Date())
+      const available = items.filter((s) => !s.sold_at && !s.unlisted && !s.auction_id && s.delivered_at && new Date(s.delivered_at) <= new Date())
       setAllStock(available)
       const highest = available.reduce((max, s) => Math.max(max, s.retail_price), 0)
       if (highest > 0) {
@@ -133,6 +133,7 @@ export default function NpcShowroomPage({ data, profile, greeting, onClose }: Pr
     }>('npcEvaluateOffer', {
       offerPrice: price,
       currentStress: stress,
+      stockId: selected.id,
     }).then((res) => {
       if (res.success) {
         setStress(res.stress)

@@ -9,9 +9,9 @@ import { fetchNui, formatCurrency } from '../lib/utils'
 import { t } from '../lib/locale'
 import {
   X, LayoutDashboard, Package, Truck, Users, LineChart, Ticket,
-  DollarSign, Store, Clock, Percent, CreditCard, Shield, Trash2, Plus,
+  DollarSign, Store, Percent, CreditCard,
 } from 'lucide-react'
-import type { DealershipData, SocietyAllowlistEntry, DealershipProgression } from '../types'
+import type { DealershipData, DealershipProgression } from '../types'
 
 import DashboardPage from './DashboardPage'
 import StockPage from './StockPage'
@@ -35,7 +35,6 @@ type ManagementTab =
   | 'coupons'
   | 'commission'
   | 'financing'
-  | 'society'
 
 interface NavItem {
   id: ManagementTab
@@ -43,18 +42,26 @@ interface NavItem {
   icon: React.ReactNode
   minRole?: string[]
   feature?: string
+  // When true, the tab is hidden for NPC-operated (mode='managed') dealerships.
+  // NPC dealerships run off auto-seeded infinite stock, so the ordering UI is
+  // irrelevant for them.
+  hideForNpc?: boolean
 }
 
+// The management menu is owner/admin only — managers and salespersons are still
+// employees and can sell from the sales tablet, but cannot touch anything in
+// here.
+const OWNER_ADMIN: string[] = ['owner', 'admin']
+
 const navItems: NavItem[] = [
-  { id: 'dashboard', labelKey: 'tab_dashboard', icon: <LayoutDashboard className="h-4 w-4" /> },
-  { id: 'stock', labelKey: 'tab_stock', icon: <Package className="h-4 w-4" /> },
-  { id: 'catalog', labelKey: 'tab_order_vehicles', icon: <Truck className="h-4 w-4" /> },
-  { id: 'employees', labelKey: 'tab_employees', icon: <Users className="h-4 w-4" />, minRole: ['owner', 'manager', 'admin'] },
-  { id: 'finances', labelKey: 'tab_finances', icon: <LineChart className="h-4 w-4" />, minRole: ['owner', 'manager', 'admin'] },
-  { id: 'commission', labelKey: 'tab_commission', icon: <Percent className="h-4 w-4" />, minRole: ['owner', 'admin'] },
-  { id: 'coupons', labelKey: 'tab_coupons', icon: <Ticket className="h-4 w-4" />, minRole: ['owner', 'admin'], feature: 'coupons' },
-  { id: 'financing', labelKey: 'tab_financing', icon: <CreditCard className="h-4 w-4" />, minRole: ['owner', 'admin'] },
-  { id: 'society', labelKey: 'tab_society_payments', icon: <Shield className="h-4 w-4" />, minRole: ['owner', 'admin'] },
+  { id: 'dashboard', labelKey: 'tab_dashboard', icon: <LayoutDashboard className="h-4 w-4" />, minRole: OWNER_ADMIN, hideForNpc: true },
+  { id: 'stock', labelKey: 'tab_stock', icon: <Package className="h-4 w-4" />, minRole: OWNER_ADMIN },
+  { id: 'catalog', labelKey: 'tab_order_vehicles', icon: <Truck className="h-4 w-4" />, minRole: OWNER_ADMIN, hideForNpc: true },
+  { id: 'employees', labelKey: 'tab_employees', icon: <Users className="h-4 w-4" />, minRole: OWNER_ADMIN },
+  { id: 'finances', labelKey: 'tab_finances', icon: <LineChart className="h-4 w-4" />, minRole: OWNER_ADMIN, hideForNpc: true },
+  { id: 'commission', labelKey: 'tab_commission', icon: <Percent className="h-4 w-4" />, minRole: OWNER_ADMIN },
+  { id: 'coupons', labelKey: 'tab_coupons', icon: <Ticket className="h-4 w-4" />, minRole: OWNER_ADMIN, feature: 'coupons' },
+  { id: 'financing', labelKey: 'tab_financing', icon: <CreditCard className="h-4 w-4" />, minRole: OWNER_ADMIN },
 ]
 
 const tierFeatures: Record<string, number> = {
@@ -66,7 +73,6 @@ export default function ManagementPage({ data, onClose }: Props) {
   const [activeTab, setActiveTab] = useState<ManagementTab>(data.initialTab as ManagementTab || 'dashboard')
   const [balance, setBalance] = useState<number | null>(data.initialBalance ?? null)
   const [purchasing, setPurchasing] = useState(false)
-  const [isClockedIn, setIsClockedIn] = useState(false)
   const [progression, setProgression] = useState<DealershipProgression | null>(null)
 
   const refreshProgression = () => {
@@ -88,11 +94,6 @@ export default function ManagementPage({ data, onClose }: Props) {
   useEffect(() => {
     refreshBalance()
     refreshProgression()
-    fetchNui<{ clockedIn: boolean }>('getClockStatus', {
-      dealershipId: data.dealershipId,
-    }).then((res) => {
-      if (res) setIsClockedIn(res.clockedIn)
-    }).catch(() => {})
   }, [data.dealershipId, data.isOwned])
 
   // Refresh balance whenever the active tab changes
@@ -142,10 +143,19 @@ export default function ManagementPage({ data, onClose }: Props) {
   const canAccess = (item: NavItem): boolean => {
     if (item.minRole && !item.minRole.includes(data.role)) return false
     if (item.feature && data.tier < (tierFeatures[item.feature] || 99)) return false
+    if (item.hideForNpc && data.mode === 'managed') return false
     return true
   }
 
   const visibleItems = navItems.filter(canAccess)
+
+  // If the default/initial tab got filtered out (e.g. dashboard hidden for NPC
+  // shops), bump to the first visible tab so the content area isn't empty.
+  useEffect(() => {
+    if (visibleItems.length > 0 && !visibleItems.some((i) => i.id === activeTab)) {
+      setActiveTab(visibleItems[0].id)
+    }
+  }, [visibleItems, activeTab])
 
   const subData = { ...data, embedded: true }
   const subProps = { data: subData, onClose: () => {} }
@@ -167,9 +177,7 @@ export default function ManagementPage({ data, onClose }: Props) {
       case 'commission':
         return <CommissionSettings dealershipId={data.dealershipId} />
       case 'financing':
-        return <FinancingSettingsPanel dealershipId={data.dealershipId} />
-      case 'society':
-        return <SocietyAllowlistSettings dealershipId={data.dealershipId} />
+        return <FinancingSettingsPanel dealershipId={data.dealershipId} dealershipName={data.dealershipName} />
       default:
         return null
     }
@@ -181,7 +189,12 @@ export default function ManagementPage({ data, onClose }: Props) {
       <div className="w-56 border-r border-border flex flex-col shrink-0">
         <div className="p-4">
           <h2 className="font-bold text-sm truncate">{data.dealershipName}</h2>
-          <div className="flex items-center gap-1.5 mt-1.5">
+          <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+            {progression?.enabled && data.mode !== 'managed' && (
+              <Badge className="text-[10px] px-1.5 py-0 bg-accent text-accent-foreground">
+                {t('progression_level_short', String(progression.level))}
+              </Badge>
+            )}
             <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
               {progression?.label || t(`tier_${data.tier}`)}
             </Badge>
@@ -189,7 +202,9 @@ export default function ManagementPage({ data, onClose }: Props) {
               {data.role}
             </Badge>
           </div>
-          {progression?.enabled && (
+          {/* Automated (NPC) dealerships have no progression loop and no managed
+              balance — they're just auto-listed stock, so these readouts are hidden. */}
+          {progression?.enabled && data.mode !== 'managed' && (
             <div className="mt-2">
               {progression.nextLevelXp !== null && !progression.isMaxLevel ? (
                 <>
@@ -211,7 +226,7 @@ export default function ManagementPage({ data, onClose }: Props) {
               )}
             </div>
           )}
-          {balance !== null && (
+          {balance !== null && data.mode !== 'managed' && (
             <p className="text-xs font-semibold text-emerald-400 mt-2">
               {formatCurrency(balance)}
             </p>
@@ -242,23 +257,6 @@ export default function ManagementPage({ data, onClose }: Props) {
         <Separator />
 
         <div className="p-2 space-y-0.5">
-          {data.role !== 'customer' && (
-            <button
-              onClick={() => {
-                fetchNui(isClockedIn ? 'clockOut' : 'clockIn', { dealershipId: data.dealershipId }).then((res: any) => {
-                  if (res?.success) setIsClockedIn(!isClockedIn)
-                })
-              }}
-              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-colors ${
-                isClockedIn
-                  ? 'text-emerald-400 hover:bg-muted'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-muted'
-              }`}
-            >
-              <Clock className="h-4 w-4" />
-              {isClockedIn ? t('clock_out') : t('clock_in')}
-            </button>
-          )}
           <button
             onClick={onClose}
             className="w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-sm text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
@@ -427,106 +425,3 @@ function CommissionSettings({ dealershipId }: { dealershipId: number }) {
   )
 }
 
-function SocietyAllowlistSettings({ dealershipId }: { dealershipId: number }) {
-  const [entries, setEntries] = useState<SocietyAllowlistEntry[]>([])
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
-
-  useEffect(() => {
-    fetchNui<{ success: boolean; allowlist: SocietyAllowlistEntry[] }>('getSocietyAllowlist', {
-      dealershipId,
-    }).then((res) => {
-      if (res.success) setEntries(res.allowlist || [])
-      setLoading(false)
-    }).catch(() => setLoading(false))
-  }, [dealershipId])
-
-  const updateEntry = (idx: number, patch: Partial<SocietyAllowlistEntry>) => {
-    setEntries((prev) => prev.map((e, i) => i === idx ? { ...e, ...patch } : e))
-  }
-
-  const addEntry = () => {
-    setEntries((prev) => [...prev, { type: 'job', name: '', minGrade: 0 }])
-  }
-
-  const removeEntry = (idx: number) => {
-    setEntries((prev) => prev.filter((_, i) => i !== idx))
-  }
-
-  const handleSave = () => {
-    setSaving(true)
-    const cleaned = entries
-      .filter((e) => e.name.trim() !== '')
-      .map((e) => ({ type: e.type, name: e.name.trim(), minGrade: Math.max(0, Math.floor(Number(e.minGrade) || 0)) }))
-    fetchNui('setSocietyAllowlist', {
-      dealershipId,
-      allowlist: cleaned,
-    }).then(() => {
-      setEntries(cleaned)
-      setSaving(false)
-    }).catch(() => setSaving(false))
-  }
-
-  if (loading) {
-    return <div className="flex items-center justify-center h-48 text-muted-foreground">{t('loading')}</div>
-  }
-
-  return (
-    <div className="p-5 space-y-4">
-      <div>
-        <h2 className="text-lg font-bold">{t('tab_society_payments')}</h2>
-        <p className="text-sm text-muted-foreground">{t('society_payments_desc')}</p>
-      </div>
-
-      <div className="space-y-2 max-w-2xl">
-        {entries.length === 0 && (
-          <p className="text-xs text-muted-foreground">{t('society_allowlist_empty')}</p>
-        )}
-        {entries.map((entry, idx) => (
-          <div key={idx} className="flex items-center gap-2 rounded-md bg-muted/40 px-3 py-2">
-            <select
-              value={entry.type}
-              onChange={(e) => updateEntry(idx, { type: e.target.value as 'job' | 'gang' })}
-              className="h-8 rounded-md border border-border bg-background px-2 text-sm"
-            >
-              <option value="job">{t('label_job')}</option>
-              <option value="gang">{t('label_gang')}</option>
-            </select>
-            <Input
-              value={entry.name}
-              onChange={(e) => updateEntry(idx, { name: e.target.value })}
-              placeholder={t('label_faction_name')}
-              className="h-8 flex-1"
-            />
-            <div className="flex items-center gap-1">
-              <span className="text-[10px] text-muted-foreground">{t('label_min_grade_short')}</span>
-              <Input
-                type="number"
-                min="0"
-                value={String(entry.minGrade)}
-                onChange={(e) => updateEntry(idx, { minGrade: parseInt(e.target.value) || 0 })}
-                className="h-8 w-16"
-              />
-            </div>
-            <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => removeEntry(idx)}>
-              <Trash2 className="h-4 w-4" />
-            </Button>
-          </div>
-        ))}
-
-        <div className="flex gap-2 pt-1">
-          <Button variant="outline" onClick={addEntry}>
-            <Plus className="h-4 w-4" /> {t('btn_add_allowlist_entry')}
-          </Button>
-          <Button onClick={handleSave} disabled={saving}>
-            {saving ? t('saving') : t('btn_save')}
-          </Button>
-        </div>
-      </div>
-
-      <p className="text-xs text-muted-foreground max-w-2xl">
-        {t('society_payments_help')}
-      </p>
-    </div>
-  )
-}
