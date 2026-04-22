@@ -166,45 +166,123 @@ function GetOwnedVehicleFromPlate(plate)
     return data and {owner = data.citizenid, model = data.vehicle} or nil
 end
 
+-- CD Garage adds an `in_garage` column to player_vehicles and uses it
+-- (not `state`) to decide whether the car is physically parked. We probe
+-- the schema once at boot and inject the column only when present, so the
+-- bridge stays compatible with vanilla QB garages too.
+local HasInGarageColumn
+local function DetectInGarageColumn()
+    if HasInGarageColumn ~= nil then return HasInGarageColumn end
+    local ok, res = pcall(MySQL.Sync.fetchScalar, [[
+        SELECT COUNT(*) FROM information_schema.columns
+        WHERE table_schema = DATABASE()
+          AND table_name = 'player_vehicles'
+          AND column_name = 'in_garage'
+    ]])
+    HasInGarageColumn = ok and tonumber(res or 0) > 0 or false
+    return HasInGarageColumn
+end
+
+-- Plate format: 4 letters + 4 digits, no space. The legacy "3+space+3"
+-- format is 7 chars and CD Garage normalises stored plates to 8 chars,
+-- which caused sync mismatches when the script and the garage disagreed
+-- on trailing whitespace.
+local function GeneratePlateQB()
+    local letters = {"A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z"}
+    local numbers = {"0","1","2","3","4","5","6","7","8","9"}
+    local parts = {}
+    for i = 1, 4 do parts[#parts + 1] = letters[math.random(1, #letters)] end
+    for i = 1, 4 do parts[#parts + 1] = numbers[math.random(1, #numbers)] end
+    return table.concat(parts)
+end
+
+--- Inserts a new owned vehicle for the player. `state = 1` marks the car as
+--- "out" (the player drives it away from the dealership); `in_garage = 0`
+--- is the CD Garage equivalent, injected only if the column exists.
+--- The mods JSON always carries `model` and `plate` so CD Garage's
+--- integrity check (error 5111) treats it as a legitimate vehicle.
 function AddOwnedVehicle(source, model)
     local xPlayer = QBCore.Functions.GetPlayer(tonumber(source))
-    local plate = ""
-    local letters = {"A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"}
-    local numbers = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}
-    for i = 1, 3 do
-        plate = plate .. letters[math.random(1, #letters)]
+    if not xPlayer then return end
+    local plate = GeneratePlateQB()
+    local mods = json.encode({ model = joaat(model), plate = plate })
+
+    if DetectInGarageColumn() then
+        MySQL.Async.execute(
+            'INSERT INTO player_vehicles (license, citizenid, vehicle, hash, mods, plate, garage, state, in_garage) VALUES (@license, @citizenid, @vehicle, @hash, @mods, @plate, @garage, @state, @in_garage)',
+            {
+                ['@license']   = xPlayer.PlayerData.license,
+                ['@citizenid'] = xPlayer.PlayerData.citizenid,
+                ['@vehicle']   = model,
+                ['@hash']      = joaat(model),
+                ['@mods']      = mods,
+                ['@plate']     = plate,
+                ['@garage']    = "pillboxgarage",
+                ['@state']     = 1,
+                ['@in_garage'] = 0,
+            }
+        )
+    else
+        MySQL.Async.execute(
+            'INSERT INTO player_vehicles (license, citizenid, vehicle, hash, mods, plate, garage, state) VALUES (@license, @citizenid, @vehicle, @hash, @mods, @plate, @garage, @state)',
+            {
+                ['@license']   = xPlayer.PlayerData.license,
+                ['@citizenid'] = xPlayer.PlayerData.citizenid,
+                ['@vehicle']   = model,
+                ['@hash']      = joaat(model),
+                ['@mods']      = mods,
+                ['@plate']     = plate,
+                ['@garage']    = "pillboxgarage",
+                ['@state']     = 1,
+            }
+        )
     end
-    plate = plate .. " "
-    for i = 1, 3 do
-        plate = plate .. numbers[math.random(1, #numbers)]
-    end
-    MySQL.Async.fetchAll('INSERT INTO player_vehicles (license, citizenid, vehicle, hash, plate, garage, state) VALUES (@license, @citizenid, @vehicle, @hash, @plate, @garage, @state)',
-    {
-        ['@license'] = xPlayer.PlayerData.license,
-        ['@citizenid'] = xPlayer.PlayerData.citizenid,
-        ['@vehicle'] = model,
-        ['@hash'] = joaat(model),
-        ['@plate'] = toupper(plate),
-        ['@garage'] = "pillboxgarage",
-        ['@state'] = 0
-    })
 end
 
 function AddOwnedVehicleWithProps(source, model, plate, properties)
     local xPlayer = QBCore.Functions.GetPlayer(tonumber(source))
     if not xPlayer or not plate then return false end
-    local mods = type(properties) == "table" and json.encode(properties) or (properties or "{}")
-    MySQL.Async.execute('INSERT INTO player_vehicles (license, citizenid, vehicle, hash, mods, plate, garage, state) VALUES (@license, @citizenid, @vehicle, @hash, @mods, @plate, @garage, @state)',
-    {
-        ['@license'] = xPlayer.PlayerData.license,
-        ['@citizenid'] = xPlayer.PlayerData.citizenid,
-        ['@vehicle'] = model,
-        ['@hash'] = joaat(model),
-        ['@mods'] = mods,
-        ['@plate'] = string.upper(plate),
-        ['@garage'] = "pillboxgarage",
-        ['@state'] = 0
-    })
+
+    -- Normalise the plate and inject model + plate into the mods JSON so
+    -- the CD Garage integrity check sees a consistent record.
+    local cleanPlate = string.upper((tostring(plate):gsub('%s+', '')))
+    local props = properties
+    if type(props) == "string" then props = json.decode(props) end
+    if type(props) ~= "table" then props = {} end
+    props.model = joaat(model)
+    props.plate = cleanPlate
+    local mods = json.encode(props)
+
+    if DetectInGarageColumn() then
+        MySQL.Async.execute(
+            'INSERT INTO player_vehicles (license, citizenid, vehicle, hash, mods, plate, garage, state, in_garage) VALUES (@license, @citizenid, @vehicle, @hash, @mods, @plate, @garage, @state, @in_garage)',
+            {
+                ['@license']   = xPlayer.PlayerData.license,
+                ['@citizenid'] = xPlayer.PlayerData.citizenid,
+                ['@vehicle']   = model,
+                ['@hash']      = joaat(model),
+                ['@mods']      = mods,
+                ['@plate']     = cleanPlate,
+                ['@garage']    = "pillboxgarage",
+                ['@state']     = 1,
+                ['@in_garage'] = 0,
+            }
+        )
+    else
+        MySQL.Async.execute(
+            'INSERT INTO player_vehicles (license, citizenid, vehicle, hash, mods, plate, garage, state) VALUES (@license, @citizenid, @vehicle, @hash, @mods, @plate, @garage, @state)',
+            {
+                ['@license']   = xPlayer.PlayerData.license,
+                ['@citizenid'] = xPlayer.PlayerData.citizenid,
+                ['@vehicle']   = model,
+                ['@hash']      = joaat(model),
+                ['@mods']      = mods,
+                ['@plate']     = cleanPlate,
+                ['@garage']    = "pillboxgarage",
+                ['@state']     = 1,
+            }
+        )
+    end
     return true
 end
 

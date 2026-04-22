@@ -32,10 +32,27 @@ local function PickNearestDepot(targetCoords)
     return best, best.id
 end
 
+--- Returns the highest-ranked default-group name the vehicle belongs to, used
+--- as the "tier" key for xpTierMultiplier. Non-default (admin-created) groups
+--- don't contribute to XP scaling — a vehicle only in custom groups falls
+--- back to 'basic'. This preserves the old xpTierMultiplier config shape
+--- (`{ basic = 1.0, expanded = 1.2, ... }`) without another migration.
+local TIER_RANK = { basic = 1, expanded = 2, full = 3, exclusive = 4 }
 local function ResolveCatalogTier(model)
     if not model then return 'basic' end
-    local row = MySQL.single.await('SELECT tier FROM pickle_wholesale_catalog WHERE model = ?', { model })
-    return row and row.tier or 'basic'
+    local rows = MySQL.query.await([[
+        SELECT g.name
+        FROM pickle_wholesale_catalog wc
+        JOIN pickle_catalog_vehicle_groups vg ON vg.catalog_id = wc.id
+        JOIN pickle_catalog_groups g ON g.id = vg.group_id
+        WHERE wc.model = ? AND g.is_default = 1
+    ]], { model }) or {}
+    local best, bestRank = 'basic', 0
+    for _, r in ipairs(rows) do
+        local rank = TIER_RANK[r.name] or 0
+        if rank > bestRank then best, bestRank = r.name, rank end
+    end
+    return best
 end
 
 -- ─── Trailer planning ────────────────────────────────────────────────────────
@@ -531,7 +548,7 @@ lib.callback.register('pickle_dealerships:acceptDelivery', function(source, orde
     end
 
     -- 2. Resolve primary class + bucket and determine remaining trailer capacity (total + medium axes).
-    local primaryCatalog = MySQL.single.await('SELECT tier, class FROM pickle_wholesale_catalog WHERE model = ?', { primaryOrder.vehicle_model })
+    local primaryCatalog = MySQL.single.await('SELECT class FROM pickle_wholesale_catalog WHERE model = ?', { primaryOrder.vehicle_model })
     local primaryClass = (primaryCatalog and primaryCatalog.class) or 'sedan'
     local primaryBucket = BundleBucketForClass(primaryClass)
     local caps = CAP_BY_SIZE[primaryBucket] or { total = 4, medium = 4 }
@@ -670,7 +687,7 @@ lib.callback.register('pickle_dealerships:acceptDelivery', function(source, orde
         primaryLabel = primaryOrder.vehicle_label or primaryOrder.vehicle_model,
         totalQty = totalQty,
         fee = totalFee,
-        catalogTier = (primaryCatalog and primaryCatalog.tier) or 'basic',
+        catalogTier = ResolveCatalogTier(primaryOrder.vehicle_model),
     }
 
     -- 6. Client payload includes per-vehicle breakdown (for overlay label) and the slot-level model assignment.

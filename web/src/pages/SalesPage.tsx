@@ -268,7 +268,7 @@ export default function SalesPage({ data, onClose }: Props) {
                 <Button className="flex-1" onClick={handlePurchase}>
                   {t('btn_purchase')}
                 </Button>
-                {isEmployee && data.tier >= 3 && (
+                {isEmployee && (
                   <Button variant="outline" onClick={handleTestDrive}>
                     {t('btn_test_drive')}
                   </Button>

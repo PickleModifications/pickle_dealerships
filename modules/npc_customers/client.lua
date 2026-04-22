@@ -71,7 +71,8 @@ local function StartNPCShowroomCamThread()
             local inp = NPCShowroomInput
             if inp.lookX ~= 0.0 or inp.lookY ~= 0.0 then
                 s.orbitAngle = s.orbitAngle - inp.lookX * orbitSensitivity
-                s.orbitPitch = math.max(-0.8, math.min(0.8, s.orbitPitch - inp.lookY * orbitSensitivity))
+                -- Inverted vertical: dragging down tips the camera down.
+                s.orbitPitch = math.max(-0.8, math.min(0.8, s.orbitPitch + inp.lookY * orbitSensitivity))
                 inp.lookX = 0.0
                 inp.lookY = 0.0
             end
@@ -97,6 +98,68 @@ local function StartNPCShowroomCamThread()
         end
         NPCShowroomCamThread = nil
     end)
+end
+
+--- Stand the NPC next to the selected vehicle's driver door, facing the
+--- showroom heading. For vehicles that don't expose a driver door bone
+--- (boats, planes, some props-on-wheels), fall back to offsetting from the
+--- vehicle origin by half of the largest horizontal model dimension so the
+--- NPC ends up next to the hull instead of inside it.
+---
+--- Only the X/Y of the door anchor is used; Z always comes from the showroom
+--- ground plane so the ped doesn't end up floating at door-handle height on
+--- tall vehicles. An extra 1.0m of outward clearance keeps them from clipping
+--- into the vehicle body.
+local NPC_DOOR_CLEARANCE = 1.0
+
+local function PositionNpcByVehicle(npcPed, vehicle, groundZ, faceHeading)
+    if not npcPed or not DoesEntityExist(npcPed) then return end
+    if not vehicle or not DoesEntityExist(vehicle) then return end
+
+    -- Vehicle center (for pushing outward from the hull by a consistent 1m
+    -- regardless of whether we resolved a bone or fell back to the model box).
+    local vehCoords = GetEntityCoords(vehicle)
+
+    local anchorX, anchorY
+    local boneIndex = GetEntityBoneIndexByName(vehicle, 'door_dside_f')
+    if boneIndex and boneIndex ~= -1 then
+        local bonePos = GetWorldPositionOfEntityBone(vehicle, boneIndex)
+        anchorX, anchorY = bonePos.x, bonePos.y
+    else
+        local dimMin, dimMax = GetModelDimensions(GetEntityModel(vehicle))
+        local halfX = (dimMax.x - dimMin.x) * 0.5
+        local halfY = (dimMax.y - dimMin.y) * 0.5
+        local largest = math.max(halfX, halfY)
+        -- Offset to the vehicle's driver side in its own local frame so the
+        -- result rotates with the vehicle's heading.
+        local fallback = GetOffsetFromEntityInWorldCoords(vehicle, -largest, 0.0, 0.0)
+        anchorX, anchorY = fallback.x, fallback.y
+    end
+
+    -- Push the anchor outward from the vehicle center by NPC_DOOR_CLEARANCE
+    -- along the ground plane so the ped stands ~1m clear of the body/door.
+    local dx = anchorX - vehCoords.x
+    local dy = anchorY - vehCoords.y
+    local dist = math.sqrt(dx * dx + dy * dy)
+    if dist > 0.0001 then
+        local nx = dx / dist
+        local ny = dy / dist
+        anchorX = anchorX + nx * NPC_DOOR_CLEARANCE
+        anchorY = anchorY + ny * NPC_DOOR_CLEARANCE
+    end
+
+    -- Also pull them back 1m in the vehicle's local -Y so they stand alongside
+    -- the door rather than level with the hood — the driver-door bone sits
+    -- forward of the vehicle center, and the outward push above carries some
+    -- of that forward bias into the final position.
+    local back = GetOffsetFromEntityInWorldCoords(vehicle, 0.0, -NPC_DOOR_CLEARANCE, 0.0)
+    anchorX = anchorX + (back.x - vehCoords.x)
+    anchorY = anchorY + (back.y - vehCoords.y)
+
+    FreezeEntityPosition(npcPed, false)
+    SetEntityCoords(npcPed, anchorX, anchorY, groundZ or vehCoords.z, false, false, false, false)
+    SetEntityHeading(npcPed, faceHeading or 0.0)
+    FreezeEntityPosition(npcPed, true)
 end
 
 --- Clean up the NPC showroom state
@@ -457,21 +520,25 @@ RegisterNUICallback("npcStartShowroom", function(_, cb)
     -- player model stays visible during every interaction on purpose.
     FreezeEntityPosition(playerPed, true)
 
-    -- Teleport NPC next to showroom position (offset to the side)
-    local npcOffset = vector3(spawnCoords.x + 2.0, spawnCoords.y + 1.0, spawnCoords.z)
-    SetEntityCoords(npcPed, npcOffset.x, npcOffset.y, npcOffset.z, false, false, false, false)
+    -- Pre-vehicle placement: sit the NPC at the showroom heading next to the
+    -- spawn point. Once a vehicle is spawned/swapped, PositionNpcByVehicle
+    -- moves them to the driver door (or model-offset fallback).
+    local preVehOffset = vector3(spawnCoords.x + 2.0, spawnCoords.y + 1.0, spawnCoords.z)
+    SetEntityCoords(npcPed, preVehOffset.x, preVehOffset.y, preVehOffset.z, false, false, false, false)
     FreezeEntityPosition(npcPed, true)
-    local headingToVeh = math.deg(math.atan(spawnCoords.y - npcOffset.y, spawnCoords.x - npcOffset.x)) + 90
-    SetEntityHeading(npcPed, headingToVeh)
+    SetEntityHeading(npcPed, spawnCoords.w or 0.0)
 
     -- Create orbit camera at showroom position (no vehicle yet)
-    local initAngle = math.rad(225.0)
+    -- 45° orbit offset relative to the showroom heading so the camera opens
+    -- at a consistent three-quarter angle regardless of how the showroom
+    -- point is rotated in-world.
+    local initAngle = math.rad(45 + (spawnCoords.w or 0.0))
     local defaultRadius = 6.0
     local center = vector3(spawnCoords.x, spawnCoords.y, spawnCoords.z + 0.5)
     local camX = center.x + defaultRadius * math.cos(initAngle)
     local camY = center.y + defaultRadius * math.sin(initAngle)
     local cam = CreateCam("DEFAULT_SCRIPTED_CAMERA", true)
-    SetCamCoord(cam, camX, camY, center.z)
+    SetCamCoord(cam, camX, camY, center.z + defaultRadius * math.sin(0.8) * 0.5)
     PointCamAtCoord(cam, center.x, center.y, center.z)
     SetCamActive(cam, true)
     RenderScriptCams(true, false, 0, true, true)
@@ -486,7 +553,7 @@ RegisterNUICallback("npcStartShowroom", function(_, cb)
         npcEntity = npcPed,
         currentModel = nil,
         orbitAngle = initAngle,
-        orbitPitch = 0.0,
+        orbitPitch = 0.8, -- start camera at max top pitch so it opens looking down at the car
         orbitRadius = defaultRadius,
         defaultRadius = defaultRadius,
         targetCenter = center,
@@ -540,6 +607,18 @@ RegisterNUICallback("npcShowroomSwapVehicle", function(data, cb)
     NPCShowroomState.targetCenter = center
     NPCShowroomState.orbitRadius = radius
     NPCShowroomState.defaultRadius = radius
+
+    -- Move the NPC to stand next to the newly-spawned vehicle's driver door
+    -- (or offset for door-less models). Z is pinned to the showroom ground
+    -- plane so the ped doesn't float at door-handle height on tall vehicles;
+    -- heading faces the showroom.
+    local sc = NPCShowroomState.spawnCoords
+    PositionNpcByVehicle(
+        NPCShowroomState.npcEntity,
+        veh,
+        sc and sc.z or nil,
+        sc and sc.w or 0.0
+    )
 
     cb({ success = true })
 end)

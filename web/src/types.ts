@@ -2,7 +2,8 @@ export interface DealershipData {
   dealershipId: number
   dealershipName: string
   role: 'owner' | 'manager' | 'salesperson' | 'customer' | 'admin'
-  tier: number
+  /** Legacy — preserved in the DB for rollback but no longer drives access or features. */
+  tier?: number
   location?: string
   type?: string
   selfService?: boolean
@@ -33,10 +34,10 @@ export interface DealershipData {
     name?: string
     mode?: string
     type?: string
-    tier?: string
     factionType?: 'job' | 'gang'
     factionName?: string
     ownerIdentifier?: string
+    groupIds?: number[]
     coords?: { x: number; y: number; z: number; w?: number }
     spawnPoint?: { x: number; y: number; z: number; w?: number }
     deliveryPoint?: { x: number; y: number; z: number; w?: number }
@@ -136,7 +137,8 @@ export interface CatalogItem {
   model: string
   label: string
   wholesale: number
-  tier: string
+  /** Legacy — preserved on the row for rollback; catalog access is now via groups. */
+  tier?: string
   class: string
   image?: string | null
 }
@@ -209,6 +211,12 @@ export interface FinancingSettings {
   paymentIntervalHours: number
   maxMissedPayments: number
   installmentOptions: number[]
+  requireCreditScore?: boolean
+  minCreditScore?: number
+  // Server-derived, read-only. True when the credit-score bridge is both
+  // enabled in Config and has a live provider — when false, the toggle is
+  // still editable but annotated as "will not enforce anything".
+  creditScoreProviderActive?: boolean
 }
 
 export interface DealershipProgression {
@@ -259,7 +267,10 @@ export interface AdminDealership {
   type: string
   owner_identifier: string | null
   owner_name?: string
-  tier: number
+  /** Legacy — preserved for rollback; catalog visibility now goes through groups. */
+  tier?: number
+  /** Ids of every catalog group this dealership draws its stock from. */
+  groupIds?: number[]
   balance: number
   job?: string | null
   seize_enabled?: number | boolean

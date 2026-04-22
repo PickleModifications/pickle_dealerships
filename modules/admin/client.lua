@@ -14,6 +14,70 @@ RegisterNUICallback("adminGetOnlinePlayers", function(_, cb)
     cb(result or {})
 end)
 
+--- Maps a GetVehicleClass integer (0-21) to the catalog's string class keys.
+--- Only classes that make sense in a dealership context are included —
+--- service / emergency / military / industrial etc. deliberately fall
+--- through to nil so we don't accidentally seed a police cruiser as a
+--- "sedan" in the catalog.
+local VEHICLE_CLASS_BY_INT = {
+    [0]  = "compact",
+    [1]  = "sedan",
+    [2]  = "suv",
+    [3]  = "coupe",
+    [4]  = "muscle",
+    [5]  = "sports_classic",
+    [6]  = "sports",
+    [7]  = "super",
+    [8]  = "motorcycle",
+    [9]  = "offroad",
+    [12] = "van",
+    [13] = "cycle",
+    [14] = "boat",
+    [15] = "helicopter",
+    [16] = "plane",
+}
+
+--- Spawns the vehicle model off-map, pulls its class via GetVehicleClass,
+--- deletes it, and returns the class key. Used by the admin catalog form
+--- to auto-fill the class dropdown after the admin types a model name.
+--- Stays invisible/no-collide/frozen/non-networked so nothing gets
+--- streamed to other players.
+RegisterNUICallback("adminDetectVehicleClass", function(data, cb)
+    local model = data and data.model and tostring(data.model):lower() or ""
+    if model == "" then cb({ class = nil }) return end
+
+    local hash = joaat(model)
+    if not IsModelInCdimage(hash) or not IsModelAVehicle(hash) then
+        cb({ class = nil }) return
+    end
+
+    RequestModel(hash)
+    local deadline = GetGameTimer() + 3000
+    while not HasModelLoaded(hash) and GetGameTimer() < deadline do Wait(0) end
+    if not HasModelLoaded(hash) then
+        cb({ class = nil }) return
+    end
+
+    -- Spawn as a local-only entity at a deep-underground coord so it's well
+    -- outside any streaming range. isNetwork=false keeps it off the net
+    -- session entirely.
+    local veh = CreateVehicle(hash, 0.0, 0.0, -500.0, 0.0, false, false)
+    if not veh or veh == 0 then
+        SetModelAsNoLongerNeeded(hash)
+        cb({ class = nil }) return
+    end
+    SetEntityVisible(veh, false, false)
+    SetEntityCollision(veh, false, false)
+    FreezeEntityPosition(veh, true)
+    SetVehicleIsConsideredByPlayer(veh, false)
+
+    local classInt = GetVehicleClass(veh)
+    DeleteEntity(veh)
+    SetModelAsNoLongerNeeded(hash)
+
+    cb({ class = VEHICLE_CLASS_BY_INT[classInt] })
+end)
+
 --- Fetch all dealerships for admin view
 RegisterNUICallback("adminGetAllDealerships", function(_, cb)
     local result = lib.callback.await("pickle_dealerships:adminGetAllDealerships", false)
@@ -55,19 +119,51 @@ RegisterNUICallback("adminSetBalance", function(data, cb)
     end
 end)
 
---- Set dealership tier
-RegisterNUICallback("adminSetTier", function(data, cb)
-    local result = lib.callback.await("pickle_dealerships:adminSetTier", false, {
-        dealershipId = data.dealershipId,
-        tier         = data.tier,
-    })
-    if result and result.success then
-        ShowNotification(result.message)
-        cb({ success = true, newTier = result.newTier })
-    else
-        ShowNotification(result and result.message or _L("admin_tier_failed"))
-        cb({ success = false, message = result and result.message or _L("admin_tier_failed") })
-    end
+-- adminSetTier was removed in the tier-to-groups migration. Use
+-- adminSetDealershipGroups to change which catalog groups feed a dealership.
+
+--- Catalog group CRUD bridges. Each maps 1:1 to a server callback added in
+--- modules/admin/server.lua; no client-side state needed.
+RegisterNUICallback("adminGetGroups", function(_, cb)
+    local rows = lib.callback.await("pickle_dealerships:adminGetGroups", false)
+    cb(rows or {})
+end)
+
+RegisterNUICallback("adminCreateGroup", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:adminCreateGroup", false, data)
+    if result and result.success then ShowNotification(result.message)
+    else ShowNotification(result and result.message or _L("admin_group_create_failed")) end
+    cb(result or { success = false })
+end)
+
+RegisterNUICallback("adminUpdateGroup", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:adminUpdateGroup", false, data)
+    if result and result.success then ShowNotification(result.message)
+    else ShowNotification(result and result.message or _L("admin_group_update_failed")) end
+    cb(result or { success = false })
+end)
+
+RegisterNUICallback("adminDeleteGroup", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:adminDeleteGroup", false, data)
+    if result and result.success then ShowNotification(result.message)
+    else ShowNotification(result and result.message or _L("admin_group_delete_failed")) end
+    cb(result or { success = false })
+end)
+
+RegisterNUICallback("adminSetVehicleGroups", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:adminSetVehicleGroups", false, data)
+    cb(result or { success = false })
+end)
+
+RegisterNUICallback("adminSetDealershipGroups", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:adminSetDealershipGroups", false, data)
+    if result and result.success then ShowNotification(result.message) end
+    cb(result or { success = false })
+end)
+
+RegisterNUICallback("adminGetDealershipGroups", function(data, cb)
+    local rows = lib.callback.await("pickle_dealerships:adminGetDealershipGroups", false, data)
+    cb(rows or {})
 end)
 
 --- Stock a dealership from the full catalog at the admin-chosen quantity
@@ -410,7 +506,12 @@ RegisterNUICallback("adminStartGizmo", function(data, cb)
     local isDisplaySpot = data.field == "displaySpot"
     local isDeliveryPoint = data.field == "deliveryPoint"
     local isNpcSpawn = data.field == "npcSpawnPoint"
-    local isVehiclePoint = data.field == "spawnPoint" or data.field == "showroomPoint"
+    -- "showroomPoint" is only used by the create-flow draft; the existing-dealership
+    -- positions tab sends the showroom as field="interactionPoint", pointType="showroom".
+    -- Both paths need the ghost-car preview.
+    local isVehiclePoint = data.field == "spawnPoint"
+        or data.field == "showroomPoint"
+        or (data.field == "interactionPoint" and data.pointType == "showroom")
     local result
 
     if isDeliveryPoint then
@@ -642,7 +743,8 @@ local function StartPhotoBoothCamThread()
                 else
                     -- Default drag: orbit
                     s.orbitAngle = s.orbitAngle - inp.lookX * orbitSensitivity
-                    s.orbitPitch = math.max(-0.8, math.min(0.8, s.orbitPitch - inp.lookY * orbitSensitivity))
+                    -- Inverted vertical: dragging down tips the camera down.
+                    s.orbitPitch = math.max(-0.8, math.min(0.8, s.orbitPitch + inp.lookY * orbitSensitivity))
                 end
                 inp.lookX = 0.0
                 inp.lookY = 0.0
@@ -706,17 +808,15 @@ local function CleanupPhotoBooth()
     -- Restore weather/time via bridge
     RestorePhotoWeather()
 
-    -- Restore routing bucket first (before teleport so collision loads in correct bucket)
+    -- Restore routing bucket so the player shares world state with everyone else again
     lib.callback.await("pickle_dealerships:adminSetPhotoBucket", false, { bucket = 0 })
 
-    -- Restore player
+    -- Player never actually moved (SetFocusArea shifted streaming, not position),
+    -- so there's nothing to teleport back. Just clear the focus override and
+    -- unfreeze them.
     local ped = PlayerPedId()
-    local sc = PhotoBoothState.savedCoords
-    SetEntityVisible(ped, true, false)
-    SetEntityCoords(ped, sc.x, sc.y, sc.z - 1.0, false, false, false, false)
+    ClearFocus()
     FreezeEntityPosition(ped, false)
-    PlaceObjectOnGroundProperly(ped)
-    SetEntityHeading(ped, PhotoBoothState.savedHeading)
 
     -- Restore HUD
     DisplayRadar(true)
@@ -755,8 +855,6 @@ RegisterNUICallback("adminStartPhotoCapture", function(data, cb)
     cb({ success = true })
 
     local ped = PlayerPedId()
-    local savedCoords = GetEntityCoords(ped)
-    local savedHeading = GetEntityHeading(ped)
 
     -- Pick the right photo booth location based on vehicle class
     local vehicleClass = data.class or ''
@@ -782,16 +880,18 @@ RegisterNUICallback("adminStartPhotoCapture", function(data, cb)
     DoScreenFadeOut(500)
     while not IsScreenFadedOut() do Wait(0) end
 
-    -- Move to isolated routing bucket
+    -- Move to isolated routing bucket so other clients don't see our spawned
+    -- booth vehicle (and vice versa).
     lib.callback.await("pickle_dealerships:adminSetPhotoBucket", false, { bucket = Config.PhotoBooth.routingBucket })
 
-    -- Teleport player to booth and load the area. Player stays visible on
-    -- purpose — they'll appear next to the vehicle in shot, which is the
-    -- expected behaviour since we never hide the player in any interaction.
-    SetEntityCoords(ped, boothCoords.x, boothCoords.y, boothCoords.z, false, false, false, true)
+    -- Player stays where they are; we shift the streaming focus to the booth
+    -- coords so the game loads that area around the camera instead of around
+    -- the player. This keeps the player off-screen during captures without
+    -- having to hide or teleport them (per the "never hide the player" rule).
     FreezeEntityPosition(ped, true)
+    SetFocusArea(boothCoords.x, boothCoords.y, boothCoords.z, 0.0, 0.0, 0.0)
 
-    -- Request collision and wait for the area to fully load
+    -- Request collision and wait for the booth area to stream in
     RequestCollisionAtCoord(boothCoords.x, boothCoords.y, boothCoords.z)
     NewLoadSceneStart(boothCoords.x, boothCoords.y, boothCoords.z, boothCoords.x, boothCoords.y, boothCoords.z, 50.0, 0)
     local loadTimeout = GetGameTimer() + 10000
@@ -831,9 +931,11 @@ RegisterNUICallback("adminStartPhotoCapture", function(data, cb)
     local vehCenterZ = vehPos.z + (dimMin.z + dimMax.z) * 0.5
     local targetCenter = vector3(vehPos.x, vehPos.y, vehCenterZ)
 
-    -- Create orbit camera at initial angle (matches showroom)
-    local initAngle = math.rad(225.0)
-    local initPitch = 0.0
+    -- 45° orbit offset relative to the booth heading, matching the showroom
+    -- cam convention so every camera view opens at the same relative angle
+    -- regardless of how the booth or showroom is rotated in-world.
+    local initAngle = math.rad(45 + (vehHeading or 0.0))
+    local initPitch = 0.8 -- start camera at max top pitch so it opens looking down at the car
     local camX = targetCenter.x + camRadius * math.cos(initAngle)
     local camY = targetCenter.y + camRadius * math.sin(initAngle)
     local camZ = targetCenter.z + camRadius * math.sin(initPitch) * 0.5
@@ -849,8 +951,6 @@ RegisterNUICallback("adminStartPhotoCapture", function(data, cb)
         cam = cam,
         center = boothCoords,
         groundZ = boothCoords.z - 2.0,
-        savedCoords = savedCoords,
-        savedHeading = savedHeading,
         catalogId = data.catalogId,
         model = data.model,
         label = data.label or data.model,

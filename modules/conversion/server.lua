@@ -5,7 +5,7 @@
 -- =============================================
 
 lib.callback.register("pickle_dealerships:conversionListResources", function(source)
-    if not IsPlayerAdmin(source) then return nil end
+    if not IsPlayerAdmin(source) then DenyAccess(source, "admin_no_permission") return nil end
     return ListConversionResources()
 end)
 

@@ -120,6 +120,39 @@ export default function FinancingSettingsPanel({ dealershipId, dealershipName }:
             </div>
           </div>
 
+          {/* Credit score gate — toggle + threshold. Rendered as a block so the
+              disabled-provider notice sits with the controls it annotates. */}
+          <div className="mt-4 rounded-md border border-border bg-muted/30 p-3">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-accent"
+                checked={settings.requireCreditScore === true}
+                onChange={(e) => update('requireCreditScore', e.target.checked)}
+              />
+              <span className="text-xs font-medium">{t('label_require_credit_score')}</span>
+            </label>
+            {settings.requireCreditScore && (
+              <div className="mt-2">
+                <label className="text-[10px] text-muted-foreground">{t('label_min_credit_score')}</label>
+                <Input
+                  type="number"
+                  min={300}
+                  max={850}
+                  value={Math.round(settings.minCreditScore ?? 600)}
+                  onChange={(e) => {
+                    const n = parseInt(e.target.value) || 600
+                    update('minCreditScore', Math.max(300, Math.min(850, n)))
+                  }}
+                  className="mt-1"
+                />
+              </div>
+            )}
+            {settings.requireCreditScore && !settings.creditScoreProviderActive && (
+              <p className="text-[10px] text-orange-400 mt-2">{t('label_credit_score_provider_offline')}</p>
+            )}
+          </div>
+
           <div className="mt-4">
             <label className="text-xs font-medium">{t('label_installment_options')}</label>
             <div className="flex flex-wrap gap-1.5 mt-1.5">

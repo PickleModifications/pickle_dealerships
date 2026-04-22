@@ -64,10 +64,9 @@ const navItems: NavItem[] = [
   { id: 'financing', labelKey: 'tab_financing', icon: <CreditCard className="h-4 w-4" />, minRole: OWNER_ADMIN },
 ]
 
-const tierFeatures: Record<string, number> = {
-  coupons: 4,
-  financing: 3,
-}
+// tierFeatures lookup retired with the tier system. Every feature tab is now
+// role-gated only; financing and coupons were the last tier-dependent tabs
+// and they're available to every dealership going forward.
 
 export default function ManagementPage({ data, onClose }: Props) {
   const [activeTab, setActiveTab] = useState<ManagementTab>(data.initialTab as ManagementTab || 'dashboard')
@@ -142,7 +141,6 @@ export default function ManagementPage({ data, onClose }: Props) {
 
   const canAccess = (item: NavItem): boolean => {
     if (item.minRole && !item.minRole.includes(data.role)) return false
-    if (item.feature && data.tier < (tierFeatures[item.feature] || 99)) return false
     if (item.hideForNpc && data.mode === 'managed') return false
     return true
   }
@@ -195,9 +193,11 @@ export default function ManagementPage({ data, onClose }: Props) {
                 {t('progression_level_short', String(progression.level))}
               </Badge>
             )}
-            <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
-              {progression?.label || t(`tier_${data.tier}`)}
-            </Badge>
+            {progression?.label && (
+              <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+                {progression.label}
+              </Badge>
+            )}
             <Badge variant="outline" className="text-[10px] px-1.5 py-0 capitalize">
               {data.role}
             </Badge>

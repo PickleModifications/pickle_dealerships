@@ -1,9 +1,9 @@
 --- NPC-operated dealerships don't use the order/delivery flow. At creation (and
---- on tier upgrades) we seed one stock row per wholesale catalog entry that
---- matches the dealership's vehicle type + catalog access tier, with a very
+--- on mode flips back to 'managed') we seed one stock row per wholesale catalog
+--- entry that lives in any of the dealership's assigned groups, with a very
 --- large quantity so it reads as effectively infinite. Owners/admins can then
 --- tune retail prices per row on the stock tab.
-local function seedManagedDealershipStock(dealershipId, vehicleType, tier)
+local function seedManagedDealershipStock(dealershipId, vehicleType)
     local types = {}
     if vehicleType == 'mixed' or not vehicleType or vehicleType == '' then
         types = { 'car', 'boat', 'air' }
@@ -11,36 +11,67 @@ local function seedManagedDealershipStock(dealershipId, vehicleType, tier)
         types = { vehicleType }
     end
 
-    local tierDef = Config.Tiers and Config.Tiers[tonumber(tier) or 1] or nil
-    local accessLevel = tierDef and tierDef.catalogAccess or 'basic'
-    local hierarchy = { 'basic', 'expanded', 'full', 'exclusive' }
-    local levelIdx = ({ basic = 1, expanded = 2, full = 3, exclusive = 4 })[accessLevel] or 1
-    local allowedTiers = {}
-    for i = 1, levelIdx do allowedTiers[#allowedTiers + 1] = hierarchy[i] end
-
-    if #types == 0 or #allowedTiers == 0 then return 0 end
+    if #types == 0 then return 0 end
 
     local typeMarks = string.rep('?,', #types):sub(1, -2)
-    local tierMarks = string.rep('?,', #allowedTiers):sub(1, -2)
+    -- Vehicle is eligible if it shares at least one group with the dealership.
+    -- An EXISTS join keeps the query single-pass even with many groups.
     local sql = ([[
         INSERT INTO pickle_dealership_stock
             (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, quantity, ordered_at, delivered_at, acquired_from)
-        SELECT ?, model, label, wholesale, ROUND(wholesale * 1.3), 999999, NOW(), NOW(), 'npc_seed'
-        FROM pickle_wholesale_catalog
-        WHERE vehicle_type IN (%s) AND tier IN (%s)
-        AND NOT EXISTS (
-            SELECT 1 FROM pickle_dealership_stock ds
-            WHERE ds.dealership_id = ? AND ds.vehicle_model = pickle_wholesale_catalog.model
-              AND ds.acquired_from = 'npc_seed' AND ds.sold_at IS NULL
-        )
-    ]]):format(typeMarks, tierMarks)
+        SELECT ?, wc.model, wc.label, wc.wholesale, ROUND(wc.wholesale * 1.3), 999999, NOW(), NOW(), 'npc_seed'
+        FROM pickle_wholesale_catalog wc
+        WHERE wc.vehicle_type IN (%s)
+          AND EXISTS (
+              SELECT 1
+              FROM pickle_catalog_vehicle_groups vg
+              JOIN pickle_dealership_groups dg ON dg.group_id = vg.group_id
+              WHERE vg.catalog_id = wc.id AND dg.dealership_id = ?
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM pickle_dealership_stock ds
+              WHERE ds.dealership_id = ? AND ds.vehicle_model = wc.model
+                AND ds.acquired_from = 'npc_seed' AND ds.sold_at IS NULL
+          )
+    ]]):format(typeMarks)
 
     local params = { dealershipId }
     for _, tval in ipairs(types) do params[#params + 1] = tval end
-    for _, tval in ipairs(allowedTiers) do params[#params + 1] = tval end
+    params[#params + 1] = dealershipId
     params[#params + 1] = dealershipId
 
     return MySQL.update.await(sql, params) or 0
+end
+
+--- Wipes the dealership's group assignments and replaces them with the given
+--- list. Used by adminCreateDealership and adminSetDealershipGroups.
+local function setDealershipGroups(dealershipId, groupIds)
+    MySQL.update.await(
+        "DELETE FROM pickle_dealership_groups WHERE dealership_id = ?",
+        { dealershipId }
+    )
+    if type(groupIds) ~= "table" then return end
+    for _, gid in ipairs(groupIds) do
+        local n = tonumber(gid)
+        if n then
+            MySQL.insert.await(
+                "INSERT IGNORE INTO pickle_dealership_groups (dealership_id, group_id) VALUES (?, ?)",
+                { dealershipId, n }
+            )
+        end
+    end
+end
+
+--- Returns { id } for every default-seeded group. Used as a sane fallback when
+--- a managed dealership is created with no explicit groupIds — otherwise it
+--- would have an empty catalog and zero NPC stock.
+local function getDefaultGroupIds()
+    local rows = MySQL.query.await(
+        "SELECT id FROM pickle_catalog_groups WHERE is_default = 1 ORDER BY id ASC"
+    ) or {}
+    local ids = {}
+    for _, r in ipairs(rows) do ids[#ids + 1] = r.id end
+    return ids
 end
 
 --- Get all dealerships (admin only)
@@ -50,8 +81,25 @@ lib.callback.register("pickle_dealerships:adminGetAllDealerships", function(sour
     end
 
     local dealerships = MySQL.query.await("SELECT * FROM pickle_dealerships ORDER BY id ASC")
-    if dealerships then
+    if dealerships and #dealerships > 0 then
+        -- Bulk-load the group assignments in a single round-trip and fan them
+        -- out by dealership id so the admin list shows the correct group count
+        -- immediately — no per-row follow-up fetch needed when the user clicks
+        -- into Settings.
+        local ids = {}
+        for _, d in ipairs(dealerships) do ids[#ids + 1] = d.id end
+        local marks = string.rep('?,', #ids):sub(1, -2)
+        local junction = MySQL.query.await(
+            ("SELECT dealership_id, group_id FROM pickle_dealership_groups WHERE dealership_id IN (%s)"):format(marks),
+            ids
+        ) or {}
+        local byDealership = {}
+        for _, row in ipairs(junction) do
+            byDealership[row.dealership_id] = byDealership[row.dealership_id] or {}
+            byDealership[row.dealership_id][#byDealership[row.dealership_id] + 1] = row.group_id
+        end
         for _, d in ipairs(dealerships) do
+            d.groupIds = byDealership[d.id] or {}
             if d.owner_identifier then
                 local ownerSource = GetSourceFromIdentifier(d.owner_identifier)
                 if ownerSource then
@@ -67,7 +115,7 @@ end)
 
 --- Get online players for admin dropdown
 lib.callback.register("pickle_dealerships:adminGetOnlinePlayers", function(source)
-    if not IsPlayerAdmin(source) then return {} end
+    if not IsPlayerAdmin(source) then DenyAccess(source, "admin_no_permission") return {} end
 
     local players = {}
     for _, playerId in ipairs(GetPlayers()) do
@@ -170,38 +218,12 @@ lib.callback.register("pickle_dealerships:adminSetBalance", function(source, dat
     return { success = true, newBalance = amount, message = _L("admin_balance_set_to", GetCurrencyString(amount)) }
 end)
 
---- Set dealership tier
-lib.callback.register("pickle_dealerships:adminSetTier", function(source, data)
-    if not IsPlayerAdmin(source) then
-        return { success = false, message = _L("admin_no_permission") }
-    end
+-- adminSetTier was removed when catalog access switched to many-to-many groups.
+-- The pickle_dealerships.tier column is preserved for rollback safety but no
+-- longer drives anything. To change which catalog vehicles a dealership sells,
+-- use adminSetDealershipGroups instead.
 
-    local dealershipId = data.dealershipId
-    local tier = tonumber(data.tier)
-
-    if not dealershipId or not tier then
-        return { success = false, message = _L("admin_missing_tier") }
-    end
-
-    if tier < 1 or tier > 4 then
-        return { success = false, message = _L("admin_tier_range") }
-    end
-
-    local dealership = GetDealership(dealershipId)
-    if not dealership then
-        return { success = false, message = _L("dealership_not_found") }
-    end
-
-    MySQL.update.await("UPDATE pickle_dealerships SET tier = ? WHERE id = ?", { tier, dealershipId })
-    UpdateDealershipCache(dealershipId, { tier = tier })
-
-    local adminName = GetPlayerCharacterName(source) or GetPlayerName(source)
-    AddLedgerEntry(dealershipId, "admin", 0, "Tier set to " .. tier .. " by admin " .. adminName, GetIdentifier(source))
-
-    return { success = true, newTier = tier, message = _L("admin_tier_set_to", tier) }
-end)
-
---- Reset dealership (wipe owner, employees, stock, tier, balance)
+--- Reset dealership (wipe owner, employees, stock, balance, group assignments)
 lib.callback.register("pickle_dealerships:adminResetDealership", function(source, data)
     if not IsPlayerAdmin(source) then
         return { success = false, message = _L("admin_no_permission") }
@@ -217,8 +239,11 @@ lib.callback.register("pickle_dealerships:adminResetDealership", function(source
         return { success = false, message = _L("dealership_not_found") }
     end
 
-    -- Wipe all related data
-    MySQL.update.await("UPDATE pickle_dealerships SET owner_id = NULL, balance = 0, tier = 1, reputation = 0 WHERE id = ?", { dealershipId })
+    -- Wipe all related data. Tier column is left intact (legacy / unread) but
+    -- group assignments are cleared so a fresh-after-reset dealership picks up
+    -- whatever the admin assigns next.
+    MySQL.update.await("UPDATE pickle_dealerships SET owner_id = NULL, balance = 0, reputation = 0 WHERE id = ?", { dealershipId })
+    MySQL.update.await("DELETE FROM pickle_dealership_groups WHERE dealership_id = ?", { dealershipId })
     MySQL.update.await("DELETE FROM pickle_dealership_employees WHERE dealership_id = ?", { dealershipId })
     MySQL.update.await("DELETE FROM pickle_dealership_stock WHERE dealership_id = ?", { dealershipId })
     MySQL.update.await("DELETE FROM pickle_dealership_orders WHERE dealership_id = ?", { dealershipId })
@@ -227,7 +252,6 @@ lib.callback.register("pickle_dealerships:adminResetDealership", function(source
     UpdateDealershipCache(dealershipId, {
         owner_id   = nil,
         balance    = 0,
-        tier       = 1,
         reputation = 0,
     })
 
@@ -331,7 +355,18 @@ lib.callback.register("pickle_dealerships:adminToggleMode", function(source, dat
             { dealershipId }
         )
     elseif newMode == "managed" then
-        seedManagedDealershipStock(dealershipId, dealership.type, dealership.tier)
+        -- Fresh managed dealerships need at least one group assigned or the
+        -- seed query returns nothing. If admins haven't picked groups yet,
+        -- fall back to the four default groups so the conversion produces
+        -- visible stock immediately.
+        local existingGroups = MySQL.query.await(
+            "SELECT 1 FROM pickle_dealership_groups WHERE dealership_id = ? LIMIT 1",
+            { dealershipId }
+        )
+        if not existingGroups or #existingGroups == 0 then
+            setDealershipGroups(dealershipId, getDefaultGroupIds())
+        end
+        seedManagedDealershipStock(dealershipId, dealership.type)
     end
 
     local adminName = GetPlayerCharacterName(source) or GetPlayerName(source)
@@ -459,18 +494,18 @@ lib.callback.register("pickle_dealerships:adminCreateDealership", function(sourc
     if factionType ~= "gang" then factionType = "job" end
     if factionName then metadata.factionType = factionType end
 
-    -- Owner + tier: owner is only honored for player-owned mode. Tier clamps to 1–4.
+    -- Owner is only honored for player-owned mode. Tier column is preserved at
+    -- the DB default for legacy/rollback reasons but no longer drives anything.
     local ownerIdentifier = nil
     if mode == "player-owned" and type(data.ownerIdentifier) == "string" and data.ownerIdentifier ~= "" then
         ownerIdentifier = data.ownerIdentifier
     end
-    local tier = math.max(1, math.min(4, tonumber(data.tier) or 1))
 
     local metaJson = next(metadata) and json.encode(metadata) or nil
 
     local id = MySQL.insert.await(
-        "INSERT INTO pickle_dealerships (name, location, type, mode, tier, balance, reputation, owner_identifier, job, metadata) VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?, ?)",
-        { data.label, "pending", dealershipType, mode, tier, ownerIdentifier, factionName, metaJson }
+        "INSERT INTO pickle_dealerships (name, location, type, mode, balance, reputation, owner_identifier, job, metadata) VALUES (?, ?, ?, ?, 0, 0, ?, ?, ?)",
+        { data.label, "pending", dealershipType, mode, ownerIdentifier, factionName, metaJson }
     )
 
     if id then
@@ -478,10 +513,19 @@ lib.callback.register("pickle_dealerships:adminCreateDealership", function(sourc
         local location = "dealership_" .. id
         MySQL.update.await("UPDATE pickle_dealerships SET location = ? WHERE id = ?", { location, id })
 
-        -- NPC-operated dealerships get auto-seeded infinite stock based on their
-        -- type + tier. Owners/admins tune prices in the stock tab.
+        -- Group assignments. If the admin picked specific groups in the create
+        -- form, honor them. Otherwise, default to all four seeded groups so a
+        -- fresh dealership has a sensible starting catalog.
+        local groupIds = data.groupIds
+        if type(groupIds) ~= "table" or #groupIds == 0 then
+            groupIds = getDefaultGroupIds()
+        end
+        setDealershipGroups(id, groupIds)
+
+        -- NPC-operated dealerships get auto-seeded infinite stock based on the
+        -- groups they're assigned to. Owners/admins tune prices in the stock tab.
         if mode == "managed" then
-            seedManagedDealershipStock(id, dealershipType, tier)
+            seedManagedDealershipStock(id, dealershipType)
         end
 
         LoadDealerships()
@@ -502,7 +546,7 @@ lib.callback.register("pickle_dealerships:adminCreateDealership", function(sourc
                 { name = "Type", value = tostring(dealershipType), inline = true },
                 { name = "Owner", value = "`" .. tostring(ownerIdentifier or "none") .. "`", inline = true },
                 { name = "Faction", value = tostring(factionName or "none"), inline = true },
-                { name = "Tier", value = tostring(tier), inline = true },
+                { name = "Groups", value = tostring(#groupIds), inline = true },
             },
         })
 
@@ -664,7 +708,7 @@ end)
 
 --- Get all catalog vehicles
 lib.callback.register("pickle_dealerships:adminGetCatalog", function(source, data)
-    if not IsPlayerAdmin(source) then return nil end
+    if not IsPlayerAdmin(source) then DenyAccess(source, "admin_no_permission") return nil end
 
     local page = tonumber(data and data.page) or 1
     local pageSize = tonumber(data and data.pageSize) or 50
@@ -699,9 +743,30 @@ lib.callback.register("pickle_dealerships:adminGetCatalog", function(source, dat
     params[#params + 1] = offset
 
     local results = MySQL.query.await(
-        ("SELECT * FROM pickle_wholesale_catalog %s ORDER BY vehicle_type ASC, tier ASC, wholesale ASC LIMIT ? OFFSET ?"):format(whereClause),
+        ("SELECT * FROM pickle_wholesale_catalog %s ORDER BY vehicle_type ASC, wholesale ASC LIMIT ? OFFSET ?"):format(whereClause),
         params
     )
+
+    -- Attach groupIds per vehicle so the catalog UI can render the assigned
+    -- group chips without a follow-up callback per row. Single bulk query
+    -- keyed by the page's catalog ids.
+    if results and #results > 0 then
+        local ids = {}
+        for _, row in ipairs(results) do ids[#ids + 1] = row.id end
+        local marks = string.rep('?,', #ids):sub(1, -2)
+        local junctionRows = MySQL.query.await(
+            ("SELECT catalog_id, group_id FROM pickle_catalog_vehicle_groups WHERE catalog_id IN (%s)"):format(marks),
+            ids
+        ) or {}
+        local byCatalog = {}
+        for _, jr in ipairs(junctionRows) do
+            byCatalog[jr.catalog_id] = byCatalog[jr.catalog_id] or {}
+            byCatalog[jr.catalog_id][#byCatalog[jr.catalog_id] + 1] = jr.group_id
+        end
+        for _, row in ipairs(results) do
+            row.groupIds = byCatalog[row.id] or {}
+        end
+    end
 
     return {
         items = results or {},
@@ -729,25 +794,43 @@ lib.callback.register("pickle_dealerships:adminAddCatalogVehicle", function(sour
         return { success = false, message = _L("admin_vehicle_exists", data.model) }
     end
 
+    -- Tier column dropped from the writable column set when catalog access
+    -- moved to many-to-many groups. The DB default ('basic') still satisfies
+    -- the NOT NULL constraint for legacy schemas.
     local id = MySQL.insert.await(
-        "INSERT INTO pickle_wholesale_catalog (model, label, wholesale, tier, class, vehicle_type) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO pickle_wholesale_catalog (model, label, wholesale, class, vehicle_type) VALUES (?, ?, ?, ?, ?)",
         {
             data.model,
             data.label,
             tonumber(data.wholesale) or 0,
-            data.tier or "basic",
             data.class or "sedan",
             data.vehicleType or "car",
         }
     )
 
     if id then
+        -- Optional groupIds in the create payload: seed the junction in the
+        -- same callback so the new vehicle is immediately visible in the
+        -- groups the admin picked.
+        if type(data.groupIds) == "table" then
+            for _, gid in ipairs(data.groupIds) do
+                local n = tonumber(gid)
+                if n then
+                    MySQL.insert.await(
+                        "INSERT IGNORE INTO pickle_catalog_vehicle_groups (catalog_id, group_id) VALUES (?, ?)",
+                        { id, n }
+                    )
+                end
+            end
+        end
         return { success = true, id = id, message = _L("admin_vehicle_added", data.label) }
     end
     return { success = false, message = _L("admin_failed_add_vehicle") }
 end)
 
---- Update a catalog vehicle
+--- Update a catalog vehicle (metadata only; group assignments are saved via
+--- adminSetVehicleGroups so the catalog edit dialog can manage them as a
+--- separate step the same way photo uploads work).
 lib.callback.register("pickle_dealerships:adminUpdateCatalogVehicle", function(source, data)
     if not IsPlayerAdmin(source) then
         return { success = false, message = _L("admin_no_permission") }
@@ -758,11 +841,10 @@ lib.callback.register("pickle_dealerships:adminUpdateCatalogVehicle", function(s
     end
 
     MySQL.update.await(
-        "UPDATE pickle_wholesale_catalog SET label = ?, wholesale = ?, tier = ?, class = ?, vehicle_type = ? WHERE id = ?",
+        "UPDATE pickle_wholesale_catalog SET label = ?, wholesale = ?, class = ?, vehicle_type = ? WHERE id = ?",
         {
             data.label,
             tonumber(data.wholesale) or 0,
-            data.tier or "basic",
             data.class or "sedan",
             data.vehicleType or "car",
             data.id,
@@ -786,11 +868,10 @@ lib.callback.register("pickle_dealerships:adminRemoveCatalogVehicle", function(s
     return { success = true, message = _L("admin_vehicle_removed") }
 end)
 
---- Stock a dealership with the entire catalog that matches its vehicle type +
---- tier-based access level. The admin supplies a single `quantity` that is
---- applied to every inserted row. Models already present (unsold) on this lot
---- are skipped, so re-running after adding new catalog entries just fills in
---- the new ones.
+--- Stock a dealership with every catalog vehicle that lives in any of its
+--- assigned groups. The admin supplies a single `quantity` applied to every
+--- inserted row. Models already present (unsold) on this lot are skipped, so
+--- re-running after adding new catalog entries just fills in the new ones.
 lib.callback.register("pickle_dealerships:adminStockAllFromCatalog", function(source, data)
     if not IsPlayerAdmin(source) then
         return { success = false, message = _L("admin_no_permission") }
@@ -808,15 +889,6 @@ lib.callback.register("pickle_dealerships:adminStockAllFromCatalog", function(so
         return { success = false, message = _L("dealership_not_found") }
     end
 
-    -- Resolve which catalog tiers this dealership has access to, mirroring the
-    -- logic in seedManagedDealershipStock above.
-    local tierDef = Config.Tiers and Config.Tiers[tonumber(dealership.tier) or 1] or nil
-    local accessLevel = tierDef and tierDef.catalogAccess or 'basic'
-    local hierarchy = { 'basic', 'expanded', 'full', 'exclusive' }
-    local levelIdx = ({ basic = 1, expanded = 2, full = 3, exclusive = 4 })[accessLevel] or 1
-    local allowedTiers = {}
-    for i = 1, levelIdx do allowedTiers[#allowedTiers + 1] = hierarchy[i] end
-
     local vehicleType = dealership.type
     local types = {}
     if vehicleType == 'mixed' or not vehicleType or vehicleType == '' then
@@ -825,32 +897,36 @@ lib.callback.register("pickle_dealerships:adminStockAllFromCatalog", function(so
         types = { vehicleType }
     end
 
-    if #types == 0 or #allowedTiers == 0 then
+    if #types == 0 then
         return { success = false, message = _L("admin_no_catalog_vehicles") }
     end
 
     local typeMarks = string.rep('?,', #types):sub(1, -2)
-    local tierMarks = string.rep('?,', #allowedTiers):sub(1, -2)
-
-    -- Only insert models that don't already have an unsold stock row on this
-    -- lot, so re-running after adding new catalog entries is safe.
+    -- Group-membership join: vehicle is eligible iff it shares at least one
+    -- group with the dealership. Same shape as seedManagedDealershipStock.
     local sql = ([[
         INSERT INTO pickle_dealership_stock
             (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, quantity, ordered_at, delivered_at, acquired_from)
-        SELECT ?, model, label, wholesale, ROUND(wholesale * (1 + ?)), ?, NOW(), NOW(), 'admin_seed'
-        FROM pickle_wholesale_catalog
-        WHERE vehicle_type IN (%s) AND tier IN (%s)
-        AND NOT EXISTS (
-            SELECT 1 FROM pickle_dealership_stock ds
-            WHERE ds.dealership_id = ?
-              AND ds.vehicle_model = pickle_wholesale_catalog.model
-              AND ds.sold_at IS NULL
-        )
-    ]]):format(typeMarks, tierMarks)
+        SELECT ?, wc.model, wc.label, wc.wholesale, ROUND(wc.wholesale * (1 + ?)), ?, NOW(), NOW(), 'admin_seed'
+        FROM pickle_wholesale_catalog wc
+        WHERE wc.vehicle_type IN (%s)
+          AND EXISTS (
+              SELECT 1
+              FROM pickle_catalog_vehicle_groups vg
+              JOIN pickle_dealership_groups dg ON dg.group_id = vg.group_id
+              WHERE vg.catalog_id = wc.id AND dg.dealership_id = ?
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM pickle_dealership_stock ds
+              WHERE ds.dealership_id = ?
+                AND ds.vehicle_model = wc.model
+                AND ds.sold_at IS NULL
+          )
+    ]]):format(typeMarks)
 
     local params = { dealershipId, 0.30, quantity } -- retail = wholesale * 1.3 by default
     for _, tval in ipairs(types) do params[#params + 1] = tval end
-    for _, tval in ipairs(allowedTiers) do params[#params + 1] = tval end
+    params[#params + 1] = dealershipId
     params[#params + 1] = dealershipId
 
     local inserted = MySQL.update.await(sql, params) or 0
@@ -867,7 +943,6 @@ lib.callback.register("pickle_dealerships:adminStockAllFromCatalog", function(so
         fields = {
             { name = "Dealership", value = dealership.name or "?", inline = true },
             { name = "Rows Inserted", value = tostring(inserted), inline = true },
-            { name = "Access Tier", value = tostring(accessLevel), inline = true },
         },
     })
 
@@ -1031,6 +1106,191 @@ lib.callback.register("pickle_dealerships:adminSetPhotoBucket", function(source,
     local bucket = tonumber(data.bucket) or 0
     SetPlayerRoutingBucket(source, bucket)
     return { success = true }
+end)
+
+-- ─── Catalog Groups ─────────────────────────────────────────────────────────
+-- Many-to-many replacement for the legacy tier hierarchy. A vehicle is visible
+-- in a dealership's catalog when (vehicle.groups ∩ dealership.groups) is
+-- non-empty. Default groups (basic / expanded / full / exclusive) are seeded
+-- on first boot in core/server.lua's BackfillCatalogGroups; admins create and
+-- manage additional groups through these callbacks.
+
+--- List every group with its current vehicle count (cheap join used by the
+--- admin UI to show e.g. "Premium · 12 vehicles").
+lib.callback.register("pickle_dealerships:adminGetGroups", function(source)
+    if not IsPlayerAdmin(source) then DenyAccess(source, "admin_no_permission") return {} end
+
+    local rows = MySQL.query.await([[
+        SELECT g.id, g.name, g.label, g.description, g.is_default,
+               (SELECT COUNT(*) FROM pickle_catalog_vehicle_groups vg WHERE vg.group_id = g.id) AS vehicle_count,
+               (SELECT COUNT(*) FROM pickle_dealership_groups dg WHERE dg.group_id = g.id) AS dealership_count
+        FROM pickle_catalog_groups g
+        ORDER BY g.is_default DESC, g.name ASC
+    ]]) or {}
+    return rows
+end)
+
+--- Create a new admin-defined group. `name` is the stable machine key (used by
+--- driver-progression configs and any external integrations); `label` is the
+--- player-facing display string. Both required; name must be unique.
+lib.callback.register("pickle_dealerships:adminCreateGroup", function(source, data)
+    if not IsPlayerAdmin(source) then
+        return { success = false, message = _L("admin_no_permission") }
+    end
+    local name = data and data.name and tostring(data.name):gsub("^%s*(.-)%s*$", "%1") or ""
+    local label = data and data.label and tostring(data.label):gsub("^%s*(.-)%s*$", "%1") or ""
+    if name == "" or label == "" then
+        return { success = false, message = _L("admin_group_name_label_required") }
+    end
+
+    local existing = MySQL.scalar.await(
+        "SELECT id FROM pickle_catalog_groups WHERE name = ? LIMIT 1",
+        { name }
+    )
+    if existing then
+        return { success = false, message = _L("admin_group_name_taken", name) }
+    end
+
+    local id = MySQL.insert.await(
+        "INSERT INTO pickle_catalog_groups (name, label, description, is_default) VALUES (?, ?, ?, 0)",
+        { name, label, data.description }
+    )
+    if not id then
+        return { success = false, message = _L("admin_group_create_failed") }
+    end
+    return { success = true, id = id, message = _L("admin_group_created", label) }
+end)
+
+--- Update an existing group. Name, label, and description are all editable
+--- — even on seeded groups. Renaming a group that's referenced by a
+--- driver-progression entry (e.g. "basic"/"expanded") will break that
+--- reference, but that's the admin's call to make.
+lib.callback.register("pickle_dealerships:adminUpdateGroup", function(source, data)
+    if not IsPlayerAdmin(source) then
+        return { success = false, message = _L("admin_no_permission") }
+    end
+    local id = tonumber(data and data.id)
+    if not id then
+        return { success = false, message = _L("admin_group_missing_id") }
+    end
+    local label = data.label and tostring(data.label):gsub("^%s*(.-)%s*$", "%1") or ""
+    if label == "" then
+        return { success = false, message = _L("admin_group_label_required") }
+    end
+
+    -- Optional rename. Only applied when a non-empty string different from
+    -- the existing name is provided, so older clients that omit the field
+    -- keep working.
+    local newName = data.name and tostring(data.name):gsub("^%s*(.-)%s*$", "%1") or nil
+    if newName and newName ~= "" then
+        local conflict = MySQL.scalar.await(
+            "SELECT id FROM pickle_catalog_groups WHERE name = ? AND id != ? LIMIT 1",
+            { newName, id }
+        )
+        if conflict then
+            return { success = false, message = _L("admin_group_name_taken", newName) }
+        end
+        MySQL.update.await(
+            "UPDATE pickle_catalog_groups SET name = ?, label = ?, description = ? WHERE id = ?",
+            { newName, label, data.description, id }
+        )
+    else
+        MySQL.update.await(
+            "UPDATE pickle_catalog_groups SET label = ?, description = ? WHERE id = ?",
+            { label, data.description, id }
+        )
+    end
+    return { success = true, message = _L("admin_group_updated") }
+end)
+
+--- Delete a group + cascade junction rows. Every group is deletable,
+--- including seeded ones — the DB is the source of truth, nothing in code
+--- requires a specific group name to exist.
+lib.callback.register("pickle_dealerships:adminDeleteGroup", function(source, data)
+    if not IsPlayerAdmin(source) then
+        return { success = false, message = _L("admin_no_permission") }
+    end
+    local id = tonumber(data and data.id)
+    if not id then
+        return { success = false, message = _L("admin_group_missing_id") }
+    end
+    local row = MySQL.single.await(
+        "SELECT id, label FROM pickle_catalog_groups WHERE id = ?",
+        { id }
+    )
+    if not row then
+        return { success = false, message = _L("admin_group_not_found") }
+    end
+
+    MySQL.update.await("DELETE FROM pickle_catalog_vehicle_groups WHERE group_id = ?", { id })
+    MySQL.update.await("DELETE FROM pickle_dealership_groups WHERE group_id = ?", { id })
+    MySQL.update.await("DELETE FROM pickle_catalog_groups WHERE id = ?", { id })
+    return { success = true, message = _L("admin_group_deleted", row.label or "") }
+end)
+
+--- Replace a vehicle's group assignments with the given list. Sent by the
+--- catalog edit dialog after metadata save. Empty list = vehicle becomes
+--- invisible to every dealership.
+lib.callback.register("pickle_dealerships:adminSetVehicleGroups", function(source, data)
+    if not IsPlayerAdmin(source) then
+        return { success = false, message = _L("admin_no_permission") }
+    end
+    local catalogId = tonumber(data and data.catalogId)
+    if not catalogId then
+        return { success = false, message = _L("admin_missing_vehicle_id") }
+    end
+    MySQL.update.await(
+        "DELETE FROM pickle_catalog_vehicle_groups WHERE catalog_id = ?",
+        { catalogId }
+    )
+    if type(data.groupIds) == "table" then
+        for _, gid in ipairs(data.groupIds) do
+            local n = tonumber(gid)
+            if n then
+                MySQL.insert.await(
+                    "INSERT IGNORE INTO pickle_catalog_vehicle_groups (catalog_id, group_id) VALUES (?, ?)",
+                    { catalogId, n }
+                )
+            end
+        end
+    end
+    return { success = true, message = _L("admin_vehicle_groups_saved") }
+end)
+
+--- Replace a dealership's group assignments with the given list. Same shape as
+--- adminSetVehicleGroups; empty list = dealership has no catalog (visible
+--- empty state for the customer).
+lib.callback.register("pickle_dealerships:adminSetDealershipGroups", function(source, data)
+    if not IsPlayerAdmin(source) then
+        return { success = false, message = _L("admin_no_permission") }
+    end
+    local dealershipId = tonumber(data and data.dealershipId)
+    if not dealershipId then
+        return { success = false, message = _L("admin_missing_dealership_id") }
+    end
+    setDealershipGroups(dealershipId, data.groupIds)
+    -- Refresh customer-facing list immediately so a player standing in the
+    -- showroom sees the catalog change without re-entering the zone.
+    local d = GetDealership(dealershipId)
+    if d and d.location then
+        TriggerClientEvent('pickle_dealerships:refreshDisplay', -1, d.location)
+    end
+    return { success = true, message = _L("admin_dealership_groups_saved") }
+end)
+
+--- List the group ids currently assigned to a single dealership. Used by the
+--- admin "Set Groups" dialog to seed its checked state.
+lib.callback.register("pickle_dealerships:adminGetDealershipGroups", function(source, data)
+    if not IsPlayerAdmin(source) then DenyAccess(source, "admin_no_permission") return {} end
+    local dealershipId = tonumber(data and data.dealershipId)
+    if not dealershipId then return {} end
+    local rows = MySQL.query.await(
+        "SELECT group_id FROM pickle_dealership_groups WHERE dealership_id = ?",
+        { dealershipId }
+    ) or {}
+    local ids = {}
+    for _, r in ipairs(rows) do ids[#ids + 1] = r.group_id end
+    return ids
 end)
 
 --- Admin command to open admin panel

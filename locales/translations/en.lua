@@ -250,6 +250,8 @@ Language["en"] = {
     financing_reminder_desc = "Payment of %s is overdue for vehicle %s.%s Remaining: %s",
     financing_repossessed_title = "Vehicle Repossessed",
     financing_repossessed_desc = "Your vehicle (%s) has been repossessed due to %d missed payments.",
+    financing_credit_score_unavailable = "Your credit score could not be verified. Financing is unavailable.",
+    financing_credit_score_too_low = "Credit score too low. This dealership requires %d; yours is %d.",
 
     -- Sales
     sales_load_failed = "Failed to load vehicle model.",
@@ -547,6 +549,9 @@ Language["en"] = {
     label_interest_rate_pct = "Interest Rate %%",
     label_payment_interval_hours = "Payment Interval (hours)",
     label_max_missed_repo = "Max Missed Before Repo",
+    label_require_credit_score = "Require Credit Score",
+    label_min_credit_score = "Minimum Credit Score",
+    label_credit_score_provider_offline = "Credit score provider is not configured on this server — this check is disabled.",
     label_installment_options = "Installment Plan Options",
     label_payments = "%s payments",
     label_paid = "%s paid",
@@ -672,17 +677,55 @@ Language["en"] = {
     status_cancelled = "Cancelled",
     status_no_sale = "No Sale",
 
-    -- Tiers
+    -- Tiers (legacy — kept for back-compat reads; the tier system was replaced
+    -- by many-to-many catalog groups).
     tier_1 = "Starter Lot",
     tier_2 = "Established",
     tier_3 = "Premium",
     tier_4 = "Enterprise",
 
-    -- Catalog tiers (access levels)
+    -- Catalog tiers (legacy — see note above).
     catalog_tier_basic = "Basic",
     catalog_tier_expanded = "Expanded",
     catalog_tier_full = "Full",
     catalog_tier_exclusive = "Exclusive",
+
+    -- Catalog groups
+    group_basic = "Basic",
+    group_expanded = "Expanded",
+    group_full = "Full",
+    group_exclusive = "Exclusive",
+    admin_groups = "Groups",
+    admin_manage_groups = "Manage Groups",
+    admin_create_group = "Create Group",
+    admin_creating_group = "Creating a new group",
+    admin_editing_group = "Editing existing group",
+    admin_group_name = "Name (internal)",
+    admin_group_name_help = "Machine key — lowercase, referenced by driver progression.",
+    admin_group_label = "Display Label",
+    admin_group_description = "Description",
+    admin_group_name_label_required = "Both name and label are required.",
+    admin_group_name_taken = "A group named '%s' already exists.",
+    admin_group_label_required = "Label is required.",
+    admin_group_default_locked = "'%s' is a default group and cannot be deleted.",
+    admin_group_default_locked_hint = "Default groups can be re-labelled but not renamed or deleted.",
+    admin_group_missing_id = "Missing group id.",
+    admin_group_not_found = "Group not found.",
+    admin_group_create_failed = "Failed to create group.",
+    admin_group_update_failed = "Failed to update group.",
+    admin_group_delete_failed = "Failed to delete group.",
+    admin_group_created = "Group '%s' created.",
+    admin_group_updated = "Group updated.",
+    admin_group_deleted = "Group '%s' deleted.",
+    admin_groups_desc = "Groups are named collections of vehicles. A dealership sells every vehicle in any group it's assigned to.",
+    admin_set_groups = "Set Groups",
+    admin_vehicle_groups_desc = "Pick every group this vehicle should live in. A vehicle can belong to as many groups as you like.",
+    admin_dealership_groups_desc = "Pick every group this dealership should pull its catalog from.",
+    admin_vehicle_groups_saved = "Vehicle groups updated.",
+    admin_dealership_groups_saved = "Dealership groups updated.",
+    admin_no_groups_yet = "No groups yet — create one from the catalog.",
+    admin_optional = "Optional",
+    label_no_groups = "No groups",
 
     -- Vehicle classes
     class_compact = "Compact",
@@ -697,6 +740,9 @@ Language["en"] = {
     class_boat = "Boat",
     class_plane = "Plane",
     class_helicopter = "Helicopter",
+    class_sports_classic = "Sports Classic",
+    class_motorcycle = "Motorcycle",
+    class_cycle = "Cycle",
 
     -- Roles
     role_owner = "Owner",

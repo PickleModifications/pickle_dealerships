@@ -45,60 +45,46 @@ function GetCurrencyString(amount)
     return NumberWithCommas(amount)
 end
 
+-- Renders Config.PlateFormat into a concrete plate string. See config.lua
+-- for the pattern syntax (A = letter, 1 = digit, ? = either, else literal).
+-- Falls back to "AAAA1111" if the config is empty/malformed so a typo in
+-- the format string can't produce blank plates at sale time.
+local PLATE_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 function GeneratePlate()
-    local letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    local plate = ""
-    for i = 1, 3 do
-        local idx = math.random(1, #letters)
-        plate = plate .. letters:sub(idx, idx)
+    local pattern = Config and Config.PlateFormat
+    if type(pattern) ~= "string" or pattern == "" then
+        pattern = "AAAA1111"
     end
-    plate = plate .. " "
-    for i = 1, 3 do
-        plate = plate .. tostring(math.random(0, 9))
-    end
-    return plate
-end
-
-function HasTierFeature(tier, feature)
-    local tierData = Config.Tiers[tier]
-    if not tierData or not tierData.features then return false end
-    for _, f in ipairs(tierData.features) do
-        if f == feature then return true end
-    end
-    return false
-end
-
-function CanAccessCatalogTier(dealershipTier, vehicleTier)
-    local accessLevel = Config.Tiers[dealershipTier] and Config.Tiers[dealershipTier].catalogAccess or "basic"
-    local hierarchy = { basic = 1, expanded = 2, full = 3, exclusive = 4 }
-    local vehicleLevel = hierarchy[vehicleTier] or 1
-    local accessLevelNum = hierarchy[accessLevel] or 1
-    return accessLevelNum >= vehicleLevel
-end
-
-function GetCatalogForDealership(dealershipType, dealershipTier)
-    local catalog = {}
-    local types = {}
-    if dealershipType == "mixed" then
-        types = { "car", "boat", "air" }
-    else
-        types = { dealershipType }
-    end
-    for _, vtype in ipairs(types) do
-        local vehicles = Config.WholesaleCatalog[vtype]
-        if vehicles then
-            for _, vehicle in ipairs(vehicles) do
-                if CanAccessCatalogTier(dealershipTier, vehicle.tier) then
-                    local entry = {}
-                    for k, v in pairs(vehicle) do entry[k] = v end
-                    entry.vehicleType = vtype
-                    catalog[#catalog + 1] = entry
-                end
+    local plate = {}
+    for i = 1, #pattern do
+        local c = pattern:sub(i, i)
+        if c == "A" then
+            local idx = math.random(1, #PLATE_LETTERS)
+            plate[#plate + 1] = PLATE_LETTERS:sub(idx, idx)
+        elseif c == "1" then
+            plate[#plate + 1] = tostring(math.random(0, 9))
+        elseif c == "?" then
+            -- Letter or digit, 50/50. Useful when a garage wants a fixed
+            -- length but doesn't care about the letter/digit split.
+            if math.random(1, 2) == 1 then
+                local idx = math.random(1, #PLATE_LETTERS)
+                plate[#plate + 1] = PLATE_LETTERS:sub(idx, idx)
+            else
+                plate[#plate + 1] = tostring(math.random(0, 9))
             end
+        else
+            plate[#plate + 1] = c
         end
     end
-    return catalog
+    return table.concat(plate)
 end
+
+-- Note: HasTierFeature / CanAccessCatalogTier / GetCatalogForDealership were
+-- removed when catalog access switched from a 4-level tier hierarchy to flat
+-- many-to-many groups. Catalog visibility is now driven by SQL joins on the
+-- pickle_catalog_vehicle_groups + pickle_dealership_groups junction tables;
+-- see modules/stock/server.lua. Financing — the only feature that was tier-
+-- gated — is now available to every dealership.
 
 function WeightedRandom(weights)
     local total = 0

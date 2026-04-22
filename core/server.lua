@@ -296,17 +296,160 @@ CreateThread(function()
             ADD COLUMN IF NOT EXISTS `payment_method` VARCHAR(16) NOT NULL DEFAULT 'bank'
         ]])
 
-        -- Seed default wholesale catalog (INSERT IGNORE skips existing entries)
-        local seedSQL = LoadResourceFile(GetCurrentResourceName(), "catalog_seed.sql")
-        if seedSQL then
-            MySQL.Async.execute(seedSQL)
+        -- Catalog Groups: many-to-many replacement for the rigid tier hierarchy.
+        -- A vehicle can live in any number of groups; a dealership can be assigned
+        -- to any number of groups; a vehicle appears in a dealership's catalog
+        -- when (vehicle.groups ∩ dealership.groups) is non-empty. The legacy
+        -- `tier` columns on pickle_wholesale_catalog and pickle_dealerships are
+        -- left in place (unread) so older installs can roll back cleanly.
+        MySQL.Async.execute([[
+            CREATE TABLE IF NOT EXISTS `pickle_catalog_groups` (
+                `id`          INT UNSIGNED NOT NULL AUTO_INCREMENT,
+                `name`        VARCHAR(64)  NOT NULL,
+                `label`       VARCHAR(150) NOT NULL,
+                `description` TEXT         DEFAULT NULL,
+                `is_default`  TINYINT(1)   NOT NULL DEFAULT 0,
+                `created_at`  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (`id`),
+                UNIQUE KEY `idx_name` (`name`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ]])
+
+        MySQL.Async.execute([[
+            CREATE TABLE IF NOT EXISTS `pickle_catalog_vehicle_groups` (
+                `catalog_id` INT UNSIGNED NOT NULL,
+                `group_id`   INT UNSIGNED NOT NULL,
+                PRIMARY KEY (`catalog_id`, `group_id`),
+                KEY `idx_group` (`group_id`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ]])
+
+        MySQL.Async.execute([[
+            CREATE TABLE IF NOT EXISTS `pickle_dealership_groups` (
+                `dealership_id` INT          NOT NULL,
+                `group_id`      INT UNSIGNED NOT NULL,
+                PRIMARY KEY (`dealership_id`, `group_id`),
+                KEY `idx_group` (`group_id`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ]])
+
+        -- Seed default wholesale catalog (INSERT IGNORE skips existing entries).
+        -- oxmysql's `execute` runs exactly one statement, so we strip comments
+        -- and split the file on `;` before feeding it in. The current seed
+        -- only contains a CREATE TABLE and an INSERT, but splitting keeps
+        -- this path working if future seed files grow additional statements.
+        if Config.InstallVanillaStock then
+            local seedSQL = LoadResourceFile(GetCurrentResourceName(), "vanilla_stock.sql")
+            if seedSQL then
+                -- Drop block and line comments so a stray "--" or "/* ; */"
+                -- can't break the simple semicolon split below.
+                seedSQL = seedSQL:gsub("/%*.-%*/", " ")
+                seedSQL = seedSQL:gsub("%-%-[^\n]*", "")
+                for stmt in seedSQL:gmatch("[^;]+") do
+                    local trimmed = stmt:gsub("^%s+", ""):gsub("%s+$", "")
+                    if trimmed ~= "" then
+                        MySQL.Async.execute(trimmed)
+                    end
+                end
+            end
         end
+
+        -- One-time backfill so existing installs keep their visibility on first
+        -- boot after upgrade. Each step is gated on "junction empty" so reboots
+        -- and re-seeds remain idempotent.
+        BackfillCatalogGroups()
 
         -- Load pickle_dealerships into cache after tables are ready
         LoadDealerships()
         LoadDeliveryDepots()
     end)
 end)
+
+--- Default groups seeded on first boot. Names match the previous tier strings
+--- so driver-progression configs (which reference "basic"/"expanded"/"full"/
+--- "exclusive" in Config.DeliveryProgression.levels[N].catalogAccess) keep
+--- working without any config changes.
+local DEFAULT_GROUP_NAMES = { "basic", "expanded", "full", "exclusive" }
+local DEFAULT_GROUP_LABEL_KEYS = {
+    basic     = "group_basic",
+    expanded  = "group_expanded",
+    full      = "group_full",
+    exclusive = "group_exclusive",
+}
+
+--- Catalog tier strings ranked. Used solely by the one-time dealership backfill
+--- to translate a legacy numeric tier into the cumulative set of group names a
+--- dealership used to have access to (tier 4 → all four groups, tier 1 → basic).
+local TIER_RANK = { basic = 1, expanded = 2, full = 3, exclusive = 4 }
+
+function BackfillCatalogGroups()
+    -- 1. Seed default groups if the table is empty.
+    local groupCount = MySQL.scalar.await("SELECT COUNT(*) FROM `pickle_catalog_groups`") or 0
+    if tonumber(groupCount) == 0 then
+        for _, name in ipairs(DEFAULT_GROUP_NAMES) do
+            local label = (_L and _L(DEFAULT_GROUP_LABEL_KEYS[name])) or name
+            MySQL.insert.await(
+                "INSERT INTO `pickle_catalog_groups` (`name`, `label`, `is_default`) VALUES (?, ?, 1)",
+                { name, label }
+            )
+        end
+    end
+
+    -- 2. Backfill catalog→group junction from the legacy tier column.
+    local vgCount = MySQL.scalar.await("SELECT COUNT(*) FROM `pickle_catalog_vehicle_groups`") or 0
+    if tonumber(vgCount) == 0 then
+        local groups = MySQL.query.await("SELECT `id`, `name` FROM `pickle_catalog_groups`") or {}
+        local groupIdByName = {}
+        for _, g in ipairs(groups) do groupIdByName[g.name] = g.id end
+
+        local catalogRows = MySQL.query.await("SELECT `id`, `tier` FROM `pickle_wholesale_catalog`") or {}
+        for _, row in ipairs(catalogRows) do
+            local gid = row.tier and groupIdByName[row.tier]
+            if gid then
+                MySQL.insert.await(
+                    "INSERT IGNORE INTO `pickle_catalog_vehicle_groups` (`catalog_id`, `group_id`) VALUES (?, ?)",
+                    { row.id, gid }
+                )
+            end
+        end
+    end
+
+    -- 3. Backfill dealership→group junction from the legacy tier column,
+    --    expanding the cumulative hierarchy (tier N → all groups up to N).
+    --    Done PER-DEALERSHIP so a freshly-created dealership (which adds rows
+    --    to the junction before backfill runs at next boot) doesn't prevent
+    --    the rest of the dealerships from getting backfilled. Any dealership
+    --    that already has at least one group assignment is skipped.
+    local groups = MySQL.query.await("SELECT `id`, `name` FROM `pickle_catalog_groups`") or {}
+    local groupIdByName = {}
+    for _, g in ipairs(groups) do groupIdByName[g.name] = g.id end
+
+    local dealerships = MySQL.query.await([[
+        SELECT d.`id`, d.`tier`
+        FROM `pickle_dealerships` d
+        WHERE NOT EXISTS (
+            SELECT 1 FROM `pickle_dealership_groups` dg
+            WHERE dg.`dealership_id` = d.`id`
+        )
+    ]]) or {}
+    for _, d in ipairs(dealerships) do
+        local tierIdx = tonumber(d.tier) or 1
+        local tierCfg = Config.Tiers and Config.Tiers[tierIdx]
+        local accessName = tierCfg and tierCfg.catalogAccess or "basic"
+        local maxRank = TIER_RANK[accessName] or 1
+        for _, name in ipairs(DEFAULT_GROUP_NAMES) do
+            if (TIER_RANK[name] or 0) <= maxRank then
+                local gid = groupIdByName[name]
+                if gid then
+                    MySQL.insert.await(
+                        "INSERT IGNORE INTO `pickle_dealership_groups` (`dealership_id`, `group_id`) VALUES (?, ?)",
+                        { d.id, gid }
+                    )
+                end
+            end
+        end
+    end
+end
 
 -- ─── Delivery Depot Cache ────────────────────────────────────────────────────
 
@@ -722,6 +865,19 @@ function CanPlayerSell(source, dealershipId)
     if IsPlayerAdmin(source) then return true end
     local role = GetPlayerDealershipRole(source, dealershipId)
     return role == "owner" or role == "manager" or role == "salesperson"
+end
+
+--- Centralised "access denied" notifier. Any server-side permission gate
+--- that ends in a silent return (e.g. `return nil` from a read callback)
+--- should call this first so the player isn't left staring at a stalled
+--- UI. `reason` is a locale key; falls back to the generic no_permission
+--- string. Safe to call with source == 0 (console) — ShowNotification
+--- is a no-op there.
+function DenyAccess(source, reason)
+    if not source or source == 0 then return end
+    local key = reason or "no_permission"
+    local msg = _L and _L(key) or key
+    ShowNotification(source, msg)
 end
 
 -- ─── Driver Progression ──────────────────────────────────────────────────────

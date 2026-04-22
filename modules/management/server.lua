@@ -1,6 +1,7 @@
 --- Get dealership financial overview
 lib.callback.register("pickle_dealerships:getDealershipFinances", function(source, dealershipId)
     if not CanPlayerManage(source, dealershipId) then
+        DenyAccess(source)
         return nil
     end
 
@@ -232,6 +233,7 @@ end)
 --- Get all coupons for a dealership
 lib.callback.register("pickle_dealerships:getCoupons", function(source, dealershipId)
     if not CanPlayerManage(source, dealershipId) then
+        DenyAccess(source)
         return nil
     end
 
@@ -308,9 +310,8 @@ end)
 --- job definition) and the saved rate table keyed by numeric grade. Dealerships with no job
 --- configured return an empty grades list and rely solely on Config.DefaultCommission.
 lib.callback.register("pickle_dealerships:getCommissionRates", function(source, dealershipId)
-    print(("[pickle_dealerships] getCommissionRates called: source=%s dealershipId=%s"):format(tostring(source), tostring(dealershipId)))
     if not CanPlayerManage(source, dealershipId) then
-        print("[pickle_dealerships] getCommissionRates: CanPlayerManage=false")
+        DenyAccess(source)
         return nil
     end
 
@@ -387,7 +388,7 @@ end)
 
 --- Returns the list of server-wide alt currencies along with the subset this dealership accepts.
 lib.callback.register("pickle_dealerships:getAcceptedAltCurrencies", function(source, dealershipId)
-    if not CanPlayerManage(source, dealershipId) then return nil end
+    if not CanPlayerManage(source, dealershipId) then DenyAccess(source) return nil end
     local dealership = GetDealership(dealershipId)
     if not dealership then return nil end
 
@@ -462,7 +463,7 @@ end)
 --- Returns the dealership's society-funds allowlist and the faction (job/gang) it maps to.
 --- Allowlist entries: { type = 'job'|'gang', name = string, minGrade = number }
 lib.callback.register("pickle_dealerships:getSocietyAllowlist", function(source, dealershipId)
-    if not CanPlayerManage(source, dealershipId) then return nil end
+    if not CanPlayerManage(source, dealershipId) then DenyAccess(source) return nil end
     local dealership = GetDealership(dealershipId)
     if not dealership then return nil end
 
@@ -617,6 +618,7 @@ end)
 --- Get comprehensive dashboard stats
 lib.callback.register("pickle_dealerships:getDashboardStats", function(source, dealershipId)
     if not CanPlayerManage(source, dealershipId) then
+        DenyAccess(source)
         return nil
     end
 
@@ -736,7 +738,8 @@ lib.callback.register("pickle_dealerships:getRevenueReport", function(source, da
     if days < 7 then days = 7 end
     if days > 90 then days = 90 end
 
-    if not dealershipId or not CanPlayerManage(source, dealershipId) then return nil end
+    if not dealershipId then return nil end
+    if not CanPlayerManage(source, dealershipId) then DenyAccess(source) return nil end
 
     -- Bucket sales by UTC date for the last N days. Days with no sales get a
     -- zero row via the client-side fill; we only return actual data here to

@@ -1,4 +1,8 @@
---- Returns the wholesale catalog filtered by dealership tier and type (DB-driven)
+--- Returns the wholesale catalog filtered by the dealership's assigned groups
+--- and vehicle type (DB-driven). Catalog visibility used to be a one-tier
+--- comparison; it's now a many-to-many group-membership check via the
+--- pickle_catalog_vehicle_groups + pickle_dealership_groups junction tables.
+--- A vehicle is included iff it shares at least one group with the dealership.
 ---@param source number
 ---@param data table|string
 lib.callback.register('pickle_dealerships:getCatalog', function(source, data)
@@ -6,19 +10,19 @@ lib.callback.register('pickle_dealerships:getCatalog', function(source, data)
     if not locationKey then return { items = {}, total = 0, page = 1, pageSize = 50 } end
 
     local dealership = MySQL.single.await(
-        'SELECT * FROM pickle_dealerships WHERE location = ?',
+        'SELECT id, type FROM pickle_dealerships WHERE location = ?',
         { locationKey }
     )
     if not dealership then return { items = {}, total = 0, page = 1, pageSize = 50 } end
 
-    local tier = dealership.tier or 1
+    local dealershipId = dealership.id
     local vehicleType = dealership.type or 'car'
 
     local page = tonumber(data and data.page) or 1
     local pageSize = tonumber(data and data.pageSize) or 50
     local search = data and data.search or ''
     local classFilter = data and data.classFilter or 'all'
-    local tierFilter = data and data.tierFilter or 'all'
+    local groupFilter = tonumber(data and data.groupFilter) -- optional: narrow to one group
     local offset = (page - 1) * pageSize
 
     -- Build type filter
@@ -29,10 +33,6 @@ lib.callback.register('pickle_dealerships:getCatalog', function(source, data)
         types = { vehicleType }
     end
 
-    -- Return all tiers the server knows about for this vehicle type. The client
-    -- renders above-tier rows as locked with a "Unlocks at Level N" overlay so
-    -- owners can see what's ahead. Gating for orders still runs server-side in
-    -- orderVehicle, so exposing the list here is safe.
     local typePlaceholders = {}
     local params = {}
 
@@ -41,31 +41,40 @@ lib.callback.register('pickle_dealerships:getCatalog', function(source, data)
         params[#params + 1] = t
     end
 
-    local where = string.format(
-        'vehicle_type IN (%s)',
-        table.concat(typePlaceholders, ',')
-    )
+    -- Group-membership gate. EXISTS keeps it cheap with the junction table;
+    -- when the admin narrows by a specific group the optional second EXISTS
+    -- pins the row to just that group.
+    local where = string.format([[
+        wc.vehicle_type IN (%s)
+        AND EXISTS (
+            SELECT 1
+            FROM pickle_catalog_vehicle_groups vg
+            JOIN pickle_dealership_groups dg ON dg.group_id = vg.group_id
+            WHERE vg.catalog_id = wc.id AND dg.dealership_id = ?
+        )
+    ]], table.concat(typePlaceholders, ','))
+    params[#params + 1] = dealershipId
 
     if search ~= '' then
-        where = where .. ' AND (label LIKE ? OR model LIKE ?)'
+        where = where .. ' AND (wc.label LIKE ? OR wc.model LIKE ?)'
         local pattern = '%' .. search .. '%'
         params[#params + 1] = pattern
         params[#params + 1] = pattern
     end
 
     if classFilter ~= 'all' then
-        where = where .. ' AND class = ?'
+        where = where .. ' AND wc.class = ?'
         params[#params + 1] = classFilter
     end
 
-    if tierFilter ~= 'all' then
-        where = where .. ' AND tier = ?'
-        params[#params + 1] = tierFilter
+    if groupFilter then
+        where = where .. ' AND EXISTS (SELECT 1 FROM pickle_catalog_vehicle_groups vg2 WHERE vg2.catalog_id = wc.id AND vg2.group_id = ?)'
+        params[#params + 1] = groupFilter
     end
 
     local countParams = { table.unpack(params) }
     local countResult = MySQL.scalar.await(
-        ('SELECT COUNT(*) FROM pickle_wholesale_catalog WHERE %s'):format(where),
+        ('SELECT COUNT(*) FROM pickle_wholesale_catalog wc WHERE %s'):format(where),
         countParams
     )
 
@@ -73,7 +82,7 @@ lib.callback.register('pickle_dealerships:getCatalog', function(source, data)
     params[#params + 1] = offset
 
     local results = MySQL.query.await(
-        ('SELECT * FROM pickle_wholesale_catalog WHERE %s ORDER BY wholesale ASC LIMIT ? OFFSET ?'):format(where),
+        ('SELECT wc.* FROM pickle_wholesale_catalog wc WHERE %s ORDER BY wc.wholesale ASC LIMIT ? OFFSET ?'):format(where),
         params
     )
 
@@ -353,9 +362,17 @@ lib.callback.register('pickle_dealerships:orderVehicle', function(source, locati
         return false, 'This vehicle is not available in the catalog.'
     end
 
-    -- Verify tier access
-    if not CanAccessCatalogTier(dealership.tier or 1, catalogEntry.tier) then
-        return false, 'Your dealership tier cannot access this vehicle.'
+    -- Verify the dealership is allowed to order this vehicle: vehicle must
+    -- share at least one group with the dealership.
+    local hasOverlap = MySQL.scalar.await([[
+        SELECT 1
+        FROM pickle_catalog_vehicle_groups vg
+        JOIN pickle_dealership_groups dg ON dg.group_id = vg.group_id
+        WHERE vg.catalog_id = ? AND dg.dealership_id = ?
+        LIMIT 1
+    ]], { catalogEntry.id, dealership.id })
+    if not hasOverlap then
+        return false, 'Your dealership is not assigned to a group containing this vehicle.'
     end
 
     -- Verify wholesale price matches
@@ -769,7 +786,7 @@ lib.callback.register('pickle_dealerships:getTradeInSuggestion', function(source
 
     local dealership = MySQL.single.await('SELECT id FROM pickle_dealerships WHERE location = ?', { locationKey })
     if not dealership then return nil end
-    if not CanPlayerManage(source, dealership.id) then return nil end
+    if not CanPlayerManage(source, dealership.id) then DenyAccess(source) return nil end
 
     local owned = GetOwnedVehicleFromPlate(plate)
     if not owned then return { ownerless = true } end

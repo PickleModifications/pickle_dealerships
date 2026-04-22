@@ -8,7 +8,35 @@ Config.Currency = { currency = "USD", countryCode = "en-US" }
 Config.ImageDirectory = "nui://ox_inventory/web/images/"
 Config.ImageExtension = "png"
 
+-- Vehicle-image provider.
+-- Controls where the NUI fetches per-model vehicle photos from when the
+-- catalog row has no admin-uploaded image. Supported providers:
+--   "default"     — packaged vehicle_images/ folder shipped with this resource
+--   "uz-autoshot" — exports['uz-autoshot']:getVehiclePhotoURL(model)
+--                   (https://uz-scripts.com/docs/free/uz-autoshot/exports)
+-- Admin-uploaded images (set via the Catalog page) always win over the
+-- provider URL, so you can still override individual vehicles.
+Config.VehicleImages = {
+    provider = "default",
+}
+Config.InstallVanillaStock = true
 Config.AdminCommand = "dealerships" -- Command to open the admin panel
+
+-- Generated license-plate format for new vehicles sold by dealerships.
+-- Pattern characters:
+--   A = random uppercase letter (A–Z)
+--   1 = random digit (0–9)
+--   ?  = random letter OR digit
+--   anything else = literal (e.g. space, dash, leading prefix)
+-- Examples:
+--   "AAAA1111"  → ABCD1234  (default, 8-char, matches stock QB/CD Garage)
+--   "AAA 111"   → ABC 123   (7-char with middle space)
+--   "11AAA111"  → 12ABC345
+--   "MYSERV-11" → MYSERV-47 (literal prefix + 2 digits)
+-- Garages commonly normalise stored plates to 8 characters and strip
+-- whitespace, so a non-8-char or space-containing format may fight your
+-- garage system's expectations.
+Config.PlateFormat = "AAAA1111"
 
 -- UI Settings
 Config.UI = {
@@ -245,6 +273,18 @@ Config.FinancingMinDown = 0.30
 Config.FinancingInterest = 0.05
 Config.FinancingMaxMissed = 3
 Config.FinancingPaymentInterval = 24 -- Hours between installments
+
+-- Credit Score Integration
+-- When enabled, dealership owners can require a minimum credit score before
+-- a customer is allowed to open a financing agreement. Scores are fetched
+-- through the bridge provider named below. Supported providers:
+--   "tgg-banking" — exports['tgg-banking']:GetCreditScore(identifier)
+-- Leaving enabled=false makes GetPlayerCreditScore always return nil, so the
+-- per-dealership requireCreditScore toggle becomes a no-op.
+Config.CreditScore = {
+    enabled = false,
+    provider = "tgg-banking",
+}
 
 -- Tier Definitions
 Config.Tiers = {

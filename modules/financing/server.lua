@@ -43,6 +43,11 @@ local DEFAULT_SETTINGS = {
     paymentIntervalHours = 24,
     maxMissedPayments = 3,
     installmentOptions = { 4, 8, 12 },
+    -- Credit score gate. The per-dealership toggle is meaningful only when
+    -- Config.CreditScore.enabled is true on the server; otherwise the check
+    -- silently no-ops. minCreditScore clamps to the typical FICO range.
+    requireCreditScore = false,
+    minCreditScore = 600,
 }
 
 local function GetFinancingSettings(dealershipId)
@@ -81,10 +86,15 @@ lib.callback.register("pickle_dealerships:getFinancingSettings", function(_, dat
     local dealership = GetDealership(dealershipId)
     if not dealership then return nil end
 
-    -- Check tier
-    if not HasTierFeature(dealership.tier, "financing") then return nil end
-
-    return GetFinancingSettings(dealershipId)
+    -- Financing used to be tier-gated; it's now available to every dealership.
+    -- The owner can still toggle financing off via updateFinancingSettings, and
+    -- the customer-facing UI reads `financingEnabled` off the returned blob.
+    local blob = GetFinancingSettings(dealershipId)
+    -- Surface whether a real credit-score provider is wired up so the
+    -- settings UI can grey out / annotate the toggle instead of letting an
+    -- owner enable a requirement that will never run.
+    blob.creditScoreProviderActive = IsCreditScoreProviderActive()
+    return blob
 end)
 
 lib.callback.register("pickle_dealerships:updateFinancingSettings", function(source, data)
@@ -106,6 +116,8 @@ lib.callback.register("pickle_dealerships:updateFinancingSettings", function(sou
     validated.interestRate = math.max(0, math.min(50, tonumber(settings.interestRate) or 5))
     validated.paymentIntervalHours = math.max(1, math.min(168, tonumber(settings.paymentIntervalHours) or 24))
     validated.maxMissedPayments = math.max(1, math.min(10, tonumber(settings.maxMissedPayments) or 3))
+    validated.requireCreditScore = settings.requireCreditScore == true
+    validated.minCreditScore = math.max(300, math.min(850, tonumber(settings.minCreditScore) or 600))
 
     local opts = settings.installmentOptions
     if type(opts) == "table" and #opts > 0 then
@@ -157,10 +169,9 @@ lib.callback.register("pickle_dealerships:createFinancing", function(source, dat
         return { success = false, message = "Dealership not found." }
     end
 
-    if not HasTierFeature(dealership.tier, "financing") then
-        return { success = false, message = "This dealership does not offer financing." }
-    end
-
+    -- Financing is no longer tier-gated. The dealership-level toggle below
+    -- (settings.financingEnabled) is the only remaining gate, so owners can
+    -- still opt out per-shop without admin intervention.
     local settings = GetFinancingSettings(dealershipId)
     if not settings.financingEnabled then
         return { success = false, message = "Financing is currently disabled at this dealership." }
@@ -202,6 +213,22 @@ lib.callback.register("pickle_dealerships:createFinancing", function(source, dat
     local identifier = GetIdentifier(source)
     if not identifier then
         return { success = false, message = "Could not identify player." }
+    end
+
+    -- Credit score gate. Only runs when both (a) the dealership opted in and
+    -- (b) Config.CreditScore.enabled makes GetPlayerCreditScore return a real
+    -- value. A nil score here means the provider is off/missing or doesn't
+    -- know this player — fail closed so missing data can't be used to bypass
+    -- the minimum.
+    if settings.requireCreditScore and IsCreditScoreProviderActive() then
+        local score = GetPlayerCreditScore(identifier)
+        if not score then
+            return { success = false, message = _L("financing_credit_score_unavailable") }
+        end
+        local required = tonumber(settings.minCreditScore) or 600
+        if score < required then
+            return { success = false, message = _L("financing_credit_score_too_low", required, score) }
+        end
     end
 
     local playerMoney = GetMoney(source, paymentMethod)

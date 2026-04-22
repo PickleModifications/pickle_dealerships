@@ -29,13 +29,9 @@ const PAGE_SIZE = 50
 const COLUMNS = 3
 const GAP = 12
 
-const tierOrder = ['basic', 'expanded', 'full', 'exclusive']
-const tierColors: Record<string, string> = {
-  basic: 'bg-zinc-500/20 text-zinc-300',
-  expanded: 'bg-blue-500/20 text-blue-300',
-  full: 'bg-purple-500/20 text-purple-300',
-  exclusive: 'bg-amber-500/20 text-amber-300',
-}
+// Tier badges + tier-based locking removed when catalog access switched to
+// many-to-many groups. The server now only returns vehicles a dealership
+// actually has access to, so every row in the customer catalog is orderable.
 
 export default function CatalogPage({ data, onClose }: Props) {
   const [items, setItems] = useState<CatalogItem[]>([])
@@ -43,7 +39,10 @@ export default function CatalogPage({ data, onClose }: Props) {
   const [page, setPage] = useState(1)
   const [search, setSearch] = useState('')
   const [classFilter, setClassFilter] = useState('all')
-  const [tierFilter, setTierFilter] = useState('all')
+  // tierFilter retired with the tier system; group filtering lives admin-side.
+  // Keeping the plumbing as a no-op constant means the existing fetchPage
+  // signature and cache-key rules don't need to change.
+  const tierFilter = 'all'
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [ordering, setOrdering] = useState<CatalogItem | null>(null)
@@ -98,17 +97,14 @@ export default function CatalogPage({ data, onClose }: Props) {
     }, 300)
   }
 
-  const activeFilterCount = (classFilter !== 'all' ? 1 : 0) + (tierFilter !== 'all' ? 1 : 0)
+  const activeFilterCount = classFilter !== 'all' ? 1 : 0
 
   const handleClassChange = (value: string) => {
     setClassFilter(value)
     fetchPage(1, search, value, tierFilter, false)
   }
 
-  const handleTierChange = (value: string) => {
-    setTierFilter(value)
-    fetchPage(1, search, classFilter, value, false)
-  }
+  // handleTierChange removed with the tier selector in the filter bar.
 
   const rowCount = Math.ceil(items.length / COLUMNS)
 
@@ -202,15 +198,6 @@ export default function CatalogPage({ data, onClose }: Props) {
               </div>
             </div>
           )}
-          <div className="flex-1 min-w-[140px]">
-            <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">{t('label_tier')}</p>
-            <div className="flex flex-wrap gap-1">
-              <button onClick={() => handleTierChange('all')} className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${tierFilter === 'all' ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>{t('label_all')}</button>
-              {tierOrder.map((t) => (
-                <button key={t} onClick={() => handleTierChange(t)} className={`px-2 py-0.5 rounded text-[10px] font-medium capitalize transition-colors ${tierFilter === t ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>{t}</button>
-              ))}
-            </div>
-          </div>
         </div>
       )}
 
@@ -240,44 +227,25 @@ export default function CatalogPage({ data, onClose }: Props) {
                       transform: `translateY(${virtualRow.start}px)`,
                     }}
                   >
-                    {rowItems.map((item) => {
-                      const locked = !canAccessTier(item.tier, data.tier)
-                      const unlockLevel = tierUnlockLevel(item.tier)
-                      return (
-                        <Card key={item.model} className={`relative overflow-hidden transition-colors ${locked ? '' : 'hover:border-accent/50'}`}>
-                          <div className={locked ? 'opacity-40 grayscale' : ''}>
-                            <VehicleImg image={item.image} model={item.model} alt={item.label} className="w-full aspect-video object-contain bg-muted" fallbackClassName="w-full aspect-video bg-muted flex items-center justify-center" iconClassName="h-8 w-8 text-muted-foreground/30" />
-                            <CardContent className="p-3">
-                              <div className="flex items-start justify-between mb-1">
-                                <div>
-                                  <h3 className="font-semibold text-sm">{item.label}</h3>
-                                  <p className="text-xs text-muted-foreground capitalize">{item.class}</p>
-                                </div>
-                                <Badge className={`${tierColors[item.tier] || ''} border-0 text-xs capitalize`}>
-                                  {item.tier}
-                                </Badge>
-                              </div>
-                              <div className="flex items-center justify-between mt-2">
-                                <p className="font-bold text-sm">{formatCurrency(item.wholesale)}</p>
-                                {!locked && (
-                                  <Button size="sm" onClick={() => setOrdering(item)}>
-                                    <ShoppingCart className="h-3 w-3" /> {t('btn_order')}
-                                  </Button>
-                                )}
-                              </div>
-                            </CardContent>
-                          </div>
-                          {locked && (
-                            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                              <div className="bg-black/70 backdrop-blur-none border border-white/15 rounded-md px-3 py-1.5 flex items-center gap-1.5 text-xs font-medium text-white shadow-lg">
-                                <Lock className="h-3.5 w-3.5" />
-                                {t('catalog_unlocks_at_level', String(unlockLevel))}
-                              </div>
+                    {rowItems.map((item) => (
+                      <Card key={item.model} className="relative overflow-hidden transition-colors hover:border-accent/50">
+                        <VehicleImg image={item.image} model={item.model} alt={item.label} className="w-full aspect-video object-contain bg-muted" fallbackClassName="w-full aspect-video bg-muted flex items-center justify-center" iconClassName="h-8 w-8 text-muted-foreground/30" />
+                        <CardContent className="p-3">
+                          <div className="flex items-start justify-between mb-1">
+                            <div>
+                              <h3 className="font-semibold text-sm">{item.label}</h3>
+                              <p className="text-xs text-muted-foreground capitalize">{item.class}</p>
                             </div>
-                          )}
-                        </Card>
-                      )
-                    })}
+                          </div>
+                          <div className="flex items-center justify-between mt-2">
+                            <p className="font-bold text-sm">{formatCurrency(item.wholesale)}</p>
+                            <Button size="sm" onClick={() => setOrdering(item)}>
+                              <ShoppingCart className="h-3 w-3" /> {t('btn_order')}
+                            </Button>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    ))}
                   </div>
                 )
               })}
@@ -358,12 +326,5 @@ export default function CatalogPage({ data, onClose }: Props) {
   )
 }
 
-const TIER_LEVEL: Record<string, number> = { basic: 1, expanded: 2, full: 3, exclusive: 4 }
-
-function canAccessTier(vehicleTier: string, dealershipTier: number): boolean {
-  return dealershipTier >= (TIER_LEVEL[vehicleTier] || 1)
-}
-
-function tierUnlockLevel(vehicleTier: string): number {
-  return TIER_LEVEL[vehicleTier] || 1
-}
+// canAccessTier / tierUnlockLevel removed — server-side group filtering means
+// every row returned to the client is already orderable.

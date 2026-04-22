@@ -99,7 +99,8 @@ local function StartAuctionCamThread()
 
             if inp.lookX ~= 0.0 or inp.lookY ~= 0.0 then
                 s.orbitAngle = s.orbitAngle - inp.lookX * orbitSensitivity
-                s.orbitPitch = math.max(-0.8, math.min(0.8, s.orbitPitch - inp.lookY * orbitSensitivity))
+                -- Inverted vertical: dragging down tips the camera down.
+                s.orbitPitch = math.max(-0.8, math.min(0.8, s.orbitPitch + inp.lookY * orbitSensitivity))
                 inp.lookX = 0.0
                 inp.lookY = 0.0
             end
@@ -229,12 +230,16 @@ function OpenAuctionShowcase(locationKey, opts)
     while not IsNewLoadSceneLoaded() and GetGameTimer() < loadTimeout do Wait(0) end
     NewLoadSceneStop()
 
-    local initAngle = math.rad(225.0)
+    -- 45° orbit offset relative to the stage heading so the camera opens at a
+    -- consistent three-quarter angle regardless of how the booth is rotated.
+    local initAngle = math.rad(45 + (spawnCoords.w or 0.0))
     local defaultRadius = 6.0
     local center = vector3(spawnCoords.x, spawnCoords.y, spawnCoords.z + 0.5)
     local camX = center.x + defaultRadius * math.cos(initAngle)
     local camY = center.y + defaultRadius * math.sin(initAngle)
-    local camZ = center.z
+    -- camZ matches the orbit thread's formula (center.z + radius * sin(pitch) * 0.5) so
+    -- the camera opens at the configured max-top pitch without a visible snap.
+    local camZ = center.z + defaultRadius * math.sin(0.8) * 0.5
     local cam = CreateCam("DEFAULT_SCRIPTED_CAMERA", true)
     SetCamCoord(cam, camX, camY, camZ)
     PointCamAtCoord(cam, center.x, center.y, center.z)
@@ -250,7 +255,7 @@ function OpenAuctionShowcase(locationKey, opts)
         savedHeading = savedHeading,
         currentModel = nil,
         orbitAngle = initAngle,
-        orbitPitch = 0.0,
+        orbitPitch = 0.8, -- start camera at max top pitch so it opens looking down at the car
         orbitRadius = defaultRadius,
         defaultRadius = defaultRadius,
         targetCenter = center,

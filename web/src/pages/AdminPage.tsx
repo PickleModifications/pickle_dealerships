@@ -9,9 +9,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog'
 import { fetchNui, formatCurrency } from '../lib/utils'
 import {
-  X, Settings, UserRoundCog, DollarSign, ArrowUpCircle, RotateCcw,
+  X, Settings, UserRoundCog, DollarSign, RotateCcw,
   ToggleLeft, Plus, MapPin, Check, Car, Crosshair, Store, ParkingSquare,
-  Handshake, Building2, BookOpen, Trash2, Briefcase, Users, Shield, ShieldAlert, Truck, Download,
+  Handshake, Building2, BookOpen, Trash2, Briefcase, Users, Shield, ShieldAlert, Truck, Download, Layers,
 } from 'lucide-react'
 import { SkeletonList } from '../components/ui/skeleton'
 import { t } from '../lib/locale'
@@ -26,7 +26,27 @@ interface Props {
 }
 
 type AdminTab = 'dealerships' | 'catalog' | 'positions' | 'depots' | 'import'
-type AdminAction = 'transfer' | 'balance' | 'tier' | 'reset' | 'toggle' | 'seize' | 'create' | 'delete' | 'faction' | 'access' | 'payments' | 'society' | 'stockAll' | null
+type AdminAction = 'transfer' | 'balance' | 'reset' | 'toggle' | 'seize' | 'create' | 'delete' | 'faction' | 'access' | 'payments' | 'society' | 'stockAll' | 'groups' | null
+
+interface CatalogGroup {
+  id: number
+  name: string
+  label: string
+  description?: string | null
+  is_default?: number | boolean
+  vehicle_count?: number
+  dealership_count?: number
+}
+
+// Mirrors the helper in AdminCatalogPage.tsx — keeps seeded default groups
+// localized even if an admin hasn't overridden the label.
+function resolveGroupLabel(g: CatalogGroup) {
+  if (g.is_default) {
+    const localized = t(`group_${g.name}`)
+    if (localized && localized !== `group_${g.name}`) return localized
+  }
+  return g.label || g.name
+}
 
 function parseMeta(d: AdminDealership | null): DealershipMetadata {
   if (!d) return {}
@@ -91,10 +111,10 @@ export default function AdminPage({ data, onClose }: Props) {
     name: string
     mode: string
     type: string
-    tier: string
     factionType: FactionType
     factionName: string
     ownerIdentifier: string
+    groupIds?: number[]
     coords?: PositionData
     spawnPoint?: PositionData
     deliveryPoint?: PositionData
@@ -107,10 +127,10 @@ export default function AdminPage({ data, onClose }: Props) {
     name: data.pendingDealership?.name ?? '',
     mode: data.pendingDealership?.mode ?? 'player-owned',
     type: data.pendingDealership?.type ?? 'car',
-    tier: data.pendingDealership?.tier ?? '1',
     factionType: data.pendingDealership?.factionType ?? 'job',
     factionName: data.pendingDealership?.factionName ?? '',
     ownerIdentifier: data.pendingDealership?.ownerIdentifier ?? '',
+    groupIds: data.pendingDealership?.groupIds,
     coords: data.pendingDealership?.coords,
     spawnPoint: data.pendingDealership?.spawnPoint,
     deliveryPoint: data.pendingDealership?.deliveryPoint,
@@ -120,6 +140,18 @@ export default function AdminPage({ data, onClose }: Props) {
     displaySpots: data.pendingDealership?.displaySpots,
     npcSpawnPoints: data.pendingDealership?.npcSpawnPoints,
   })
+
+  // List of every catalog group — loaded once on mount and refreshed after
+  // catalog-side edits via AdminCatalogPage. Used by both the Groups settings
+  // dialog and the create-dealership group multi-select.
+  const [catalogGroups, setCatalogGroups] = useState<CatalogGroup[]>([])
+  useEffect(() => {
+    fetchNui<CatalogGroup[]>('adminGetGroups', {}).then((rows) => setCatalogGroups(Array.isArray(rows) ? rows : []))
+      .catch(() => setCatalogGroups([]))
+  }, [])
+  // Currently-assigned groups for the selected dealership (seeded from the
+  // server when the Groups dialog opens).
+  const [dealershipGroupIds, setDealershipGroupIds] = useState<number[]>([])
 
   // Player picker state for "Owner" field when mode == 'player-owned'
   const [createOwnerSearch, setCreateOwnerSearch] = useState('')
@@ -147,7 +179,7 @@ export default function AdminPage({ data, onClose }: Props) {
     setAction(null)
     setDiscardConfirmOpen(false)
     setDealershipDraft({
-      name: '', mode: 'player-owned', type: 'car', tier: '1',
+      name: '', mode: 'player-owned', type: 'car',
       factionType: 'job', factionName: '', ownerIdentifier: '',
     })
     setCreateOwnerSearch('')
@@ -345,10 +377,10 @@ export default function AdminPage({ data, onClose }: Props) {
         label: dealershipDraft.name.trim(),
         mode: dealershipDraft.mode,
         type: dealershipDraft.type,
-        tier: parseInt(dealershipDraft.tier) || 1,
         factionType: dealershipDraft.factionType,
         factionName: dealershipDraft.factionName.trim(),
         ownerIdentifier: dealershipDraft.mode === 'player-owned' ? dealershipDraft.ownerIdentifier.trim() : '',
+        groupIds: dealershipDraft.groupIds,
         coords: dealershipDraft.coords,
         spawnPoint: dealershipDraft.spawnPoint,
         deliveryPoint: dealershipDraft.deliveryPoint,
@@ -369,7 +401,7 @@ export default function AdminPage({ data, onClose }: Props) {
     const callbacks: Record<string, () => Promise<void>> = {
       transfer: () => fetchNui('adminTransferOwnership', { dealershipId, newOwnerId: selectedPlayer?.identifier || inputValue }).then(() => loadDealerships()),
       balance: () => fetchNui('adminSetBalance', { dealershipId, amount: parseInt(inputValue) }).then(() => loadDealerships()),
-      tier: () => fetchNui('adminSetTier', { dealershipId, tier: parseInt(inputValue) }).then(() => loadDealerships()),
+      groups: () => fetchNui('adminSetDealershipGroups', { dealershipId, groupIds: dealershipGroupIds }).then(() => loadDealerships()),
       reset: () => fetchNui('adminResetDealership', { dealershipId }).then(() => loadDealerships()),
       delete: () => fetchNui('adminDeleteDealership', { dealershipId }).then(() => {
         setSelected(null)
@@ -428,7 +460,8 @@ export default function AdminPage({ data, onClose }: Props) {
     })
   }
 
-  const tierLabelKeys: Record<number, string> = { 1: 'tier_1', 2: 'tier_2', 3: 'tier_3', 4: 'tier_4' }
+  // Tier labels were retired when catalog access moved to groups; the DB column
+  // is still present for rollback safety but the UI no longer exposes it.
 
   const renderContent = () => {
     // Positions tab
@@ -523,7 +556,7 @@ export default function AdminPage({ data, onClose }: Props) {
                       {spots.map((spot, i) => (
                         <div key={i} className="flex items-center justify-between bg-muted/50 rounded px-3 py-2">
                           <span className="text-xs text-muted-foreground font-mono">
-                            {t('admin_spot')} #{i + 1}: {spot.x.toFixed(1)}, {spot.y.toFixed(1)}, {spot.z.toFixed(1)}
+                            {t('admin_spot')} #{i + 1}: {spot.x.toFixed(1)}, {spot.y.toFixed(1)}, {spot.z.toFixed(1)} · {(spot.w ?? 0).toFixed(1)}°
                           </span>
                           <Button
                             variant="ghost"
@@ -565,7 +598,7 @@ export default function AdminPage({ data, onClose }: Props) {
                       {npcSpawns.map((point, i) => (
                         <div key={i} className="flex items-center justify-between bg-muted/50 rounded px-3 py-2">
                           <span className="text-xs text-muted-foreground font-mono">
-                            #{i + 1}: {point.x.toFixed(1)}, {point.y.toFixed(1)}, {point.z.toFixed(1)}
+                            #{i + 1}: {point.x.toFixed(1)}, {point.y.toFixed(1)}, {point.z.toFixed(1)} · {(point.w ?? 0).toFixed(1)}°
                           </span>
                           <Button
                             variant="ghost"
@@ -807,7 +840,7 @@ export default function AdminPage({ data, onClose }: Props) {
                           {!!d.seize_enabled && <Badge variant="destructive" className="text-[10px] shrink-0">{t('label_seize')}</Badge>}
                         </div>
                         <p className="text-xs text-muted-foreground mt-0.5">
-                          ID: {d.id} &mdash; {tierLabelKeys[d.tier] ? t(tierLabelKeys[d.tier]) : `${t('label_tier')} ${d.tier}`} &mdash; {formatCurrency(d.balance)}
+                          ID: {d.id} &mdash; {formatCurrency(d.balance)}
                           {d.job && <> &mdash; <span className="font-mono">{d.job}</span></>}
                         </p>
                       </div>
@@ -833,7 +866,7 @@ export default function AdminPage({ data, onClose }: Props) {
                   </button>
                   <h2 className="text-lg font-semibold leading-none tracking-tight">{selected.name}</h2>
                   <p className="text-sm text-muted-foreground mt-1.5">
-                    ID: {selected.id} &mdash; {tierLabelKeys[selected.tier] ? t(tierLabelKeys[selected.tier]) : `${t('label_tier')} ${selected.tier}`} &mdash; {formatCurrency(selected.balance)}
+                    ID: {selected.id} &mdash; {formatCurrency(selected.balance)}
                   </p>
                 </div>
                 {/* Body — scrollable */}
@@ -917,7 +950,21 @@ export default function AdminPage({ data, onClose }: Props) {
                       onClick={() => setAction('society')}
                     />
                     <SettingsRow icon={<DollarSign className="h-4 w-4" />} label={t('admin_set_balance')} value={formatCurrency(selected.balance)} onClick={() => { setAction('balance'); setInputValue(String(selected.balance)) }} />
-                    <SettingsRow icon={<ArrowUpCircle className="h-4 w-4" />} label={t('admin_set_tier')} value={tierLabelKeys[selected.tier] ? t(tierLabelKeys[selected.tier]) : `${selected.tier}`} onClick={() => { setAction('tier'); setInputValue(String(selected.tier)) }} />
+                    <SettingsRow
+                      icon={<Layers className="h-4 w-4" />}
+                      label={t('admin_set_groups')}
+                      value={`${(selected.groupIds?.length ?? 0)}`}
+                      onClick={() => {
+                        // Seed the dialog optimistically from the list payload
+                        // so the checkboxes render with the right state before
+                        // the network round-trip resolves.
+                        setDealershipGroupIds(selected.groupIds ?? [])
+                        setAction('groups')
+                        fetchNui<number[]>('adminGetDealershipGroups', { dealershipId: selected.id }).then((ids) => {
+                          if (Array.isArray(ids)) setDealershipGroupIds(ids)
+                        }).catch(() => {})
+                      }}
+                    />
                     <SettingsRow icon={<ToggleLeft className="h-4 w-4" />} label={t('admin_toggle_mode')} value={selected.mode} onClick={() => setAction('toggle')} />
                     <SettingsRow icon={<ShieldAlert className="h-4 w-4" />} label={t('admin_toggle_seize')} value={selected.seize_enabled ? t('label_enabled') : t('label_disabled')} accent={!!selected.seize_enabled} onClick={() => setAction('seize')} />
                     <SettingsRow icon={<BookOpen className="h-4 w-4" />} label={t('admin_stock_from_catalog')} onClick={() => { setAction('stockAll'); setInputValue('1') }} />
@@ -938,7 +985,7 @@ export default function AdminPage({ data, onClose }: Props) {
               <DialogTitle>
                 {action === 'transfer' && t('admin_transfer_ownership')}
                 {action === 'balance' && t('admin_set_balance')}
-                {action === 'tier' && t('admin_set_tier')}
+                {action === 'groups' && t('admin_set_groups')}
                 {action === 'reset' && t('admin_reset_dealership')}
                 {action === 'delete' && t('admin_delete_dealership')}
                 {action === 'toggle' && t('admin_toggle_mode')}
@@ -1124,11 +1171,30 @@ export default function AdminPage({ data, onClose }: Props) {
                   )}
                 </div>
               )}
-              {action === 'tier' && (
-                <div><label className="text-sm font-medium">{t('label_tier')}</label>
-                  <Select value={inputValue} onValueChange={setInputValue}><SelectTrigger className="mt-1"><SelectValue /></SelectTrigger><SelectContent>
-                    <SelectItem value="1">1 - {t('tier_1')}</SelectItem><SelectItem value="2">2 - {t('tier_2')}</SelectItem><SelectItem value="3">3 - {t('tier_3')}</SelectItem><SelectItem value="4">4 - {t('tier_4')}</SelectItem>
-                  </SelectContent></Select></div>
+              {action === 'groups' && (
+                <div>
+                  <p className="text-xs text-muted-foreground mb-2">{t('admin_dealership_groups_desc')}</p>
+                  {catalogGroups.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">{t('admin_no_groups_yet')}</p>
+                  ) : (
+                    <div className="max-h-56 overflow-auto rounded-md border border-border bg-muted/30 divide-y divide-border/60">
+                      {catalogGroups.map((g) => {
+                        const checked = dealershipGroupIds.includes(g.id)
+                        return (
+                          <label key={g.id} className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-muted/60 text-sm">
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 accent-accent"
+                              checked={checked}
+                              onChange={() => setDealershipGroupIds((prev) => prev.includes(g.id) ? prev.filter((x) => x !== g.id) : [...prev, g.id])}
+                            />
+                            <span className="flex-1">{resolveGroupLabel(g)}</span>
+                          </label>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
               )}
               {action === 'society' && selected && (
                 <SocietyAllowlistSettings dealershipId={selected.id} dealershipName={selected.name} />
@@ -1184,16 +1250,35 @@ export default function AdminPage({ data, onClose }: Props) {
               </div>
 
               <div>
-                <label className="text-sm font-medium">{t('label_tier')}</label>
-                <Select value={dealershipDraft.tier} onValueChange={(v) => setDealershipDraft({ ...dealershipDraft, tier: v })}>
-                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="1">1 - {t('tier_1')}</SelectItem>
-                    <SelectItem value="2">2 - {t('tier_2')}</SelectItem>
-                    <SelectItem value="3">3 - {t('tier_3')}</SelectItem>
-                    <SelectItem value="4">4 - {t('tier_4')}</SelectItem>
-                  </SelectContent>
-                </Select>
+                <label className="text-sm font-medium">{t('admin_groups')}</label>
+                <p className="text-xs text-muted-foreground">{t('admin_dealership_groups_desc')}</p>
+                {catalogGroups.length === 0 ? (
+                  <p className="text-xs text-muted-foreground mt-2">{t('admin_no_groups_yet')}</p>
+                ) : (
+                  <div className="mt-2 max-h-36 overflow-auto rounded-md border border-border bg-muted/30 divide-y divide-border/60">
+                    {catalogGroups.map((g) => {
+                      const selectedIds = dealershipDraft.groupIds ?? []
+                      const checked = selectedIds.includes(g.id)
+                      return (
+                        <label key={g.id} className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-muted/60 text-sm">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 accent-accent"
+                            checked={checked}
+                            onChange={() => {
+                              setDealershipDraft((prev) => {
+                                const cur = prev.groupIds ?? []
+                                const next = cur.includes(g.id) ? cur.filter((x) => x !== g.id) : [...cur, g.id]
+                                return { ...prev, groupIds: next }
+                              })
+                            }}
+                          />
+                          <span className="flex-1">{resolveGroupLabel(g)}</span>
+                        </label>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
 
               {/* Framework faction — same shape as the admin edit dialog. Optional.
@@ -1379,7 +1464,7 @@ export default function AdminPage({ data, onClose }: Props) {
                           {dealershipDraft.displaySpots.map((spot, i) => (
                             <div key={i} className="flex items-center justify-between bg-muted/50 rounded px-3 py-2">
                               <span className="text-xs text-muted-foreground font-mono">
-                                {t('admin_spot')} #{i + 1}: {spot.x.toFixed(1)}, {spot.y.toFixed(1)}, {spot.z.toFixed(1)}
+                                {t('admin_spot')} #{i + 1}: {spot.x.toFixed(1)}, {spot.y.toFixed(1)}, {spot.z.toFixed(1)} · {(spot.w ?? 0).toFixed(1)}°
                               </span>
                               <Button
                                 variant="ghost"
@@ -1429,7 +1514,7 @@ export default function AdminPage({ data, onClose }: Props) {
                           {dealershipDraft.npcSpawnPoints.map((point, i) => (
                             <div key={i} className="flex items-center justify-between bg-muted/50 rounded px-3 py-2">
                               <span className="text-xs text-muted-foreground font-mono">
-                                #{i + 1}: {point.x.toFixed(1)}, {point.y.toFixed(1)}, {point.z.toFixed(1)}
+                                #{i + 1}: {point.x.toFixed(1)}, {point.y.toFixed(1)}, {point.z.toFixed(1)} · {(point.w ?? 0).toFixed(1)}°
                               </span>
                               <Button
                                 variant="ghost"
@@ -1582,7 +1667,7 @@ function PositionRow({ icon, label, description, placed, coords, onPlace, onRemo
               <p className="font-medium text-sm">{label}</p>
               <p className="text-xs text-muted-foreground">
                 {placed && coords
-                  ? <span className="font-mono">{coords.x.toFixed(1)}, {coords.y.toFixed(1)}, {coords.z.toFixed(1)}</span>
+                  ? <span className="font-mono">{coords.x.toFixed(1)}, {coords.y.toFixed(1)}, {coords.z.toFixed(1)} · {(coords.w ?? 0).toFixed(1)}°</span>
                   : description}
               </p>
             </div>

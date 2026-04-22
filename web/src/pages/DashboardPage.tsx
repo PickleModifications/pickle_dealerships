@@ -41,7 +41,6 @@ export default function DashboardPage({ data, onClose }: Props) {
             <div>
               <h1 className="text-xl font-bold">{data.dealershipName}</h1>
               <div className="flex items-center gap-2 mt-1">
-                <Badge variant="secondary">{t(`tier_${data.tier}`)}</Badge>
                 <Badge variant="outline" className="capitalize">{data.role}</Badge>
               </div>
             </div>
