@@ -8,8 +8,12 @@ import { useNuiEvent } from '../hooks/useNuiEvent'
 export default function TestDriveSubtitle() {
   const [text, setText] = useState<string | null>(null)
 
-  useNuiEvent('testDriveSubtitle', (payload: { visible?: boolean; text?: string }) => {
-    if (payload?.visible && payload.text) setText(payload.text)
+  // Lua wraps the actual body inside `data`, and useNuiEvent only strips
+  // the outer `type` key — so the real fields live at payload.data.*
+  // rather than directly on payload.
+  useNuiEvent('testDriveSubtitle', (payload: { data?: { visible?: boolean; text?: string } }) => {
+    const body = payload?.data
+    if (body?.visible && body.text) setText(body.text)
     else setText(null)
   })
 

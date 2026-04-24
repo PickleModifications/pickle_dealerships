@@ -94,7 +94,7 @@ CreateThread(function()
             pcall(function() exports["pickle_store"]:AddCoins(source, amount, "pickle_dealerships refund") end)
         end,
     })
-    print("[pickle_dealerships] Registered alt currency: pickle_store")
+    debugPrint("[pickle_dealerships] Registered alt currency: pickle_store")
 end)
 
 -- ─── Built-in: item currencies ────────────────────────────────────────────
@@ -136,7 +136,7 @@ CreateThread(function()
                     end
                 end,
             })
-            print(("[pickle_dealerships] Registered alt currency: %s (item=%s)"):format(key, itemName))
+            debugPrint(("[pickle_dealerships] Registered alt currency: %s (item=%s)"):format(key, itemName))
         end
     end
 end)

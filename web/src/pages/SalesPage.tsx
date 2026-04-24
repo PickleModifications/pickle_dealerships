@@ -88,6 +88,12 @@ export default function SalesPage({ data, onClose }: Props) {
     if (!selected) return
     fetchNui('purchaseVehicle', {
       dealershipId: data.dealershipId,
+      // Pass the location key so the client-side spawn lookup targets
+      // this dealership specifically. Without it the fallback used to
+      // iterate DealershipConfigs and pick the first one it found —
+      // which is how players were ending up at an unrelated dealership's
+      // spawn point after purchasing.
+      location: data.location,
       stockId: selected.id,
       paymentMethod,
       couponCode: couponCode || undefined,
@@ -102,6 +108,7 @@ export default function SalesPage({ data, onClose }: Props) {
     if (!selected) return
     fetchNui('startTestDrive', {
       dealershipId: data.dealershipId,
+      location: data.location,
       model: selected.vehicle_model,
     })
     setSelected(null)

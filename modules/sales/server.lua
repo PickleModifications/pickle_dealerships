@@ -434,6 +434,10 @@ lib.callback.register("pickle_dealerships:purchaseVehicle", function(source, dat
         price = finalPrice,
         model = stockItem.vehicle_model,
         label = stockItem.vehicle_label or stockItem.vehicle_model,
+        -- Surface the dealership's location key so the client picks up
+        -- the correct spawnPoint from DealershipConfigs instead of the
+        -- first dealership it happens to iterate over.
+        location = dealership.location,
     }
 end)
 
@@ -495,6 +499,9 @@ lib.callback.register("pickle_dealerships:employeeSale", function(source, data)
         couponCode = couponCode,
         soldBy = sellerCitizenid,
         sellerName = GetPlayerCharacterName(source),
+        -- Dealership location key so the customer's client resolves the
+        -- correct spawnPoint on its own DealershipConfigs.
+        location = dealership.location,
     })
 
     return { success = true, message = "Purchase confirmation sent to customer." }
@@ -525,6 +532,11 @@ lib.callback.register("pickle_dealerships:confirmEmployeeSale", function(source,
         stockItem.retail_price = tonumber(data.price)
     end
 
+    local dealership = GetDealership(dealershipId)
+    if not dealership then
+        return { success = false, message = "Dealership not found." }
+    end
+
     local success, plate, finalPrice = ProcessSale(source, dealershipId, stockItem, paymentMethod, couponCode, soldBy)
     if not success then
         return { success = false, message = plate }
@@ -536,6 +548,7 @@ lib.callback.register("pickle_dealerships:confirmEmployeeSale", function(source,
         price = finalPrice,
         model = stockItem.vehicle_model,
         label = stockItem.vehicle_label or stockItem.vehicle_model,
+        location = dealership.location,
     }
 end)
 

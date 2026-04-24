@@ -303,6 +303,7 @@ lib.callback.register("pickle_dealerships:createFinancing", function(source, dat
         installmentAmount = installmentAmount,
         totalInstallments = installments,
         totalWithInterest = totalWithInterest,
+        location = dealership.location,
     }
 end)
 

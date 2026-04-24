@@ -600,7 +600,6 @@ Language["en"] = {
     label_none = "None",
     label_vehicle_spawn_point = "Vehicle Spawn Point",
     label_delivery_point = "Delivery Drop-off Point",
-    label_delivery_point_desc = "Where delivery drivers drop off the trailer (tr2 footprint)",
     label_management_point = "Management Point",
     label_sales_point = "Sales Point",
     label_showroom_position = "Showroom Vehicle Position",

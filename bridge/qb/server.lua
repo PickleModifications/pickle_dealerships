@@ -27,6 +27,39 @@ function GetPlayerCharacterName(source)
     return xPlayer.PlayerData.charinfo.firstname .. " " .. xPlayer.PlayerData.charinfo.lastname
 end
 
+--- Resolves a display name for an arbitrary identifier — works for offline
+--- players too. Used for ledger entries, top-seller reporting, fire-on-
+--- offline-employee messages, etc. Non-bridge code must not hit QB's
+--- `players` table directly or it'll silently break on ESX/standalone.
+--- Returns nil if the identifier isn't known.
+---@param identifier string
+---@return string|nil
+function GetCharacterNameByIdentifier(identifier)
+    if not identifier or identifier == "" then return nil end
+    -- Online first — avoids an SQL round-trip when the player's in-game.
+    -- gsub returns (str, count) so wrap in a helper that trims both ends
+    -- and returns a single value — otherwise Lua's multi-return leaks the
+    -- count through `return`.
+    local function trim(s)
+        local t = s:gsub("^%s+", ""):gsub("%s+$", "")
+        return t
+    end
+    local xPlayer = QBCore.Functions.GetPlayerByCitizenId(identifier)
+    if xPlayer and xPlayer.PlayerData and xPlayer.PlayerData.charinfo then
+        local info = xPlayer.PlayerData.charinfo
+        return trim((info.firstname or "") .. " " .. (info.lastname or ""))
+    end
+    -- Offline — read from `players.charinfo` (QB's authoritative store).
+    local row = MySQL.single.await(
+        "SELECT charinfo FROM players WHERE citizenid = ? LIMIT 1",
+        { identifier }
+    )
+    if not row or not row.charinfo then return nil end
+    local info = type(row.charinfo) == "string" and (json.decode(row.charinfo) or {}) or row.charinfo
+    if not info.firstname and not info.lastname then return nil end
+    return trim((info.firstname or "") .. " " .. (info.lastname or ""))
+end
+
 function GetEmployees(jobName, cb)
     local employees = {}
     local seen = {}

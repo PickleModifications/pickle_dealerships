@@ -184,16 +184,10 @@ lib.callback.register("pickle_dealerships:fireEmployee", function(source, data)
         end
     else
         effectiveIdentifier = targetIdentifier
-        local row = MySQL.single.await(
-            "SELECT charinfo FROM players WHERE citizenid = ? LIMIT 1",
-            { targetIdentifier }
-        )
-        if row and row.charinfo then
-            local info = type(row.charinfo) == "string" and (json.decode(row.charinfo) or {}) or row.charinfo
-            charName = (info.firstname or "Unknown") .. " " .. (info.lastname or "")
-        else
-            charName = targetIdentifier
-        end
+        -- Routed through the bridge so ESX (users table, firstname/lastname
+        -- columns) and standalone (no backing store → raw identifier) keep
+        -- working. Previously this hit QB's `players.charinfo` directly.
+        charName = GetCharacterNameByIdentifier(targetIdentifier) or targetIdentifier
 
         if SetFactionByIdentifier then
             SetFactionByIdentifier(faction.type, targetIdentifier, faction.type == "gang" and "none" or "unemployed", 0)

@@ -481,7 +481,7 @@ function LoadDeliveryDepots()
     for _, row in ipairs(rows) do
         DeliveryDepotCache[row.id] = rowToDepot(row)
     end
-    print(("[pickle_dealerships] Loaded %d delivery depot(s) into cache."):format(#rows))
+    debugPrint(("[pickle_dealerships] Loaded %d delivery depot(s) into cache."):format(#rows))
 end
 
 function GetDeliveryDepots()
@@ -629,7 +629,7 @@ function LoadDealerships()
         DealershipCache[row.id] = row
     end
 
-    print(("[pickle_dealerships] Loaded %d dealership(s) into cache."):format(#rows))
+    debugPrint(("[pickle_dealerships] Loaded %d dealership(s) into cache."):format(#rows))
 end
 
 function GetDealership(id)

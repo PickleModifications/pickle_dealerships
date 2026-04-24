@@ -332,7 +332,7 @@ lib.callback.register("pickle_dealerships:getCommissionRates", function(source, 
         end
     end
 
-    print(("[pickle_dealerships] getCommissionRates: dealership=%s faction=%s:%s grades=%d"):format(
+    debugPrint(("[pickle_dealerships] getCommissionRates: dealership=%s faction=%s:%s grades=%d"):format(
         tostring(dealershipId), tostring(faction.type), tostring(faction.name), #grades))
 
     -- JSON serialisation collapses integer-keyed tables to arrays with holes; normalise the
@@ -662,18 +662,16 @@ lib.callback.register("pickle_dealerships:getDashboardStats", function(source, d
         { dealershipId }
     ) or 0
 
-    -- Top seller. Join against `players` so offline sellers still get their
-    -- character name (rather than a bare citizenid). Works on QB/QBX — ESX
-    -- servers that don't have a `players` table will hit the COALESCE fallback
-    -- and show the raw identifier.
+    -- Top seller. Aggregate-only over our own table, then resolve the
+    -- display name through the bridge so ESX (users table) / QB / QBX
+    -- (players table) / standalone all share one code path and we stop
+    -- SELECTing from framework-owned tables from here.
     local topSellerRow = MySQL.single.await([[
         SELECT
             ds.sold_by AS identifier,
             COUNT(*) AS sales,
-            COALESCE(SUM(ds.retail_price), 0) AS revenue,
-            p.charinfo AS charinfo
+            COALESCE(SUM(ds.retail_price), 0) AS revenue
         FROM pickle_dealership_stock ds
-        LEFT JOIN players p ON p.citizenid = ds.sold_by
         WHERE ds.dealership_id = ?
           AND ds.sold_at IS NOT NULL
           AND ds.sold_by IS NOT NULL
@@ -684,15 +682,7 @@ lib.callback.register("pickle_dealerships:getDashboardStats", function(source, d
 
     local topSeller = nil
     if topSellerRow then
-        local displayName = topSellerRow.identifier
-        if topSellerRow.charinfo then
-            local info = type(topSellerRow.charinfo) == "string"
-                and (json.decode(topSellerRow.charinfo) or {})
-                or topSellerRow.charinfo
-            if info.firstname or info.lastname then
-                displayName = ((info.firstname or "") .. " " .. (info.lastname or "")):gsub("^%s+", ""):gsub("%s+$", "")
-            end
-        end
+        local displayName = GetCharacterNameByIdentifier(topSellerRow.identifier) or topSellerRow.identifier
         topSeller = {
             name = displayName,
             sales = tonumber(topSellerRow.sales) or 0,
@@ -829,14 +819,13 @@ lib.callback.register("pickle_dealerships:getRevenueReport", function(source, da
         }
     end
 
-    -- Top seller within the window (character-name resolved for online+offline).
+    -- Top seller within the window. Name resolution goes through the
+    -- bridge so we stop SELECTing from framework-owned tables here.
     local topRow = MySQL.single.await([[
         SELECT ds.sold_by AS identifier,
                COUNT(*) AS sales,
-               COALESCE(SUM(ds.retail_price), 0) AS revenue,
-               p.charinfo AS charinfo
+               COALESCE(SUM(ds.retail_price), 0) AS revenue
         FROM pickle_dealership_stock ds
-        LEFT JOIN players p ON p.citizenid = ds.sold_by
         WHERE ds.dealership_id = ?
           AND ds.sold_at IS NOT NULL
           AND ds.sold_by IS NOT NULL
@@ -848,15 +837,8 @@ lib.callback.register("pickle_dealerships:getRevenueReport", function(source, da
 
     local topSeller
     if topRow then
-        local name = topRow.identifier
-        if topRow.charinfo then
-            local info = type(topRow.charinfo) == "string" and (json.decode(topRow.charinfo) or {}) or topRow.charinfo
-            if info.firstname or info.lastname then
-                name = ((info.firstname or "") .. " " .. (info.lastname or "")):gsub("^%s+", ""):gsub("%s+$", "")
-            end
-        end
         topSeller = {
-            name = name,
+            name = GetCharacterNameByIdentifier(topRow.identifier) or topRow.identifier,
             sales = tonumber(topRow.sales) or 0,
             revenue = tonumber(topRow.revenue) or 0,
         }

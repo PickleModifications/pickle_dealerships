@@ -36,6 +36,32 @@ function GetPlayerCharacterName(source)
     return (info.firstname or "Unknown") .. " " .. (info.lastname or "")
 end
 
+--- Resolves a display name for an arbitrary identifier — online or offline.
+--- See the QB bridge for the broader rationale; QBX uses the same
+--- `players` schema so the offline fallback is identical.
+---@param identifier string
+---@return string|nil
+function GetCharacterNameByIdentifier(identifier)
+    if not identifier or identifier == "" then return nil end
+    local function trim(s)
+        local t = s:gsub("^%s+", ""):gsub("%s+$", "")
+        return t
+    end
+    local ok, player = pcall(function() return exports.qbx_core:GetPlayerByCitizenId(identifier) end)
+    if ok and player and player.PlayerData and player.PlayerData.charinfo then
+        local info = player.PlayerData.charinfo
+        return trim((info.firstname or "") .. " " .. (info.lastname or ""))
+    end
+    local row = MySQL.single.await(
+        "SELECT charinfo FROM players WHERE citizenid = ? LIMIT 1",
+        { identifier }
+    )
+    if not row or not row.charinfo then return nil end
+    local info = type(row.charinfo) == "string" and (json.decode(row.charinfo) or {}) or row.charinfo
+    if not info.firstname and not info.lastname then return nil end
+    return trim((info.firstname or "") .. " " .. (info.lastname or ""))
+end
+
 --- Returns all online player source IDs. Modern QBX exposes GetPlayers(); older
 --- versions used GetQBPlayers(). Fall back to fetching from qbx_core or GetPlayers().
 local function GetAllQbxPlayerSources()

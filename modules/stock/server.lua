@@ -755,7 +755,6 @@ lib.callback.register('pickle_dealerships:setDisplaySpot', function(source, loca
 
     -- Notify clients: pass the affected spot IDs so only those re-render.
     TriggerClientEvent('pickle_dealerships:refreshDisplay', -1, locationKey, spotList)
-    print("INSANE!!!", os.time())
     ShowNotification(source, spot and _L('stock_display_spot_set', spot) or _L('stock_display_removed_server'), 'success')
     return true
 end)

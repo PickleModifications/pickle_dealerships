@@ -145,6 +145,8 @@ local function CleanupAuctionShowcase(skipFadeIn)
     if AuctionState.cam then
         DestroyCam(AuctionState.cam, false)
     end
+    -- Release the streaming focus we pinned to the auction stage on open.
+    ClearFocus()
 
     local ped = PlayerPedId()
     SetEntityCoords(ped, AuctionState.savedCoords.x, AuctionState.savedCoords.y, AuctionState.savedCoords.z, false, false, false, false)
@@ -240,6 +242,10 @@ function OpenAuctionShowcase(locationKey, opts)
     -- camZ matches the orbit thread's formula (center.z + radius * sin(pitch) * 0.5) so
     -- the camera opens at the configured max-top pitch without a visible snap.
     local camZ = center.z + defaultRadius * math.sin(0.8) * 0.5
+    -- Pin streaming focus to the stage so props/interior around the
+    -- spawned auction vehicle continue to load even if the player's ped
+    -- drifts or we later drop the teleport.
+    SetFocusArea(center.x, center.y, center.z, 0.0, 0.0, 0.0)
     local cam = CreateCam("DEFAULT_SCRIPTED_CAMERA", true)
     SetCamCoord(cam, camX, camY, camZ)
     PointCamAtCoord(cam, center.x, center.y, center.z)

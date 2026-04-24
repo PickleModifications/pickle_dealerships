@@ -30,7 +30,7 @@ function SpawnShowroomVehicle(model, coords, properties)
         if type(properties) == "table" then
             properties.plate = nil
             local ok, err = pcall(lib.setVehicleProperties, veh, properties)
-            print(('[pickle_dealerships] Showroom applied props ok=%s err=%s keys=%d'):format(tostring(ok), tostring(err), (function() local n=0 for _ in pairs(properties) do n=n+1 end return n end)()))
+            debugPrint(('[pickle_dealerships] Showroom applied props ok=%s err=%s keys=%d'):format(tostring(ok), tostring(err), (function() local n=0 for _ in pairs(properties) do n=n+1 end return n end)()))
         end
     end
 
@@ -174,6 +174,7 @@ function CleanupShowroom(skipFadeIn)
         if ShowroomState.cam then
             DestroyCam(ShowroomState.cam, false)
         end
+        ClearFocus()
         ShowroomState = nil
 
         if not skipFadeIn then
@@ -194,6 +195,10 @@ function CleanupShowroom(skipFadeIn)
     if ShowroomState.cam then
         DestroyCam(ShowroomState.cam, false)
     end
+    -- Hand streaming back to the player. StartShowroom shifted focus to the
+    -- showroom position so interiors would load around the camera even if
+    -- the player isn't physically near the lot.
+    ClearFocus()
 
     -- Restore player
     local ped = PlayerPedId()
@@ -265,6 +270,11 @@ function StartShowroom(locationKey, dealershipData)
     -- camZ matches the orbit thread's formula (center.z + radius * sin(pitch) * 0.5) so
     -- the camera opens at the configured max-top pitch without a visible snap.
     local camZ = center.z + defaultRadius * math.sin(0.8) * 0.5
+    -- Shift the streaming focus to the showroom centre so interiors and
+    -- scenery around it load even when the player's physical ped is far
+    -- away (e.g. dealership tucked inside a shell). Mirrors the admin
+    -- photo-booth flow; cleared on CleanupShowroom.
+    SetFocusArea(center.x, center.y, center.z, 0.0, 0.0, 0.0)
     local cam = CreateCam("DEFAULT_SCRIPTED_CAMERA", true)
     SetCamCoord(cam, camX, camY, camZ)
     PointCamAtCoord(cam, center.x, center.y, center.z)
@@ -334,6 +344,9 @@ RegisterNetEvent('pickle_dealerships:openSpotView', function(locationKey, spotId
     local initAngle = math.rad(45 + (spawnCoords.w or 0.0))
     local defaultRadius = 6.0
     local center = vector3(spawnCoords.x, spawnCoords.y, spawnCoords.z + 0.5)
+    -- Stream the spot's surroundings even if the player is outside the
+    -- interior; cleared on CleanupShowroom.
+    SetFocusArea(center.x, center.y, center.z, 0.0, 0.0, 0.0)
     local cam = CreateCam("DEFAULT_SCRIPTED_CAMERA", true)
     SetCamCoord(cam, center.x + defaultRadius * math.cos(initAngle), center.y + defaultRadius * math.sin(initAngle), center.z + defaultRadius * math.sin(0.8) * 0.5)
     PointCamAtCoord(cam, center.x, center.y, center.z)
@@ -405,6 +418,8 @@ RegisterNetEvent('pickle_dealerships:openSpotPicker', function(locationKey, spot
     -- camZ matches the orbit thread's formula (center.z + radius * sin(pitch) * 0.5) so
     -- the camera opens at the configured max-top pitch without a visible snap.
     local camZ = center.z + defaultRadius * math.sin(0.8) * 0.5
+    -- Stream the spot's surroundings (interior or not) around the camera.
+    SetFocusArea(center.x, center.y, center.z, 0.0, 0.0, 0.0)
     local cam = CreateCam("DEFAULT_SCRIPTED_CAMERA", true)
     SetCamCoord(cam, camX, camY, camZ)
     PointCamAtCoord(cam, center.x, center.y, center.z)

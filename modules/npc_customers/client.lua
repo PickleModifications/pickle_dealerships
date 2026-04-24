@@ -182,6 +182,8 @@ local function CleanupNPCShowroom(skipFadeIn)
     if NPCShowroomState.cam then
         DestroyCam(NPCShowroomState.cam, false)
     end
+    -- Release the streaming focus pinned on the showroom at open time.
+    ClearFocus()
 
     -- Restore player
     local ped = PlayerPedId()
@@ -537,6 +539,10 @@ RegisterNUICallback("npcStartShowroom", function(_, cb)
     local center = vector3(spawnCoords.x, spawnCoords.y, spawnCoords.z + 0.5)
     local camX = center.x + defaultRadius * math.cos(initAngle)
     local camY = center.y + defaultRadius * math.sin(initAngle)
+    -- Stream the showroom surroundings around the camera, not the player —
+    -- lets the NPC showroom work when the lot is inside an interior shell
+    -- and the player hasn't physically entered it. Cleared on cleanup.
+    SetFocusArea(center.x, center.y, center.z, 0.0, 0.0, 0.0)
     local cam = CreateCam("DEFAULT_SCRIPTED_CAMERA", true)
     SetCamCoord(cam, camX, camY, center.z + defaultRadius * math.sin(0.8) * 0.5)
     PointCamAtCoord(cam, center.x, center.y, center.z)

@@ -462,7 +462,7 @@ local function SpawnDepotPeds()
             end
         end
     end
-    print(('[pickle_dealerships] Spawned %d depot ped(s).'):format(#depots))
+    debugPrint(('[pickle_dealerships] Spawned %d depot ped(s).'):format(#depots))
 end
 
 --- When admins add/remove/rename depots via the management panel, fire this to refresh the peds.

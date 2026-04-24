@@ -22,14 +22,13 @@ RegisterNUICallback("createFinancing", function(data, cb)
             GetCurrencyString(result.installmentAmount)
         ))
 
-        -- Spawn the financed vehicle at the dealership spawn point
-        local spawnPoint = nil
-        for locationId, cfg in pairs(DealershipConfigs) do
-            if cfg.spawnPoint then
-                spawnPoint = cfg.spawnPoint
-                break
-            end
-        end
+        -- Resolve spawn point from the specific dealership this contract
+        -- is for. Old code iterated DealershipConfigs and picked the
+        -- first entry with a spawnPoint, which landed customers at an
+        -- unrelated shop's lot.
+        local location = data.location or result.location
+        local cfg = location and DealershipConfigs[location]
+        local spawnPoint = cfg and cfg.spawnPoint
 
         if data.spawnPoint then
             spawnPoint = vector4(data.spawnPoint.x, data.spawnPoint.y, data.spawnPoint.z, data.spawnPoint.w or 0.0)

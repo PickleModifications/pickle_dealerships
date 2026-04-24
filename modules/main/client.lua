@@ -13,7 +13,6 @@ local interactionDefs = {
             label = _L("interact_management"),
             icon = Config.TargetIcons.management,
         }, function(selection)
-            print(("[pd-debug] management select fired loc=%s current=%s match=%s"):format(tostring(locationKey), tostring(currentDealership), tostring(currentDealership == locationKey)))
             if currentDealership == locationKey then
                 OpenManagementMenu(locationKey)
             end
@@ -24,7 +23,6 @@ local interactionDefs = {
             label = _L("interact_sales"),
             icon = Config.TargetIcons.sales,
         }, function(selection)
-            print(("[pd-debug] sales select fired loc=%s current=%s match=%s"):format(tostring(locationKey), tostring(currentDealership), tostring(currentDealership == locationKey)))
             if currentDealership == locationKey then
                 OpenSalesTablet(locationKey)
             end
@@ -289,11 +287,8 @@ end
 
 --- Opens the management UI for dealership owners/managers
 function OpenManagementMenu(locationKey)
-    print(("[pd-debug] OpenManagementMenu enter loc=%s current=%s isNuiOpen=%s"):format(tostring(locationKey), tostring(currentDealership), tostring(isNuiOpen)))
     local role = lib.callback.await('pickle_dealerships:getPlayerRole', false, locationKey)
-    print(("[pd-debug] OpenManagementMenu role=%s"):format(tostring(role)))
     local data = lib.callback.await('pickle_dealerships:getDealershipData', false, locationKey)
-    print(("[pd-debug] OpenManagementMenu data=%s id=%s mode=%s owner=%s"):format(tostring(data ~= nil), tostring(data and data.id), tostring(data and data.mode), tostring(data and data.owner_identifier)))
     if not data then return end
 
     -- If dealership is unowned and player-owned mode, open purchase UI
@@ -331,7 +326,6 @@ function OpenManagementMenu(locationKey)
         end
     end
 
-    print(("[pd-debug] OpenManagementMenu -> OpenNui management role=%s initialBalance=%s"):format(tostring(role), tostring(initialBalance)))
     OpenNui('management', {
         dealershipId = data.id,
         dealershipName = data.name or "Dealership",
@@ -348,22 +342,17 @@ end
 
 --- Opens the sales point — immersive showroom if a showroom position is set, otherwise sales tablet
 function OpenSalesTablet(locationKey)
-    print(("[pd-debug] OpenSalesTablet enter loc=%s current=%s isNuiOpen=%s"):format(tostring(locationKey), tostring(currentDealership), tostring(isNuiOpen)))
     if not lib.callback.await('pickle_dealerships:canAccessDealership', false, locationKey) then
-        print("[pd-debug] OpenSalesTablet canAccess=false")
         ShowNotification(_L("error_access_denied"))
         return
     end
 
     local data = lib.callback.await('pickle_dealerships:getDealershipData', false, locationKey)
-    print(("[pd-debug] OpenSalesTablet data=%s"):format(tostring(data ~= nil)))
     if not data then return end
 
     -- If a showroom position is set, open the immersive showroom
     local cfg = DealershipConfigs[locationKey]
-    local hasShowroom = cfg and cfg.interactionPoints and cfg.interactionPoints.showroom
-    print(("[pd-debug] OpenSalesTablet cfg=%s hasShowroom=%s"):format(tostring(cfg ~= nil), tostring(hasShowroom ~= nil)))
-    if hasShowroom then
+    if cfg and cfg.interactionPoints and cfg.interactionPoints.showroom then
         StartShowroom(locationKey, data)
         return
     end
@@ -412,7 +401,6 @@ end
 
 --- Opens the NUI with specified page and data
 function OpenNui(page, data)
-    print(("[pd-debug] OpenNui call page=%s isNuiOpen=%s"):format(tostring(page), tostring(isNuiOpen)))
     if isNuiOpen then return end
     isNuiOpen = true
 
@@ -423,7 +411,6 @@ function OpenNui(page, data)
         data = data,
         accentColor = Config.UI and Config.UI.accentColor or "#e11d48",
     })
-    print(("[pd-debug] OpenNui sent page=%s"):format(tostring(page)))
 end
 
 --- Closes the NUI and releases focus

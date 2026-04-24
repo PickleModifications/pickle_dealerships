@@ -27,6 +27,34 @@ function GetPlayerCharacterName(source)
     return xPlayer.getName()
 end
 
+--- Resolves a display name for an arbitrary identifier — online or offline.
+--- ESX stores character data in the `users` table with `firstname` /
+--- `lastname` columns (no JSON blob like QB). Used by ledger entries,
+--- top-seller reporting, fire-offline-employee flows — anywhere that
+--- previously hit a `players` table directly and broke on ESX.
+---@param identifier string
+---@return string|nil
+function GetCharacterNameByIdentifier(identifier)
+    if not identifier or identifier == "" then return nil end
+    local function trim(s)
+        local t = s:gsub("^%s+", ""):gsub("%s+$", "")
+        return t
+    end
+    -- Online first — skip the DB round-trip when we can.
+    local xPlayer = ESX.GetPlayerFromIdentifier(identifier)
+    if xPlayer and xPlayer.getName then
+        local name = xPlayer.getName()
+        if name and name ~= "" then return name end
+    end
+    local row = MySQL.single.await(
+        "SELECT firstname, lastname FROM users WHERE identifier = ? LIMIT 1",
+        { identifier }
+    )
+    if not row then return nil end
+    if not row.firstname and not row.lastname then return nil end
+    return trim((row.firstname or "") .. " " .. (row.lastname or ""))
+end
+
 function GetEmployees(jobName, cb)
     local employees = {}
     local xPlayers = ESX.GetExtendedPlayers("job", jobName)

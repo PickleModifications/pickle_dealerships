@@ -12,6 +12,11 @@ local testDriveBlip = nil
 local testDriveRadiusBlip = nil
 local testDriveDealershipId = nil
 local testDriveOrigin = nil
+local testDriveReturnCoords = nil -- coords to teleport the player to on drive end
+-- Edge-triggered boundary warning. Monitor ticks every second, so without
+-- this flag we'd spam the "approaching boundary" toast every tick the
+-- player lingers near the edge.
+local testDriveNearBoundary = false
 
 -- ─── Vehicle Spawn Helper ───────────────────────────────────────────────────
 
@@ -77,21 +82,6 @@ function SpawnPurchasedVehicle(model, spawnPoint, color, secondaryColor, propert
     return veh
 end
 
-local function GetDealershipSpawnPoint(dealershipId)
-    -- Find dealership location config by matching dealership DB id to config
-    local dealership = lib.callback.await("pickle_dealerships:getDealershipConfig", false, { dealershipId = dealershipId })
-    if dealership and dealership.spawnPoint then
-        return vector4(dealership.spawnPoint.x, dealership.spawnPoint.y, dealership.spawnPoint.z, dealership.spawnPoint.w)
-    end
-    -- Fallback: try local config
-    for locationId, cfg in pairs(DealershipConfigs) do
-        if cfg.spawnPoint then
-            return cfg.spawnPoint
-        end
-    end
-    return vector4(0, 0, 0, 0)
-end
-
 -- ─── NUI Callbacks ──────────────────────────────────────────────────────────
 
 RegisterNUICallback("purchaseVehicle", function(data, cb)
@@ -107,15 +97,15 @@ RegisterNUICallback("purchaseVehicle", function(data, cb)
     })
 
     if result and result.success then
-        -- Spawn the purchased vehicle
-        local spawnPoint = nil
-        for locationId, cfg in pairs(DealershipConfigs) do
-            if cfg.spawnPoint then
-                -- Try to find matching dealership
-                spawnPoint = cfg.spawnPoint
-                break
-            end
-        end
+        -- Resolve spawn point from the dealership this sale is actually
+        -- for. DealershipConfigs is keyed by location, so prefer the
+        -- location the UI passed us, then the one the server echoed back
+        -- in the result. The old fallback iterated the table and picked
+        -- the FIRST config with a spawnPoint, which is what made players
+        -- spawn at a different dealership's lot.
+        local location = data.location or result.location
+        local cfg = location and DealershipConfigs[location]
+        local spawnPoint = cfg and cfg.spawnPoint
 
         if data.spawnPoint then
             spawnPoint = vector4(data.spawnPoint.x, data.spawnPoint.y, data.spawnPoint.z, data.spawnPoint.w or 0.0)
@@ -169,24 +159,56 @@ local function EndTestDrive()
     if not testDriveActive then return end
     testDriveActive = false
 
-    SendNUIMessage({ action = "testDriveSubtitle", data = { visible = false } })
+    -- useNuiEvent in the React overlay dispatches on `type`, not `action`,
+    -- so this payload must use `type` or the subtitle stays stuck on
+    -- screen (or never shows at all, depending on which path fired).
+    SendNUIMessage({ type = "testDriveSubtitle", data = { visible = false } })
 
-    -- Restore original routing bucket before teardown so the player rejoins
-    -- the main instance cleanly.
-    TriggerServerEvent('pickle_dealerships:leaveTestDriveBucket')
+    local ped = PlayerPedId()
 
-    -- Delete test drive vehicle
+    -- Fade out first so the yank-out / teleport / bucket swap isn't visible
+    -- to the driver. All the state mutations happen while the screen is
+    -- black so the return feels like a single instant transition.
+    DoScreenFadeOut(400)
+    while not IsScreenFadedOut() do Wait(0) end
+
+    -- Delete the test-drive vehicle BEFORE leaving the routing bucket.
+    -- Once the bucket change lands the entity is no longer on this client
+    -- (each drive runs in its own per-player bucket), so DeleteEntity
+    -- would silently no-op and the car would strand in the old bucket —
+    -- matching the user-reported "previous vehicles scattered around"
+    -- behaviour. Eject the player first, flag the car as a mission
+    -- entity (required for DeleteEntity to cooperate on network-owned
+    -- vehicles), then delete.
     if testDriveVehicle and DoesEntityExist(testDriveVehicle) then
-        local ped = PlayerPedId()
         if GetVehiclePedIsIn(ped, false) == testDriveVehicle then
             TaskLeaveVehicle(ped, testDriveVehicle, 0)
-            Wait(1500)
+            Wait(800)
         end
+        SetEntityAsMissionEntity(testDriveVehicle, true, true)
         DeleteEntity(testDriveVehicle)
     end
     testDriveVehicle = nil
 
-    -- Remove blips
+    -- Return the player to the dealership. Prefer the pre-drive coords we
+    -- captured at start-time (that's exactly where they kicked the drive
+    -- off); fall back to the dealership origin so we never leave them
+    -- stranded wherever the drive ended.
+    local dest = testDriveReturnCoords or testDriveOrigin
+    if dest then
+        -- Drop 1u below the saved Z so the ped settles onto the ground as
+        -- collision streams in, rather than spawning a metre in the air
+        -- and visibly falling on fade-in. Same trick CleanupShowroom uses.
+        SetEntityCoords(ped, dest.x, dest.y, dest.z - 1.0, false, false, false, false)
+    end
+
+    -- Now hand the player back to the default bucket. The vehicle is
+    -- already gone so no cross-bucket cleanup needed.
+    TriggerServerEvent('pickle_dealerships:leaveTestDriveBucket')
+    Wait(200)
+
+    DoScreenFadeIn(400)
+
     if testDriveBlip then
         RemoveBlip(testDriveBlip)
         testDriveBlip = nil
@@ -199,6 +221,8 @@ local function EndTestDrive()
     testDriveTimer = 0
     testDriveDealershipId = nil
     testDriveOrigin = nil
+    testDriveReturnCoords = nil
+    testDriveNearBoundary = false
 
     ShowNotification(_L("sales_test_drive_ended"))
 end
@@ -219,16 +243,12 @@ RegisterNUICallback("startTestDrive", function(data, cb)
         return
     end
 
-    -- Find dealership config for spawn point and origin coords
-    local spawnPoint = nil
-    local originCoords = nil
-    for locationId, cfg in pairs(DealershipConfigs) do
-        if cfg.spawnPoint then
-            spawnPoint = cfg.spawnPoint
-            originCoords = cfg.coords
-            break
-        end
-    end
+    -- Resolve spawn point and origin from the specific dealership this
+    -- test drive is for, not the first one we happen to find.
+    local location = data.location
+    local cfg = location and DealershipConfigs[location]
+    local spawnPoint = cfg and cfg.spawnPoint
+    local originCoords = cfg and cfg.coords
 
     if data.spawnPoint then
         spawnPoint = vector4(data.spawnPoint.x, data.spawnPoint.y, data.spawnPoint.z, data.spawnPoint.w or 0.0)
@@ -247,6 +267,14 @@ RegisterNUICallback("startTestDrive", function(data, cb)
         color = json.decode(color)
     end
 
+    -- Capture where to return the player at drive end. The showroom's
+    -- CleanupShowroom (invoked next) stashes the player's pre-showroom
+    -- coords in ShowroomState.savedCoords, but by the time EndTestDrive
+    -- runs that state is long gone. Read the player's current position
+    -- here — this is the spot they triggered the test drive from —
+    -- before any teleport/bucket work happens.
+    local prePlayerCoords = GetEntityCoords(PlayerPedId())
+
     -- Tear the showroom scene down FIRST (ped restoration, camera, fade). If
     -- we spawn the vehicle and warp the player while the showroom still has
     -- them frozen off-world, CleanupShowroom runs afterwards and teleports
@@ -255,6 +283,10 @@ RegisterNUICallback("startTestDrive", function(data, cb)
     if CleanupShowroom then
         CleanupShowroom(true) -- skip fade-in; we'll handle it after the spawn
         Wait(100)
+        -- After showroom cleanup, the ped is back at its pre-showroom
+        -- position — more accurate than the position captured above,
+        -- which was the frozen showroom-camera origin.
+        prePlayerCoords = GetEntityCoords(PlayerPedId())
     end
 
     -- Move the player to a dedicated routing bucket BEFORE spawning so the
@@ -302,6 +334,11 @@ RegisterNUICallback("startTestDrive", function(data, cb)
     testDriveTimer = Config.TestDriveTime or 120
     testDriveDealershipId = dealershipId
     testDriveOrigin = originCoords or GetEntityCoords(PlayerPedId())
+    -- Where to put the player when the drive ends. Use the captured
+    -- pre-drive ped coords (the spot they kicked the drive off from) and
+    -- fall back to the dealership origin if that's somehow missing.
+    testDriveReturnCoords = prePlayerCoords or testDriveOrigin
+    testDriveNearBoundary = false
 
     -- Create radius blip
     if testDriveOrigin then
@@ -323,7 +360,7 @@ RegisterNUICallback("startTestDrive", function(data, cb)
 
     ShowNotification(_L("sales_test_drive_started", testDriveTimer))
     SendNUIMessage({
-        action = "testDriveSubtitle",
+        type = "testDriveSubtitle",
         data = { visible = true, text = _L("sales_test_drive_end_hint") },
     })
     cb({ success = true })
@@ -368,7 +405,19 @@ CreateThread(function()
                         ShowNotification(_L("sales_test_drive_too_far"))
                         EndTestDrive()
                     elseif dist > radius * 0.85 then
-                        ShowNotification(_L("sales_test_drive_boundary"))
+                        -- Edge-trigger the warning — only when the driver
+                        -- crosses into the outer 15% for the first time.
+                        -- Without this the monitor's 1-second tick would
+                        -- spam the same toast for every second the driver
+                        -- hovers near the edge.
+                        if not testDriveNearBoundary then
+                            testDriveNearBoundary = true
+                            ShowNotification(_L("sales_test_drive_boundary"))
+                        end
+                    else
+                        -- Back inside the safe zone — rearm so a later
+                        -- approach fires the warning again.
+                        testDriveNearBoundary = false
                     end
                 end
 
@@ -429,14 +478,12 @@ RegisterNetEvent("pickle_dealerships:confirmPurchase", function(data)
         })
 
         if result and result.success then
-            -- Find spawn point for vehicle
-            local spawnPoint = nil
-            for locationId, cfg in pairs(DealershipConfigs) do
-                if cfg.spawnPoint then
-                    spawnPoint = cfg.spawnPoint
-                    break
-                end
-            end
+            -- Resolve spawn point from the specific dealership the
+            -- employee was selling at — the server trigger carries the
+            -- location key, and the server callback echoes it back.
+            local location = data.location or result.location
+            local cfg = location and DealershipConfigs[location]
+            local spawnPoint = cfg and cfg.spawnPoint
             if spawnPoint then
                 SpawnPurchasedVehicle(result.model, spawnPoint, nil)
             end
