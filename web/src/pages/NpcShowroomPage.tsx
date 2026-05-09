@@ -3,7 +3,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { Button } from '../components/ui/button'
 import { Badge } from '../components/ui/badge'
 import { Input } from '../components/ui/input'
-import { fetchNui, formatCurrency } from '../lib/utils'
+import { fetchNui, formatClass, formatCurrency } from '../lib/utils'
 import { t } from '../lib/locale'
 import { Search, X, Car, Loader2, UserX, SlidersHorizontal, Send } from 'lucide-react'
 import VehicleImg from '../components/VehicleImg'
@@ -270,7 +270,7 @@ export default function NpcShowroomPage({ data, profile, greeting, onClose }: Pr
                 <div className="flex flex-wrap gap-1">
                   <button onClick={() => setClassFilter('all')} className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${classFilter === 'all' ? 'bg-accent text-accent-foreground' : 'bg-white/5 text-white/40 hover:bg-white/10'}`}>{t('label_all')}</button>
                   {classes.map((cls) => (
-                    <button key={cls} onClick={() => setClassFilter(cls)} className={`px-2 py-0.5 rounded text-[10px] font-medium capitalize transition-colors ${classFilter === cls ? 'bg-accent text-accent-foreground' : 'bg-white/5 text-white/40 hover:bg-white/10'}`}>{cls}</button>
+                    <button key={cls} onClick={() => setClassFilter(cls)} className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${classFilter === cls ? 'bg-accent text-accent-foreground' : 'bg-white/5 text-white/40 hover:bg-white/10'}`}>{formatClass(cls)}</button>
                   ))}
                 </div>
               </div>
@@ -408,7 +408,7 @@ export default function NpcShowroomPage({ data, profile, greeting, onClose }: Pr
               <div className="min-w-0">
                 <p className="text-white font-bold text-xl truncate leading-tight">{selected.vehicle_label || selected.vehicle_model}</p>
                 <div className="flex items-center gap-2">
-                  <p className="text-white/40 text-sm capitalize">{selected.class || t('label_vehicle')}</p>
+                  <p className="text-white/40 text-sm">{formatClass(selected.class) || t('label_vehicle')}</p>
                   <span className="text-white/20">|</span>
                   <p className="text-white/40 text-sm">{t('npc_msrp')} <span className="text-white/60 font-semibold">{formatCurrency(selected.wholesale_cost)}</span></p>
                 </div>

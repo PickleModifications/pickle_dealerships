@@ -162,6 +162,38 @@ RegisterNUICallback("getSocietyAllowlist", function(data, cb)
     end
 end)
 
+RegisterNUICallback("printCoupon", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:printCoupon", false, {
+        dealershipId = data.dealershipId,
+        couponId     = data.couponId,
+        count        = data.count,
+    })
+    if result and result.message then ShowNotification(result.message) end
+    cb(result or { success = false })
+end)
+
+RegisterNUICallback("listInventoryCoupons", function(data, cb)
+    local rows = lib.callback.await("pickle_dealerships:listInventoryCoupons", false, {
+        dealershipId = data.dealershipId,
+        price        = data.price,
+    })
+    cb({ coupons = rows or {} })
+end)
+
+RegisterNUICallback("getDealershipSettings", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:getDealershipSettings", false, data.dealershipId)
+    cb(result or {})
+end)
+
+RegisterNUICallback("setDisableSelfPurchase", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:setDisableSelfPurchase", false, {
+        dealershipId = data.dealershipId,
+        value = data.value == true,
+    })
+    if result and result.success then ShowNotification(result.message) end
+    cb(result or { success = false })
+end)
+
 RegisterNUICallback("setSocietyAllowlist", function(data, cb)
     local result = lib.callback.await("pickle_dealerships:setSocietyAllowlist", false, {
         dealershipId = data.dealershipId,

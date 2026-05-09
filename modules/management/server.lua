@@ -230,6 +230,102 @@ lib.callback.register("pickle_dealerships:deleteCoupon", function(source, data)
     end
 end)
 
+--- "Print" copies of a coupon as inventory items. Each printed item carries
+--- the coupon code in metadata so the customer's purchase UI can offer the
+--- coupon as a one-tap apply (no typing). Owner/manager only. Empty
+--- Config.CouponItem disables this entirely.
+lib.callback.register("pickle_dealerships:printCoupon", function(source, data)
+    local dealershipId = tonumber(data and data.dealershipId)
+    local couponId = tonumber(data and data.couponId)
+    local count = math.max(1, math.min(50, tonumber(data and data.count) or 1))
+    if not dealershipId or not couponId then
+        return { success = false, message = "Invalid request." }
+    end
+    if not CanPlayerManage(source, dealershipId) then
+        return { success = false, message = _L("no_permission") }
+    end
+    if not Config or type(Config.CouponItem) ~= 'string' or Config.CouponItem == '' then
+        return { success = false, message = _L("coupon_item_disabled") }
+    end
+    if not Inventory or not Inventory.AddItem then
+        return { success = false, message = _L("coupon_item_disabled") }
+    end
+
+    local row = MySQL.single.await(
+        "SELECT c.*, d.name AS dealership_name FROM pickle_dealership_coupons c JOIN pickle_dealerships d ON d.id = c.dealership_id WHERE c.id = ? AND c.dealership_id = ? LIMIT 1",
+        { couponId, dealershipId }
+    )
+    if not row then return { success = false, message = "Coupon not found." } end
+
+    -- Metadata mirrors the coupon row so the purchase picker can preview
+    -- the discount without a server round-trip per slot.
+    local metadata = {
+        description = ("%s — %s"):format(row.dealership_name or "Dealership", row.code),
+        coupon_code = row.code,
+        coupon_id = row.id,
+        dealership_id = dealershipId,
+        dealership_name = row.dealership_name,
+        discount_type = row.discount_type,
+        discount_value = tonumber(row.discount_value) or 0,
+        min_purchase = tonumber(row.min_purchase) or 0,
+        expires_at = row.expires_at,
+    }
+
+    Inventory.AddItem(source, Config.CouponItem, count, metadata)
+    return { success = true, message = _L("coupon_printed", count) }
+end)
+
+--- List eligible coupon items in the caller's inventory for a given
+--- dealership/purchase context. Filters out expired / wrong-dealership /
+--- below-min coupons so the modal only shows actually-applicable rows.
+lib.callback.register("pickle_dealerships:listInventoryCoupons", function(source, data)
+    if not Config or type(Config.CouponItem) ~= 'string' or Config.CouponItem == '' then return {} end
+    if not Inventory or not Inventory.GetItemsByName then return {} end
+    local dealershipId = tonumber(data and data.dealershipId)
+    local price = tonumber(data and data.price) or 0
+    if not dealershipId then return {} end
+
+    local slots = Inventory.GetItemsByName(source, Config.CouponItem) or {}
+    local out = {}
+    local nowTs = os.time()
+    for _, s in ipairs(slots) do
+        local meta = s.metadata
+        if type(meta) == "string" then meta = json.decode(meta) or {} end
+        if type(meta) == "table" and meta.coupon_code then
+            local couponDealership = tonumber(meta.dealership_id)
+            local minPurchase = tonumber(meta.min_purchase) or 0
+            local expiresAt = tonumber(meta.expires_at)
+            local mismatch = couponDealership and couponDealership ~= dealershipId
+            local expired = expiresAt and nowTs > expiresAt
+            local underMin = minPurchase > 0 and price > 0 and price < minPurchase
+            if not mismatch and not expired and not underMin then
+                -- Re-validate against the live coupon row so a deleted /
+                -- depleted coupon row hides its printed copies from the modal.
+                local couponRow = MySQL.single.await(
+                    "SELECT id, max_uses, uses, expires_at FROM pickle_dealership_coupons WHERE dealership_id = ? AND code = ? LIMIT 1",
+                    { dealershipId, meta.coupon_code }
+                )
+                local stillValid = couponRow ~= nil
+                    and (not couponRow.max_uses or couponRow.max_uses == 0 or (couponRow.uses or 0) < couponRow.max_uses)
+                    and (not couponRow.expires_at or nowTs <= couponRow.expires_at)
+                if stillValid then
+                    out[#out + 1] = {
+                        slot = s.slot,
+                        count = s.count,
+                        code = meta.coupon_code,
+                        discountType = meta.discount_type,
+                        discountValue = meta.discount_value,
+                        minPurchase = minPurchase,
+                        expiresAt = expiresAt,
+                        dealershipName = meta.dealership_name,
+                    }
+                end
+            end
+        end
+    end
+    return out
+end)
+
 --- Get all coupons for a dealership
 lib.callback.register("pickle_dealerships:getCoupons", function(source, dealershipId)
     if not CanPlayerManage(source, dealershipId) then
@@ -458,6 +554,46 @@ lib.callback.register("pickle_dealerships:setAcceptedAltCurrencies", function(so
     UpdateDealershipCache(dealershipId, { metadata = meta })
 
     return { success = true, message = _L("alt_currencies_updated") }
+end)
+
+--- Read/write the per-dealership "disable self-purchase" toggle. When true,
+--- customers can't use the kiosk/showroom buy button — they must talk to an
+--- employee who runs the sale via the tablet flow. Owners + managers can flip
+--- it; admins always can via CanPlayerManage.
+lib.callback.register("pickle_dealerships:getDealershipSettings", function(source, dealershipId)
+    if not CanPlayerManage(source, dealershipId) then DenyAccess(source) return nil end
+    local dealership = GetDealership(dealershipId)
+    if not dealership then return nil end
+
+    local meta = dealership.metadata
+    if type(meta) == "string" then meta = json.decode(meta) or {} end
+    if type(meta) ~= "table" then meta = {} end
+
+    return {
+        disableSelfPurchase = meta.disableSelfPurchase == true,
+    }
+end)
+
+lib.callback.register("pickle_dealerships:setDisableSelfPurchase", function(source, data)
+    local dealershipId = data and data.dealershipId
+    if not dealershipId then return { success = false, message = "Invalid request." } end
+    if not CanPlayerManage(source, dealershipId) then
+        return { success = false, message = _L("no_permission") }
+    end
+
+    local dealership = GetDealership(dealershipId)
+    if not dealership then return { success = false, message = "Dealership not found." } end
+
+    local meta = dealership.metadata
+    if type(meta) == "string" then meta = json.decode(meta) or {} end
+    if type(meta) ~= "table" then meta = {} end
+
+    meta.disableSelfPurchase = data.value == true
+
+    MySQL.update.await("UPDATE pickle_dealerships SET metadata = ? WHERE id = ?", { json.encode(meta), dealershipId })
+    UpdateDealershipCache(dealershipId, { metadata = meta })
+
+    return { success = true, message = _L("settings_updated") }
 end)
 
 --- Returns the dealership's society-funds allowlist and the faction (job/gang) it maps to.

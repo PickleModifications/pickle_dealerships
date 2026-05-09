@@ -5,6 +5,21 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
+/**
+ * Convert a snake_case class slug (e.g. `sports_classic`) into a readable
+ * Title Case label (`Sports Classic`). The wholesale catalog stores class as
+ * the raw GTA class slug — CSS `capitalize` only handles the first letter of
+ * each whitespace-separated word, so we normalise the underscores first.
+ */
+export function formatClass(value: string | null | undefined): string {
+  if (!value) return ''
+  return String(value)
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
 export function formatCurrency(amount: number): string {
   return new Intl.NumberFormat('en-US', {
     style: 'currency',

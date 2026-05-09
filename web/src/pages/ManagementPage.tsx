@@ -9,7 +9,7 @@ import { fetchNui, formatCurrency } from '../lib/utils'
 import { t } from '../lib/locale'
 import {
   X, LayoutDashboard, Package, Truck, Users, LineChart, Ticket,
-  DollarSign, Store, Percent, CreditCard,
+  DollarSign, Store, Percent, CreditCard, Settings as SettingsIcon,
 } from 'lucide-react'
 import type { DealershipData, DealershipProgression } from '../types'
 
@@ -35,6 +35,7 @@ type ManagementTab =
   | 'coupons'
   | 'commission'
   | 'financing'
+  | 'settings'
 
 interface NavItem {
   id: ManagementTab
@@ -62,6 +63,7 @@ const navItems: NavItem[] = [
   { id: 'commission', labelKey: 'tab_commission', icon: <Percent className="h-4 w-4" />, minRole: OWNER_ADMIN },
   { id: 'coupons', labelKey: 'tab_coupons', icon: <Ticket className="h-4 w-4" />, minRole: OWNER_ADMIN, feature: 'coupons' },
   { id: 'financing', labelKey: 'tab_financing', icon: <CreditCard className="h-4 w-4" />, minRole: OWNER_ADMIN },
+  { id: 'settings', labelKey: 'tab_settings', icon: <SettingsIcon className="h-4 w-4" />, minRole: OWNER_ADMIN },
 ]
 
 // tierFeatures lookup retired with the tier system. Every feature tab is now
@@ -176,6 +178,8 @@ export default function ManagementPage({ data, onClose }: Props) {
         return <CommissionSettings dealershipId={data.dealershipId} />
       case 'financing':
         return <FinancingSettingsPanel dealershipId={data.dealershipId} dealershipName={data.dealershipName} />
+      case 'settings':
+        return <DealershipSettings dealershipId={data.dealershipId} />
       default:
         return null
     }
@@ -425,3 +429,64 @@ function CommissionSettings({ dealershipId }: { dealershipId: number }) {
   )
 }
 
+function DealershipSettings({ dealershipId }: { dealershipId: number }) {
+  const [loading, setLoading] = useState(true)
+  const [disableSelfPurchase, setDisableSelfPurchase] = useState(false)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    fetchNui<{ disableSelfPurchase?: boolean } | null>('getDealershipSettings', { dealershipId })
+      .then((res) => {
+        setDisableSelfPurchase(res?.disableSelfPurchase === true)
+        setLoading(false)
+      })
+      .catch(() => setLoading(false))
+  }, [dealershipId])
+
+  const toggleSelfPurchase = (next: boolean) => {
+    setDisableSelfPurchase(next)
+    setSaving(true)
+    fetchNui<{ success: boolean }>('setDisableSelfPurchase', { dealershipId, value: next })
+      .catch(() => setDisableSelfPurchase(!next))
+      .finally(() => setSaving(false))
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-48 text-muted-foreground">
+        {t('loading')}
+      </div>
+    )
+  }
+
+  return (
+    <ScrollArea className="h-full">
+      <div className="p-5 space-y-5 max-w-2xl">
+        <div>
+          <h2 className="text-lg font-bold flex items-center gap-2">
+            <SettingsIcon className="h-4 w-4" /> {t('settings_title')}
+          </h2>
+          <p className="text-sm text-muted-foreground">{t('settings_desc')}</p>
+        </div>
+
+        <Separator />
+
+        <label className="flex items-start gap-3 cursor-pointer select-none rounded-md border border-border p-3 hover:bg-muted/50">
+          <input
+            type="checkbox"
+            className="h-4 w-4 mt-0.5 accent-accent"
+            checked={disableSelfPurchase}
+            disabled={saving}
+            onChange={(e) => toggleSelfPurchase(e.target.checked)}
+          />
+          <div className="flex-1">
+            <div className="text-sm font-medium">{t('settings_disable_self_purchase')}</div>
+            <div className="text-xs text-muted-foreground mt-0.5">
+              {t('settings_disable_self_purchase_desc')}
+            </div>
+          </div>
+        </label>
+      </div>
+    </ScrollArea>
+  )
+}

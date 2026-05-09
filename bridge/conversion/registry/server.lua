@@ -107,6 +107,40 @@ function ListConversionResources()
     return out
 end
 
+--- Assigns a freshly-imported catalog row to the group ids the admin chose
+--- in the Import tab. `options.groupIds` is the explicit selection; nil or an
+--- empty list means "all groups" so a vanilla import keeps the pre-tier-split
+--- behavior of every dealership seeing the row. Idempotent (INSERT IGNORE),
+--- so repeated imports won't duplicate junction rows.
+function AssignCatalogModelToGroups(model, options)
+    if not model or model == '' then return end
+    local catalogId = MySQL.scalar.await(
+        "SELECT id FROM pickle_wholesale_catalog WHERE model = ? LIMIT 1",
+        { model }
+    )
+    if not catalogId then return end
+
+    local groupIds = options and options.groupIds
+    local resolved = {}
+    if type(groupIds) == 'table' and #groupIds > 0 then
+        for _, gid in ipairs(groupIds) do
+            local n = tonumber(gid)
+            if n then resolved[#resolved + 1] = n end
+        end
+    end
+    if #resolved == 0 then
+        local rows = MySQL.query.await("SELECT id FROM pickle_catalog_groups") or {}
+        for _, r in ipairs(rows) do resolved[#resolved + 1] = tonumber(r.id) end
+    end
+
+    for _, gid in ipairs(resolved) do
+        MySQL.update.await(
+            "INSERT IGNORE INTO pickle_catalog_vehicle_groups (catalog_id, group_id) VALUES (?, ?)",
+            { catalogId, gid }
+        )
+    end
+end
+
 --- Runs an adapter's entities in dependency order with a shared legacyIdMap
 --- context that later entities can read to resolve foreign keys. `selections`
 --- is a table keyed by entity name → array of source-row ids the user picked.

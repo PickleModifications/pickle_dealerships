@@ -11,7 +11,7 @@ import { fetchNui, formatCurrency } from '../lib/utils'
 import { getCached, setCache, buildKey } from '../lib/cache'
 import { SkeletonCardGrid } from '../components/ui/skeleton'
 import { t } from '../lib/locale'
-import { X, Plus, Trash2, Ticket, Percent, DollarSign } from 'lucide-react'
+import { X, Plus, Trash2, Ticket, Percent, DollarSign, Printer } from 'lucide-react'
 import type { DealershipData, Coupon } from '../types'
 
 interface Props {
@@ -30,6 +30,8 @@ export default function CouponsPage({ data, onClose }: Props) {
   const [discountValue, setDiscountValue] = useState('')
   const [maxUses, setMaxUses] = useState('0')
   const [minPurchase, setMinPurchase] = useState('0')
+  const [printingCoupon, setPrintingCoupon] = useState<Coupon | null>(null)
+  const [printCount, setPrintCount] = useState('5')
 
   const loadCoupons = () => {
     if (!getCached(cacheKey)) setLoading(true)
@@ -67,6 +69,19 @@ export default function CouponsPage({ data, onClose }: Props) {
       dealershipId: data.dealershipId,
       couponId,
     }).then(() => loadCoupons())
+  }
+
+  const handlePrint = () => {
+    if (!printingCoupon) return
+    const count = Math.max(1, Math.min(50, parseInt(printCount, 10) || 1))
+    fetchNui<{ success: boolean }>('printCoupon', {
+      dealershipId: data.dealershipId,
+      couponId: printingCoupon.id,
+      count,
+    }).finally(() => {
+      setPrintingCoupon(null)
+      setPrintCount('5')
+    })
   }
 
   return (
@@ -117,9 +132,20 @@ export default function CouponsPage({ data, onClose }: Props) {
                         )}
                       </div>
                     </div>
-                    <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => handleDelete(coupon.id)}>
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                    <div className="flex gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        title={t('coupon_print')}
+                        onClick={() => setPrintingCoupon(coupon)}
+                      >
+                        <Printer className="h-4 w-4" />
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => handleDelete(coupon.id)}>
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-2 gap-2 mt-3 text-sm">
@@ -197,6 +223,34 @@ export default function CouponsPage({ data, onClose }: Props) {
               </div>
             </div>
             <Button className="w-full" onClick={handleCreate}>{t('coupons_create_title')}</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!printingCoupon} onOpenChange={(open) => { if (!open) setPrintingCoupon(null) }}>
+        <DialogContent onClose={() => setPrintingCoupon(null)}>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Printer className="h-4 w-4" /> {t('coupon_print_title')}
+            </DialogTitle>
+            <DialogDescription>{t('coupon_print_desc', printingCoupon?.code ?? '')}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 pt-2">
+            <div>
+              <label className="text-sm font-medium">{t('coupon_print_count')}</label>
+              <Input
+                type="number"
+                min={1}
+                max={50}
+                value={printCount}
+                onChange={(e) => setPrintCount(e.target.value)}
+                className="mt-1"
+              />
+            </div>
+            <div className="flex gap-2 pt-2">
+              <Button variant="outline" className="flex-1" onClick={() => setPrintingCoupon(null)}>{t('btn_cancel')}</Button>
+              <Button className="flex-1" onClick={handlePrint}>{t('coupon_print')}</Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>

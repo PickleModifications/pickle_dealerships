@@ -584,6 +584,28 @@ CreateThread(function()
         return (Inventory.GetItemCount(source, name) > 0)
     end
 
+    Inventory.GetItemsByName = function(source, name)
+        if GetResourceState("ox_inventory") == "started" then
+            local ok, slots = pcall(function() return exports.ox_inventory:Search(source, "slots", name) end)
+            if ok and type(slots) == "table" then
+                local out = {}
+                for _, s in ipairs(slots) do
+                    out[#out + 1] = { slot = s.slot, count = s.count, metadata = s.metadata }
+                end
+                return out
+            end
+        end
+        local xPlayer = QBCore.Functions.GetPlayer(tonumber(source))
+        if not xPlayer then return {} end
+        local out = {}
+        for slot, item in pairs(xPlayer.PlayerData.items or {}) do
+            if item.name == name then
+                out[#out + 1] = { slot = item.slot or slot, count = item.amount, metadata = item.info or item.metadata }
+            end
+        end
+        return out
+    end
+
     lib.callback.register("pickle_dealerships:getInventory", function(source)
         return Inventory.GetInventory(source)
     end)

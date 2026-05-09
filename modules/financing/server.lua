@@ -177,20 +177,37 @@ lib.callback.register("pickle_dealerships:createFinancing", function(source, dat
         return { success = false, message = "Financing is currently disabled at this dealership." }
     end
 
+    -- Same self-purchase gate as the cash/bank path. Customers must talk to an
+    -- employee when this toggle is on; the employee uses the tablet flow.
+    local meta = dealership.metadata
+    if type(meta) == "string" then meta = json.decode(meta) or {} end
+    if type(meta) == "table" and meta.disableSelfPurchase == true and not CanPlayerSell(source, dealershipId) then
+        return { success = false, message = _L("error_self_purchase_disabled") }
+    end
+
+    if not AcquireStockLock(stockId) then
+        return { success = false, message = "Vehicle has already been sold." }
+    end
+
     local stockItem = GetStockItem(stockId)
     if not stockItem then
+        ReleaseStockLock(stockId)
         return { success = false, message = "Vehicle not found in stock." }
     end
     if stockItem.dealership_id ~= dealershipId then
+        ReleaseStockLock(stockId)
         return { success = false, message = "Vehicle does not belong to this dealership." }
     end
     if not stockItem.delivered_at then
+        ReleaseStockLock(stockId)
         return { success = false, message = "Vehicle has not been delivered yet." }
     end
     if stockItem.sold_at then
+        ReleaseStockLock(stockId)
         return { success = false, message = "Vehicle has already been sold." }
     end
     if stockItem.auction_id then
+        ReleaseStockLock(stockId)
         return { success = false, message = "Vehicle is currently at auction." }
     end
 
@@ -200,6 +217,7 @@ lib.callback.register("pickle_dealerships:createFinancing", function(source, dat
         if opt == installments then validInstallments = true break end
     end
     if not validInstallments then
+        ReleaseStockLock(stockId)
         return { success = false, message = "Invalid installment plan." }
     end
 
@@ -207,11 +225,13 @@ lib.callback.register("pickle_dealerships:createFinancing", function(source, dat
     local minDown = math.floor(price * settings.minDownPercent / 100)
 
     if downPayment < minDown then
+        ReleaseStockLock(stockId)
         return { success = false, message = ("Minimum down payment is %s (%d%%)."):format(GetCurrencyString(minDown), settings.minDownPercent) }
     end
 
     local identifier = GetIdentifier(source)
     if not identifier then
+        ReleaseStockLock(stockId)
         return { success = false, message = "Could not identify player." }
     end
 
@@ -223,16 +243,19 @@ lib.callback.register("pickle_dealerships:createFinancing", function(source, dat
     if settings.requireCreditScore and IsCreditScoreProviderActive() then
         local score = GetPlayerCreditScore(identifier)
         if not score then
+            ReleaseStockLock(stockId)
             return { success = false, message = _L("financing_credit_score_unavailable") }
         end
         local required = tonumber(settings.minCreditScore) or 600
         if score < required then
+            ReleaseStockLock(stockId)
             return { success = false, message = _L("financing_credit_score_too_low", required, score) }
         end
     end
 
     local playerMoney = GetMoney(source, paymentMethod)
     if playerMoney < downPayment then
+        ReleaseStockLock(stockId)
         return { success = false, message = "Insufficient funds for down payment." }
     end
 
@@ -251,6 +274,7 @@ lib.callback.register("pickle_dealerships:createFinancing", function(source, dat
 
     AddDealershipBalance(dealershipId, netDownPayment)
     MarkStockSold(stockId, identifier, nil)
+    ReleaseStockLock(stockId)
 
     -- Register vehicle with a single, authoritative plate (matches the sales flow
     -- so GetOwnedVehicleFromPlate resolves correctly for repossession / seize).
@@ -458,6 +482,60 @@ end)
 
 -- ─── Financing Check Thread (Overdue Payments) ─────────────────────────────
 
+--- Repossess a single financing row. Used by the auto-missed-payment thread
+--- below AND by the public bridge export so an external repo/tow tablet can
+--- run the same pipeline. `opts.reason`/`opts.actor`/`opts.note` flow into
+--- the ledger entry. Idempotent: a row that's already in 'repossessed'
+--- status is left alone and reported as a no-op.
+function PerformRepossession(financing, opts)
+    if not financing or not financing.id then
+        return false, "Missing financing row."
+    end
+    if financing.status == 'repossessed' then
+        return false, "Already repossessed."
+    end
+    opts = opts or {}
+    local newMissed = tonumber(opts.missedPayments)
+        or (tonumber(financing.missed_payments) or 0) + (opts.fromAutoCheck and 1 or 0)
+        or 0
+
+    MySQL.update(
+        "UPDATE `pickle_dealership_financing` SET `status` = 'repossessed', `missed_payments` = ? WHERE `id` = ?",
+        { newMissed, financing.id }
+    )
+    RemoveOwnedVehicle(financing.identifier, financing.vehicle_plate)
+
+    local note = opts.note
+        or (opts.reason and ("Vehicle repossessed: plate %s (%s)"):format(financing.vehicle_plate, tostring(opts.reason)))
+        or ("Vehicle repossessed: plate %s after %d missed payments"):format(financing.vehicle_plate, newMissed)
+    AddLedgerEntry(financing.dealership_id, "repossession", 0, note, financing.identifier)
+
+    LogDiscord("financing", {
+        title = "Vehicle Repossessed",
+        dealershipId = financing.dealership_id,
+        fields = {
+            { name = "Identifier", value = "`" .. tostring(financing.identifier) .. "`", inline = true },
+            { name = "Plate", value = "`" .. tostring(financing.vehicle_plate) .. "`", inline = true },
+            { name = "Missed Payments", value = tostring(newMissed), inline = true },
+            { name = "Total", value = GetCurrencyString(tonumber(financing.total_amount) or 0), inline = true },
+            { name = "Paid", value = GetCurrencyString(tonumber(financing.amount_paid) or 0), inline = true },
+            { name = "Reason", value = tostring(opts.reason or "auto"), inline = true },
+            opts.actor and { name = "Actor", value = "`" .. tostring(opts.actor) .. "`", inline = true } or nil,
+        },
+    })
+
+    local playerSource = GetSourceFromIdentifier(financing.identifier)
+    if playerSource then
+        TriggerClientEvent("pickle_dealerships:vehicleRepossessed", playerSource, {
+            plate = financing.vehicle_plate,
+            missedPayments = newMissed,
+            reason = opts.reason or "auto",
+        })
+    end
+
+    return true, nil
+end
+
 CreateThread(function()
     Wait(10000)
 
@@ -477,32 +555,10 @@ CreateThread(function()
                 local newMissed = financing.missed_payments + 1
 
                 if newMissed >= maxMissed then
-                    MySQL.update(
-                        "UPDATE `pickle_dealership_financing` SET `status` = 'repossessed', `missed_payments` = ? WHERE `id` = ?",
-                        { newMissed, financing.id }
-                    )
-                    RemoveOwnedVehicle(financing.identifier, financing.vehicle_plate)
-                    AddLedgerEntry(financing.dealership_id, "repossession", 0, ("Vehicle repossessed: plate %s after %d missed payments"):format(financing.vehicle_plate, newMissed), financing.identifier)
-
-                    LogDiscord("financing", {
-                        title = "Vehicle Repossessed",
-                        dealershipId = financing.dealership_id,
-                        fields = {
-                            { name = "Identifier", value = "`" .. tostring(financing.identifier) .. "`", inline = true },
-                            { name = "Plate", value = "`" .. tostring(financing.vehicle_plate) .. "`", inline = true },
-                            { name = "Missed Payments", value = tostring(newMissed), inline = true },
-                            { name = "Total", value = GetCurrencyString(tonumber(financing.total_amount) or 0), inline = true },
-                            { name = "Paid", value = GetCurrencyString(tonumber(financing.amount_paid) or 0), inline = true },
-                        },
+                    PerformRepossession(financing, {
+                        missedPayments = newMissed,
+                        reason = "missed_payments_auto",
                     })
-
-                    local playerSource = GetSourceFromIdentifier(financing.identifier)
-                    if playerSource then
-                        TriggerClientEvent("pickle_dealerships:vehicleRepossessed", playerSource, {
-                            plate = financing.vehicle_plate,
-                            missedPayments = newMissed,
-                        })
-                    end
                 else
                     local paymentIntervalSeconds = (settings.paymentIntervalHours or 24) * 3600
                     local nextPaymentTimestamp = now + paymentIntervalSeconds

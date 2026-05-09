@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useNuiEvent } from './hooks/useNuiEvent'
 import { closeNui, fetchNui, hexToHSL } from './lib/utils'
+import { clearCache } from './lib/cache'
 import type { PageType, DealershipData, NPCProfile } from './types'
 
 import DashboardPage from './pages/DashboardPage'
@@ -49,6 +50,7 @@ function App() {
     setPage(null)
     setData(null)
     setNpcProfile(null)
+    clearCache()
   })
 
   useNuiEvent('openNPCNegotiation', (payload: { profile: NPCProfile; greeting: string; accentColor?: string }) => {
@@ -67,6 +69,7 @@ function App() {
     setVisible(false)
     setPage(null)
     setNpcProfile(null)
+    clearCache()
   })
 
   useNuiEvent('openNPCShowroom', (payload: { profile: NPCProfile; greeting: string; dealershipId: number; location: string; dealershipName: string; accentColor?: string }) => {
@@ -94,6 +97,7 @@ function App() {
     setPage(null)
     setNpcProfile(null)
     setData(null)
+    clearCache()
   })
 
   useNuiEvent('deliveryQueueChanged', () => {
@@ -106,6 +110,7 @@ function App() {
     setPage(null)
     setData(null)
     setNpcProfile(null)
+    clearCache()
     closeNui()
   }, [])
 

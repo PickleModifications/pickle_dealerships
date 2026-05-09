@@ -5,7 +5,7 @@ import { Button } from '../components/ui/button'
 import { Badge } from '../components/ui/badge'
 import { Input } from '../components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
-import { fetchNui, formatCurrency, getVehicleImage } from '../lib/utils'
+import { fetchNui, formatClass, formatCurrency, getVehicleImage } from '../lib/utils'
 import { formatAltText, resolveAltCurrency, type AltCurrencyDef } from '../lib/altCurrency'
 import { Search, X, CreditCard, Banknote, Car, Coins, Loader2, Palette, SlidersHorizontal, ChevronRight, FileText, Gavel, Zap, Package, Warehouse, PenLine, Wind } from 'lucide-react'
 import VehicleImg from '../components/VehicleImg'
@@ -630,13 +630,13 @@ export default function ShowroomPage({ data }: Props) {
                     <button
                       key={cls}
                       onClick={() => setClassFilter(cls)}
-                      className={`px-2 py-0.5 rounded text-[10px] font-medium capitalize transition-colors ${
+                      className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
                         classFilter === cls
                           ? 'bg-accent text-accent-foreground'
                           : 'bg-white/5 text-white/40 hover:bg-white/10 hover:text-white/60'
                       }`}
                     >
-                      {cls}
+                      {formatClass(cls)}
                     </button>
                   ))}
                 </div>
@@ -916,7 +916,7 @@ export default function ShowroomPage({ data }: Props) {
               <p className="text-white font-bold text-2xl truncate leading-tight">
                 {selected.vehicle_label || selected.vehicle_model}
               </p>
-              <p className="text-white/40 text-lg capitalize">{selected.class || t('label_vehicle')}</p>
+              <p className="text-white/40 text-lg">{formatClass(selected.class) || t('label_vehicle')}</p>
             </div>
 
             {(() => {
@@ -946,6 +946,18 @@ export default function ShowroomPage({ data }: Props) {
                     primaryR: c.r, primaryG: c.g, primaryB: c.b,
                     secondaryR: secondaryColor?.r, secondaryG: secondaryColor?.g, secondaryB: secondaryColor?.b,
                   })
+                  // Staff on a placed (display-spot) vehicle: persist the
+                  // pick to the stock row so the lot reflects it permanently.
+                  if (data.spotViewStockId && data.role !== 'customer') {
+                    fetchNui('setStockColor', {
+                      dealershipId: data.dealershipId,
+                      stockId: data.spotViewStockId,
+                      primary: { r: c.r, g: c.g, b: c.b },
+                      secondary: secondaryColor && secondaryColor.r != null
+                        ? { r: secondaryColor.r, g: secondaryColor.g, b: secondaryColor.b }
+                        : { r: c.r, g: c.g, b: c.b },
+                    })
+                  }
                 }}
               />
               <ColorSwatch
@@ -960,6 +972,14 @@ export default function ShowroomPage({ data }: Props) {
                     primaryR: primaryColor?.r, primaryG: primaryColor?.g, primaryB: primaryColor?.b,
                     secondaryR: c.r, secondaryG: c.g, secondaryB: c.b,
                   })
+                  if (data.spotViewStockId && data.role !== 'customer' && primaryColor && primaryColor.r != null) {
+                    fetchNui('setStockColor', {
+                      dealershipId: data.dealershipId,
+                      stockId: data.spotViewStockId,
+                      primary: { r: primaryColor.r, g: primaryColor.g, b: primaryColor.b },
+                      secondary: { r: c.r, g: c.g, b: c.b },
+                    })
+                  }
                 }}
               />
             </div>
@@ -968,7 +988,21 @@ export default function ShowroomPage({ data }: Props) {
             {data.pickerSpotId ? (
               <Button
                 className="h-9 px-5 gap-2"
-                onClick={() => {
+                onClick={async () => {
+                  // Persist the picked colors first so the lot reflects them
+                  // when the spot re-renders. Skip for pre-owned (their captured
+                  // properties carry color independently) and for rows with no
+                  // primary chosen (let the existing stock color stand).
+                  if (!selected.is_used && primaryColor && primaryColor.r != null) {
+                    await fetchNui('setStockColor', {
+                      dealershipId: data.dealershipId,
+                      stockId: selected.id,
+                      primary: { r: primaryColor.r, g: primaryColor.g, b: primaryColor.b },
+                      secondary: secondaryColor && secondaryColor.r != null
+                        ? { r: secondaryColor.r, g: secondaryColor.g, b: secondaryColor.b }
+                        : { r: primaryColor.r, g: primaryColor.g, b: primaryColor.b },
+                    }).catch(() => {})
+                  }
                   fetchNui('setDisplaySpot', {
                     dealershipId: data.dealershipId,
                     location: data.location,
@@ -1012,19 +1046,25 @@ export default function ShowroomPage({ data }: Props) {
                   </TabsList>
                 </Tabs>
 
-                <Button
-                  className="h-9 px-5 gap-2"
-                  onClick={handlePurchase}
-                  disabled={purchasing}
-                >
-                  {purchasing ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    t('btn_purchase')
-                  )}
-                </Button>
+                {data.disableSelfPurchase && data.role === 'customer' ? (
+                  <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200 max-w-xs">
+                    {t('sales_speak_to_employee')}
+                  </div>
+                ) : (
+                  <Button
+                    className="h-9 px-5 gap-2"
+                    onClick={handlePurchase}
+                    disabled={purchasing}
+                  >
+                    {purchasing ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      t('btn_purchase')
+                    )}
+                  </Button>
+                )}
 
-                {financingSettings?.financingEnabled && !selected.auction_id && (
+                {!(data.disableSelfPurchase && data.role === 'customer') && financingSettings?.financingEnabled && !selected.auction_id && (
                   <Button
                     variant="outline"
                     className="h-9 px-4 gap-1.5 border-white/20 text-white/80 hover:bg-white/10 hover:text-white"

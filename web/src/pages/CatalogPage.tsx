@@ -6,7 +6,7 @@ import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { Separator } from '../components/ui/separator'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog'
-import { fetchNui, formatCurrency, getVehicleImage } from '../lib/utils'
+import { fetchNui, formatClass, formatCurrency, getVehicleImage } from '../lib/utils'
 import { SkeletonCardGrid } from '../components/ui/skeleton'
 import { t } from '../lib/locale'
 import { X, Search, ShoppingCart, Truck, Lock, Loader2, Car, SlidersHorizontal } from 'lucide-react'
@@ -193,7 +193,7 @@ export default function CatalogPage({ data, onClose }: Props) {
               <div className="flex flex-wrap gap-1">
                 <button onClick={() => handleClassChange('all')} className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${classFilter === 'all' ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>{t('label_all')}</button>
                 {classes.map((c) => (
-                  <button key={c} onClick={() => handleClassChange(c)} className={`px-2 py-0.5 rounded text-[10px] font-medium capitalize transition-colors ${classFilter === c ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>{c}</button>
+                  <button key={c} onClick={() => handleClassChange(c)} className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${classFilter === c ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>{formatClass(c)}</button>
                 ))}
               </div>
             </div>
@@ -234,7 +234,7 @@ export default function CatalogPage({ data, onClose }: Props) {
                           <div className="flex items-start justify-between mb-1">
                             <div>
                               <h3 className="font-semibold text-sm">{item.label}</h3>
-                              <p className="text-xs text-muted-foreground capitalize">{item.class}</p>
+                              <p className="text-xs text-muted-foreground">{formatClass(item.class)}</p>
                             </div>
                           </div>
                           <div className="flex items-center justify-between mt-2">

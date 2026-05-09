@@ -413,6 +413,27 @@ CreateThread(function()
         return xPlayer.hasWeapon(name)
     end
 
+    Inventory.GetItemsByName = function(source, name)
+        if GetResourceState("ox_inventory") == "started" then
+            local ok, slots = pcall(function() return exports.ox_inventory:Search(source, "slots", name) end)
+            if ok and type(slots) == "table" then
+                local out = {}
+                for _, s in ipairs(slots) do
+                    out[#out + 1] = { slot = s.slot, count = s.count, metadata = s.metadata }
+                end
+                return out
+            end
+        end
+        local xPlayer = ESX.GetPlayerFromId(source)
+        if not xPlayer then return {} end
+        local item = xPlayer.getInventoryItem(name)
+        if not item or (item.count or 0) <= 0 then return {} end
+        -- Vanilla ESX inventories don't model per-slot metadata. Surface a
+        -- single aggregated entry so the picker still works; metadata-rich
+        -- coupon items only really matter on ox_inventory anyway.
+        return { { slot = nil, count = item.count, metadata = nil } }
+    end
+
     lib.callback.register("pickle_dealerships:getInventory", function(source)
         return Inventory.GetInventory(source)
     end)

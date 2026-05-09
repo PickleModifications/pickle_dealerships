@@ -151,7 +151,9 @@ local catalogEntity = {
                     and "INSERT INTO pickle_wholesale_catalog (model, label, wholesale, tier, class, vehicle_type) VALUES (?, ?, ?, 'basic', ?, ?) ON DUPLICATE KEY UPDATE wholesale = VALUES(wholesale), label = VALUES(label), class = VALUES(class), vehicle_type = VALUES(vehicle_type)"
                     or  "INSERT IGNORE INTO pickle_wholesale_catalog (model, label, wholesale, tier, class, vehicle_type) VALUES (?, ?, ?, 'basic', ?, ?)"
                 local affected = MySQL.update.await(sql, { id, label, wholesale, class, vtype })
-                if affected and affected > 0 then res.inserted = res.inserted + 1
+                if affected and affected > 0 then
+                    res.inserted = res.inserted + 1
+                    AssignCatalogModelToGroups(id, options)
                 else res.skipped = res.skipped + 1 end
             end
         end

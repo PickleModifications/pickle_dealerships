@@ -267,6 +267,8 @@ Language["en"] = {
     sales_purchase_success = "Congratulations! You purchased a %s.",
     sales_purchase_failed = "Purchase failed.",
     sales_purchase_declined = "You declined the purchase.",
+    sales_seller_success = "%s bought a %s for %s.",
+    sales_seller_declined = "%s declined the offer for %s.",
 
     -- Delivery Client
     delivery_active = "You already have an active delivery.",
@@ -471,6 +473,54 @@ Language["en"] = {
     tab_commission = "Commission",
     tab_coupons = "Coupons",
     tab_financing = "Financing",
+    tab_settings = "Settings",
+
+    -- Per-dealership settings panel
+    settings_title = "Dealership Settings",
+    settings_desc = "Per-dealership operating preferences. Changes apply immediately to new menu opens.",
+    settings_updated = "Settings updated.",
+    settings_disable_self_purchase = "Disable self-purchase",
+    settings_disable_self_purchase_desc = "Customers can't buy from the kiosk or showroom UI. They must speak to an employee, who completes the sale via the tablet.",
+    sales_speak_to_employee = "Speak to an employee on the lot to purchase this vehicle.",
+    error_self_purchase_disabled = "Customers can't self-purchase here. Speak to an employee.",
+
+    -- /dealertablet remote tablet flow
+    tablet_command_desc = "Open the dealership sales tablet from anywhere",
+    tablet_no_dealerships = "You don't work at any dealership.",
+    tablet_pick_dealership = "Pick a dealership",
+    tablet_sell_to_customer = "Sell to customer",
+    tablet_sell_to_customer_desc = "Send a purchase invoice for %s to a nearby player.",
+    tablet_target_player = "Target player",
+    tablet_target_id_placeholder = "Server ID",
+    tablet_player_search_placeholder = "Search by name or ID",
+    tablet_clear_selection = "Clear",
+    btn_load_more = "Load more",
+    tablet_invoice_price = "Invoice price",
+    tablet_send_invoice = "Send invoice",
+    tablet_invalid_target = "Pick a target player first.",
+    tablet_invalid_price = "Enter a valid price.",
+    tablet_send_failed = "Failed to send the invoice.",
+    btn_sell_to_customer = "Sell to customer",
+
+    -- Display vehicle recolor
+    title_recolor_display = "Recolor display vehicle",
+    recolor_title = "Recolor",
+    recolor_desc = "Pick a primary and secondary color. The vehicle on the showroom floor refreshes immediately.",
+    recolor_saved = "Display vehicle recolored.",
+    recolor_pre_owned_unsupported = "Pre-owned units carry their captured color. Recolor isn't available for them.",
+
+    -- Printable coupon items
+    coupon_print = "Print",
+    coupon_print_title = "Print physical coupons",
+    coupon_print_desc = "Print copies of %s as inventory items the customer can redeem at purchase.",
+    coupon_print_count = "How many copies?",
+    coupon_printed = "Printed %s coupon(s).",
+    coupon_item_disabled = "Printable coupons are disabled in config.",
+    coupon_select_existing = "Select coupon",
+    coupon_picker_title = "Apply a coupon",
+    coupon_picker_desc = "Pick a coupon from your inventory to apply to this purchase.",
+    coupon_no_eligible = "No eligible coupons in your inventory.",
+    coupon_from_inventory = "(from inventory)",
 
     -- Buttons
     btn_purchase = "Purchase",
@@ -904,6 +954,8 @@ Language["en"] = {
     import_policy_overwrite = "Overwrite existing",
     import_policy_duplicate = "Insert duplicates",
     import_name_prefix = "Dealership name prefix (optional)",
+    import_assign_groups = "Assign imported vehicles to groups",
+    import_assign_groups_hint = "Imported wholesale catalog rows are added to every selected group. Defaults to all groups.",
     import_run = "Run Import",
     import_running = "Running import...",
     import_success = "Import complete in %ss.",

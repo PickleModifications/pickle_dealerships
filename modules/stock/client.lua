@@ -149,6 +149,29 @@ local function SpawnDisplayVehicleAt(item, spotId, x, y, z, w, locationKey, staf
             props.plate = nil
             lib.setVehicleProperties(veh, props)
         end
+    elseif item.color then
+        -- New units: apply the operator-chosen color so the lot reflects what
+        -- the customer would actually drive off in. Pre-owned spawns above
+        -- replay full captured properties (including color), so we skip there.
+        --
+        -- Wrapped in pcall so a malformed color JSON can't kill the spawn
+        -- mid-function and leave an orphan entity behind that DeleteDisplayVehicleAt
+        -- can't track (which would prevent swap/recolor from cleaning the lot).
+        pcall(function()
+            local color = item.color
+            if type(color) == 'string' then color = json.decode(color) end
+            if type(color) ~= 'table' then return end
+            if color.r and color.g and color.b then
+                SetVehicleCustomPrimaryColour(veh, color.r, color.g, color.b)
+                if type(color.secondary) == 'table' and color.secondary.r then
+                    SetVehicleCustomSecondaryColour(veh, color.secondary.r, color.secondary.g, color.secondary.b)
+                else
+                    SetVehicleCustomSecondaryColour(veh, color.r, color.g, color.b)
+                end
+            elseif color.colorId then
+                SetVehicleColours(veh, color.colorId, color.colorId)
+            end
+        end)
     end
 
     SetVehicleNumberPlateText(veh, 'DISPLAY')
@@ -388,10 +411,37 @@ end)
 --- Showroom picker opened: hide whatever vehicle is currently rendered at the
 --- target spot so the preview camera isn't pointed at two cars overlapping.
 --- DB is untouched — CleanupShowroom will fire a targeted refresh on close.
-RegisterNetEvent('pickle_dealerships:spotPickerOpened', function(locationKey, spotId)
-    if currentDealership ~= locationKey or not isInZone then return end
-    DeleteDisplayVehicleAt(tonumber(spotId))
-    DeleteGhostAt(tonumber(spotId))
+--- Server-side setStockColor broadcasts here. Find the on-spot vehicle by
+--- stockId and apply the new colors live so a staff member picking swatches
+--- in the spot view sees the change instantly without a respawn flicker.
+RegisterNetEvent('pickle_dealerships:displayColorChanged', function(_locationKey, stockId, color)
+    if not isInZone or type(color) ~= 'table' then return end
+    for _, dv in ipairs(displayVehicles) do
+        if dv.stockId == stockId and dv.entity and DoesEntityExist(dv.entity) then
+            if color.r and color.g and color.b then
+                SetVehicleCustomPrimaryColour(dv.entity, color.r, color.g, color.b)
+                if type(color.secondary) == 'table' and color.secondary.r then
+                    SetVehicleCustomSecondaryColour(dv.entity, color.secondary.r, color.secondary.g, color.secondary.b)
+                else
+                    SetVehicleCustomSecondaryColour(dv.entity, color.r, color.g, color.b)
+                end
+            end
+            return
+        end
+    end
+end)
+
+RegisterNetEvent('pickle_dealerships:spotPickerOpened', function(_locationKey, spotId)
+    -- We deliberately do NOT gate on currentDealership/isInZone here: when the
+    -- player has overlapping dealership zones (e.g. an imported duplicate at
+    -- the same coords), `currentDealership` reflects whichever zone fired
+    -- last, even if the display vehicle being swapped was spawned for a
+    -- different one. Deleting by spotId is locationKey-agnostic anyway since
+    -- displayVehicles tracks every spawned vehicle in a single global list.
+    local n = tonumber(spotId)
+    if not n then return end
+    DeleteDisplayVehicleAt(n)
+    DeleteGhostAt(n)
 end)
 
 --- Listen for stock changes to refresh display.
@@ -399,7 +449,13 @@ end)
 --- fall back to a full rebuild (used for stock state that isn't spot-scoped —
 --- delivery arrival, unlist toggle, etc).
 RegisterNetEvent('pickle_dealerships:refreshDisplay', function(locationKey, spotIds)
-    if currentDealership ~= locationKey or not isInZone then return end
+    -- Only bail if the player isn't currently in ANY dealership zone. We
+    -- intentionally don't compare to currentDealership: with overlapping /
+    -- duplicate dealership rows at the same physical lot, the broadcast's
+    -- locationKey may be the "other" record, but RefreshSingleSpot still
+    -- needs to clean up the display vehicle whose onSelect captured that
+    -- locationKey.
+    if not isInZone then return end
     -- Skip the spot the player is actively previewing in the picker — the
     -- new vehicle would spawn under the showroom camera while the menu is
     -- still open. CleanupShowroom fires its own targeted refresh on close
@@ -557,6 +613,17 @@ RegisterNUICallback("setRetailPrice", function(data, cb)
         ShowNotification(err or _L("stock_retail_price_failed"))
         cb({ success = false, message = err or "Failed." })
     end
+end)
+
+RegisterNUICallback("setStockColor", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:setStockColor", false, {
+        dealershipId = data.dealershipId,
+        stockId      = data.stockId,
+        primary      = data.primary,
+        secondary    = data.secondary,
+    })
+    if result and result.message then ShowNotification(result.message) end
+    cb(result or { success = false })
 end)
 
 RegisterNUICallback("setStockMinGrade", function(data, cb)

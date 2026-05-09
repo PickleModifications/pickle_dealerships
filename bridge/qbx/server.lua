@@ -605,6 +605,32 @@ CreateThread(function()
         return Inventory.GetItemCount(source, name) > 0
     end
 
+    -- Returns every slot of `name` the player is carrying, with metadata. Used
+    -- by the printable-coupon picker so the customer can choose which coupon
+    -- in their inventory to apply at purchase. Prefers ox_inventory's native
+    -- search since QBX hosts items there; falls back to the QBX item table.
+    Inventory.GetItemsByName = function(source, name)
+        if GetResourceState("ox_inventory") == "started" then
+            local ok, slots = pcall(function() return exports.ox_inventory:Search(source, "slots", name) end)
+            if ok and type(slots) == "table" then
+                local out = {}
+                for _, s in ipairs(slots) do
+                    out[#out + 1] = { slot = s.slot, count = s.count, metadata = s.metadata }
+                end
+                return out
+            end
+        end
+        local player = GetPlayer(source)
+        if not player or not player.PlayerData then return {} end
+        local out = {}
+        for slot, item in pairs(player.PlayerData.items or {}) do
+            if item.name == name then
+                out[#out + 1] = { slot = item.slot or slot, count = item.amount, metadata = item.info or item.metadata }
+            end
+        end
+        return out
+    end
+
     lib.callback.register("pickle_dealerships:getInventory", function(source)
         return Inventory.GetInventory(source)
     end)

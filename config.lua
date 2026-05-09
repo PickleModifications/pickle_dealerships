@@ -22,6 +22,16 @@ Config.VehicleImages = {
 Config.InstallVanillaStock = true
 Config.AdminCommand = "dealerships" -- Command to open the admin panel
 
+-- Optional usable inventory item that opens the dealership sales tablet from
+-- anywhere on the map for owners/managers/salespersons. Empty string disables
+-- the item path (the /dealertablet command always works).
+Config.SalesTabletItem = ""
+
+-- Optional inventory item used as the printable coupon. When set, the Coupons
+-- management page exposes a "Print" action that hands stacks of this item to
+-- the operator with the coupon code stored in metadata. Empty disables print.
+Config.CouponItem = "dealership_coupon"
+
 -- Generated license-plate format for new vehicles sold by dealerships.
 -- Pattern characters:
 --   A = random uppercase letter (A–Z)

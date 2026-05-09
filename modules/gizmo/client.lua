@@ -67,7 +67,24 @@ function StartMovement(prop, data)
         if IsControlJustPressed(1, 47) then
             isFrozen = not isFrozen
         end
-        if data.enableCancel and (IsControlJustPressed(1, 202)) then
+        -- Pause-menu suppression. Mirrors the working pattern in
+        -- pickle_drugs/housing_admin's pickZoneArea: kill every pause
+        -- control each frame and force the frontend back closed before
+        -- our `IsDisabledControlJustReleased` check runs, otherwise a
+        -- single ESC tap paints a frame of pause before we handle it.
+        DisableControlAction(0, 199, true) -- INPUT_FRONTEND_PAUSE
+        DisableControlAction(0, 200, true) -- INPUT_FRONTEND_PAUSE_ALTERNATE
+        DisableControlAction(0, 322, true) -- INPUT_FRONTEND_PAUSE_ALTERNATE (alt)
+        if IsPauseMenuActive() then
+            SetFrontendActive(false)
+            ActivateFrontendMenu(`FE_MENU_VERSION_EMPTY_NO_BACKGROUND`, true, -1)
+        end
+        if data.enableCancel and (
+            IsControlJustPressed(1, 202)
+            or IsDisabledControlJustReleased(0, 199)
+            or IsDisabledControlJustReleased(0, 200)
+            or IsDisabledControlJustReleased(0, 322)
+        ) then
             if data.deleteEntity then
                 CleanupGizmoEntity(prop)
             end

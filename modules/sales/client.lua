@@ -153,6 +153,93 @@ RegisterNUICallback("getAltPaymentOptions", function(data, cb)
     cb({ options = result or {} })
 end)
 
+-- ─── Tablet / Direct Sale ──────────────────────────────────────────────────
+
+--- "Sell to Customer" entry from the SalesPage employee UI. The server reuses
+--- the existing employeeSale → confirmPurchase → confirmEmployeeSale pipeline
+--- so the customer still gets the same alert prompt regardless of whether the
+--- sale was started at the front desk or through the tablet.
+RegisterNUICallback("employeeSale", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:employeeSale", false, {
+        dealershipId    = data.dealershipId,
+        stockId         = data.stockId,
+        targetPlayerId  = tonumber(data.targetPlayerId),
+        price           = tonumber(data.price),
+        couponCode      = data.couponCode,
+    })
+    if result and result.message then ShowNotification(result.message) end
+    cb(result or { success = false })
+end)
+
+RegisterNUICallback("listNearbyPlayers", function(data, cb)
+    local rows = lib.callback.await("pickle_dealerships:listNearbyPlayers", false, {
+        dealershipId = data.dealershipId,
+        radius       = data.radius,
+    })
+    cb({ players = rows or {} })
+end)
+
+RegisterNUICallback("listOnlinePlayersForSale", function(data, cb)
+    local rows = lib.callback.await("pickle_dealerships:listOnlinePlayersForSale", false, {
+        dealershipId = data.dealershipId,
+    })
+    cb({ players = rows or {} })
+end)
+
+--- Opens the SalesPage NUI for an arbitrary dealership without requiring the
+--- player to be standing at the front desk. Used by /dealertablet. Always
+--- routes to the regular sales tablet UI (skips the immersive showroom path
+--- since the operator is using a tablet, not walking the lot).
+local function OpenRemoteSalesTablet(locationKey)
+    local data = lib.callback.await('pickle_dealerships:getDealershipData', false, locationKey)
+    if not data then
+        ShowNotification(_L("error_access_denied"))
+        return
+    end
+    local role = lib.callback.await('pickle_dealerships:getPlayerRole', false, locationKey)
+    if not role or role == 'customer' then
+        ShowNotification(_L("no_permission"))
+        return
+    end
+    OpenNui('sales', {
+        dealershipId = data.id,
+        dealershipName = data.name,
+        role = role,
+        tier = data.tier,
+        location = locationKey,
+        disableSelfPurchase = data.disableSelfPurchase or false,
+        tabletMode = true,
+    })
+end
+
+RegisterCommand("dealertablet", function()
+    local rows = lib.callback.await("pickle_dealerships:listEmployeeDealerships", false)
+    if type(rows) ~= 'table' or #rows == 0 then
+        ShowNotification(_L("tablet_no_dealerships"))
+        return
+    end
+
+    if #rows == 1 then
+        OpenRemoteSalesTablet(rows[1].location)
+        return
+    end
+
+    local options = {}
+    for _, d in ipairs(rows) do
+        options[#options + 1] = { label = d.name .. ' (' .. d.role .. ')', value = d.location }
+    end
+    local choice = lib.inputDialog(_L("tablet_pick_dealership"), {
+        { type = 'select', label = _L("label_dealership"), options = options, required = true },
+    })
+    if not choice or not choice[1] then return end
+    OpenRemoteSalesTablet(choice[1])
+end, false)
+TriggerEvent("chat:addSuggestion", "/dealertablet", _L("tablet_command_desc") or "Open the dealership sales tablet from anywhere")
+
+RegisterNetEvent("pickle_dealerships:openSalesTablet", function()
+    ExecuteCommand("dealertablet")
+end)
+
 -- ─── Test Drive System ──────────────────────────────────────────────────────
 
 local function EndTestDrive()
@@ -443,6 +530,14 @@ end)
 -- ─── Employee Sale Confirmation ─────────────────────────────────────────────
 
 RegisterNetEvent("pickle_dealerships:confirmPurchase", function(data)
+    local function declineToSeller(reason)
+        TriggerServerEvent("pickle_dealerships:saleDeclined", {
+            soldBy = data.soldBy,
+            label = data.label or data.model,
+            reason = reason,
+        })
+    end
+
     local alert = lib.alertDialog({
         header = _L("sales_confirm_header"),
         content = _L("sales_confirm_body",
@@ -454,47 +549,56 @@ RegisterNetEvent("pickle_dealerships:confirmPurchase", function(data)
         cancel = true,
     })
 
-    if alert == "confirm" then
-        -- Ask payment method
-        local paymentMethod = "bank"
-        local input = lib.inputDialog(_L("sales_payment_method"), {
-            { type = "select", label = _L("sales_payment_method"), options = {
-                { value = "cash", label = _L("sales_payment_cash") },
-                { value = "bank", label = _L("sales_payment_bank") },
-            }, default = "bank" },
-        })
-
-        if input and input[1] then
-            paymentMethod = input[1]
-        end
-
-        local result = lib.callback.await("pickle_dealerships:confirmEmployeeSale", false, {
-            dealershipId = data.dealershipId,
-            stockId = data.stockId,
-            paymentMethod = paymentMethod,
-            couponCode = data.couponCode,
-            soldBy = data.soldBy,
-            price = data.price,
-        })
-
-        if result and result.success then
-            -- Resolve spawn point from the specific dealership the
-            -- employee was selling at — the server trigger carries the
-            -- location key, and the server callback echoes it back.
-            local location = data.location or result.location
-            local cfg = location and DealershipConfigs[location]
-            local spawnPoint = cfg and cfg.spawnPoint
-            if spawnPoint then
-                SpawnPurchasedVehicle(result.model, spawnPoint, nil)
-            end
-            ShowNotification(_L("sales_purchase_success", result.label or result.model))
-        else
-            ShowNotification(result and result.message or _L("sales_purchase_failed"))
-        end
-    else
+    if alert ~= "confirm" then
         ShowNotification(_L("sales_purchase_declined"))
+        declineToSeller("declined")
+        return
+    end
+
+    -- Ask payment method. inputDialog returns nil on cancel/close — treat
+    -- that as a decline rather than silently defaulting to bank.
+    local input = lib.inputDialog(_L("sales_payment_method"), {
+        { type = "select", label = _L("sales_payment_method"), options = {
+            { value = "cash", label = _L("sales_payment_cash") },
+            { value = "bank", label = _L("sales_payment_bank") },
+        }, default = "bank" },
+    })
+
+    if not input or not input[1] then
+        ShowNotification(_L("sales_purchase_declined"))
+        declineToSeller("declined")
+        return
+    end
+    local paymentMethod = input[1]
+
+    local result = lib.callback.await("pickle_dealerships:confirmEmployeeSale", false, {
+        dealershipId = data.dealershipId,
+        stockId = data.stockId,
+        paymentMethod = paymentMethod,
+        couponCode = data.couponCode,
+        soldBy = data.soldBy,
+        price = data.price,
+    })
+
+    if result and result.success then
+        -- Resolve spawn point from the specific dealership the
+        -- employee was selling at — the server trigger carries the
+        -- location key, and the server callback echoes it back.
+        local location = data.location or result.location
+        local cfg = location and DealershipConfigs[location]
+        local spawnPoint = cfg and cfg.spawnPoint
+        if spawnPoint then
+            SpawnPurchasedVehicle(result.model, spawnPoint, nil)
+        end
+        ShowNotification(_L("sales_purchase_success", result.label or result.model))
+        -- Server notifies the seller on its end (it knows the final price /
+        -- buyer name) so we don't need to do it here.
+    else
+        ShowNotification(result and result.message or _L("sales_purchase_failed"))
+        declineToSeller(result and result.message or "failed")
     end
 end)
+
 
 -- ─── Cleanup ────────────────────────────────────────────────────────────────
 

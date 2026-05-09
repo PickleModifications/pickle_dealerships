@@ -370,6 +370,7 @@ function OpenSalesTablet(locationKey)
         role = role,
         tier = data.tier,
         location = locationKey,
+        disableSelfPurchase = data.disableSelfPurchase or false,
     })
 end
 
@@ -396,6 +397,7 @@ function OpenKiosk(locationKey)
         tier = data.tier,
         location = locationKey,
         selfService = true,
+        disableSelfPurchase = data.disableSelfPurchase or false,
     })
 end
 

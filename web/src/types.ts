@@ -7,6 +7,10 @@ export interface DealershipData {
   location?: string
   type?: string
   selfService?: boolean
+  /** When true, customers can't self-purchase from kiosk/showroom — they must go through an employee. */
+  disableSelfPurchase?: boolean
+  /** True when SalesPage was opened via /dealertablet — strips employee-only customer-purchase / test-drive UX down to a target-picker only. */
+  tabletMode?: boolean
   setupDealershipId?: number
   positionsDealershipId?: number
   scrollToSpots?: boolean

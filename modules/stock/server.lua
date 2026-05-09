@@ -759,6 +759,70 @@ lib.callback.register('pickle_dealerships:setDisplaySpot', function(source, loca
     return true
 end)
 
+--- Recolor a stock row. Owner/manager only. The `color` payload is stored
+--- as JSON in `pickle_dealership_stock.color` (same shape vehicle spawn
+--- already reads), and if the row currently sits on a display spot we fire
+--- `refreshDisplay` so the in-world vehicle restyles within a tick.
+lib.callback.register('pickle_dealerships:setStockColor', function(source, data)
+    local stockId = tonumber(data and data.stockId)
+    local dealershipId = tonumber(data and data.dealershipId)
+    if not stockId or not dealershipId then return { success = false, message = 'Invalid request.' } end
+
+    if not CanPlayerManage(source, dealershipId) then
+        return { success = false, message = _L('no_permission') }
+    end
+
+    local stock = MySQL.single.await(
+        [[SELECT ds.id, ds.dealership_id, d.location, ds.display_spot, ds.is_used, ds.color
+            FROM pickle_dealership_stock ds
+            JOIN pickle_dealerships d ON d.id = ds.dealership_id
+           WHERE ds.id = ? AND ds.dealership_id = ? AND ds.sold_at IS NULL]],
+        { stockId, dealershipId }
+    )
+    if not stock then return { success = false, message = 'Stock not found.' } end
+
+    -- Pre-owned units carry their own captured properties (incl. color) in the
+    -- `metadata` blob; recoloring just the `color` column would have no effect
+    -- because the spawn path reads metadata first. Reject so the operator
+    -- doesn't think they changed something that didn't change.
+    if stock.is_used == 1 or stock.is_used == true then
+        return { success = false, message = _L('recolor_pre_owned_unsupported') }
+    end
+
+    local primary = data.primary
+    local secondary = data.secondary
+    if type(primary) ~= 'table' or primary.r == nil or primary.g == nil or primary.b == nil then
+        return { success = false, message = 'Invalid color.' }
+    end
+
+    -- Sanitise (0-255 ints) so we never write garbage that might crash the client setter.
+    local function clampByte(v) return math.max(0, math.min(255, math.floor(tonumber(v) or 0))) end
+    local payload = {
+        r = clampByte(primary.r),
+        g = clampByte(primary.g),
+        b = clampByte(primary.b),
+        secondary = (type(secondary) == 'table' and secondary.r) and {
+            r = clampByte(secondary.r),
+            g = clampByte(secondary.g),
+            b = clampByte(secondary.b),
+        } or nil,
+    }
+
+    MySQL.update.await(
+        'UPDATE pickle_dealership_stock SET color = ? WHERE id = ?',
+        { json.encode(payload), stockId }
+    )
+
+    if stock.display_spot then
+        -- Live recolor of the in-world entity rather than a full re-spawn,
+        -- so a staff member picking colors from the spot view doesn't see
+        -- their camera target disappear and reappear on every swatch click.
+        TriggerClientEvent('pickle_dealerships:displayColorChanged', -1, stock.location, stockId, payload)
+    end
+
+    return { success = true, message = _L('recolor_saved') }
+end)
+
 --- Checks for stock items whose delivery time has passed and marks them delivered
 ---@param source number
 ---@param locationKey string

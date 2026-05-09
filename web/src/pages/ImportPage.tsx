@@ -33,6 +33,14 @@ type RunResponse = {
 
 type ConflictPolicy = 'skip' | 'overwrite' | 'duplicate'
 
+type CatalogGroup = {
+  id: number
+  name: string
+  label: string
+  description?: string
+  is_default?: number | boolean
+}
+
 interface ImportPageProps {
   onImported?: () => void
 }
@@ -48,10 +56,28 @@ export default function ImportPage({ onImported }: ImportPageProps) {
   const [namePrefix, setNamePrefix] = useState('')
   const [running, setRunning] = useState(false)
   const [result, setResult] = useState<RunResponse | null>(null)
+  const [groups, setGroups] = useState<CatalogGroup[]>([])
+  const [selectedGroups, setSelectedGroups] = useState<Set<number>>(new Set())
 
   useEffect(() => {
     fetchNui<ResourceInfo[]>('conversionListResources').then((list) => setResources(list || []))
+    fetchNui<CatalogGroup[]>('adminGetGroups').then((list) => {
+      const rows = list || []
+      setGroups(rows)
+      // Default to every group selected so a vanilla import keeps the
+      // pre-existing "vehicle is visible to every dealership" behavior.
+      setSelectedGroups(new Set(rows.map((g) => g.id)))
+    })
   }, [])
+
+  const toggleGroup = (id: number) => {
+    setSelectedGroups((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+  const allGroupsSelected = groups.length > 0 && selectedGroups.size === groups.length
 
   const selectedResource = resources?.find((r) => r.resource === resource)
   const selectedVersion = selectedResource?.versions.find((v) => v.version === version)
@@ -172,7 +198,14 @@ export default function ImportPage({ onImported }: ImportPageProps) {
     try {
       const res = await fetchNui<RunResponse>('conversionRun', {
         resource, version, selections,
-        options: { conflictPolicy: policy, namePrefix },
+        options: {
+          conflictPolicy: policy,
+          namePrefix,
+          // Empty list means "all groups" on the server side. Sending the
+          // explicit list when the admin narrowed it lets the server scope
+          // the catalog → group junction inserts to just those.
+          groupIds: allGroupsSelected ? [] : Array.from(selectedGroups),
+        },
       })
       setResult(res)
       if (res?.success) onImported?.()
@@ -327,6 +360,54 @@ export default function ImportPage({ onImported }: ImportPageProps) {
                 <div className="text-xs text-muted-foreground mb-1">{t('import_name_prefix')}</div>
                 <Input value={namePrefix} onChange={(e) => setNamePrefix(e.target.value)} placeholder="[Imported] " />
               </div>
+              {groups.length > 0 && (
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="text-xs text-muted-foreground">{t('import_assign_groups')}</div>
+                    <div className="flex gap-1">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-6 px-2 text-[10px]"
+                        onClick={() => setSelectedGroups(new Set(groups.map((g) => g.id)))}
+                      >
+                        {t('import_select_all')}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-6 px-2 text-[10px]"
+                        onClick={() => setSelectedGroups(new Set())}
+                      >
+                        {t('import_clear')}
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {groups.map((g) => {
+                      const on = selectedGroups.has(g.id)
+                      return (
+                        <button
+                          key={g.id}
+                          type="button"
+                          onClick={() => toggleGroup(g.id)}
+                          className={
+                            'text-xs rounded-full border px-2.5 py-1 transition-colors ' +
+                            (on
+                              ? 'bg-accent text-accent-foreground border-accent'
+                              : 'bg-transparent text-muted-foreground border-border hover:bg-muted')
+                          }
+                        >
+                          {g.label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <div className="text-[10px] text-muted-foreground mt-1">
+                    {t('import_assign_groups_hint')}
+                  </div>
+                </div>
+              )}
             </div>
 
           </>

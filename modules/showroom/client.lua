@@ -304,6 +304,7 @@ function StartShowroom(locationKey, dealershipData)
         role = 'customer',
         tier = dealershipData.tier,
         location = locationKey,
+        disableSelfPurchase = dealershipData.disableSelfPurchase or false,
     })
 
     DoScreenFadeIn(500)

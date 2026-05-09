@@ -1039,3 +1039,25 @@ function LogDiscord(category, opts)
         ["Content-Type"] = "application/json",
     })
 end
+
+-- ─── Shared in-flight stock locks ───────────────────────────────────────────
+-- Sales / financing / auction confirm paths all read `sold_at` then later
+-- write to it. A lock keyed by stockId held for the duration of a sale
+-- callback prevents double-fires (rapid clicks, two callers racing) from
+-- both passing the check before the DB write lands. Lives on _G so every
+-- module sees the same table regardless of load order.
+
+_G.PickleStockLocks = _G.PickleStockLocks or {}
+
+function AcquireStockLock(stockId)
+    local id = tonumber(stockId)
+    if not id then return false end
+    if _G.PickleStockLocks[id] then return false end
+    _G.PickleStockLocks[id] = true
+    return true
+end
+
+function ReleaseStockLock(stockId)
+    local id = tonumber(stockId)
+    if id then _G.PickleStockLocks[id] = nil end
+end

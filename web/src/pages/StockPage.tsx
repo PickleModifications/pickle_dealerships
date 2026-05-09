@@ -7,7 +7,7 @@ import { Input } from '../components/ui/input'
 import { Separator } from '../components/ui/separator'
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog'
-import { fetchNui, formatCurrency, getVehicleImage } from '../lib/utils'
+import { fetchNui, formatClass, formatCurrency, getVehicleImage } from '../lib/utils'
 import { t } from '../lib/locale'
 import { getCached, setCache, buildKey } from '../lib/cache'
 import { SkeletonCardGrid } from '../components/ui/skeleton'
@@ -305,7 +305,7 @@ export default function StockPage({ data, onClose }: Props) {
                 <div className="flex flex-wrap gap-1">
                   <button onClick={() => setClassFilter('all')} className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${classFilter === 'all' ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>{t('label_all')}</button>
                   {classes.map((cls) => (
-                    <button key={cls} onClick={() => setClassFilter(cls)} className={`px-2 py-0.5 rounded text-[10px] font-medium capitalize transition-colors ${classFilter === cls ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>{cls}</button>
+                    <button key={cls} onClick={() => setClassFilter(cls)} className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${classFilter === cls ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>{formatClass(cls)}</button>
                   ))}
                 </div>
               </div>
@@ -370,7 +370,7 @@ export default function StockPage({ data, onClose }: Props) {
                             </Badge>
                           )}
                         </div>
-                        <p className="text-xs text-muted-foreground capitalize">{item.class || t('label_vehicle')}</p>
+                        <p className="text-xs text-muted-foreground">{formatClass(item.class) || t('label_vehicle')}</p>
                         {item.bundle && item.bundle.bundle_size > 1 && (
                           <p className="text-[10px] text-muted-foreground/80 truncate max-w-[260px]">
                             + {item.bundle.vehicles.slice(1).map((v) => v.label || v.model).join(', ')}
@@ -459,7 +459,7 @@ export default function StockPage({ data, onClose }: Props) {
                                     </span>
                                   )}
                                 </div>
-                                <p className="text-[10px] text-muted-foreground capitalize">{item.class || t('label_vehicle')}</p>
+                                <p className="text-[10px] text-muted-foreground">{formatClass(item.class) || t('label_vehicle')}</p>
                               </div>
                             </div>
                             <div className="flex items-center justify-between pt-1.5 mt-1.5 border-t border-border">
@@ -532,7 +532,7 @@ export default function StockPage({ data, onClose }: Props) {
                   <VehicleImg image={selectedItem.image} model={selectedItem.vehicle_model} alt={selectedItem.vehicle_label} className="h-14 w-24 object-contain rounded-md bg-muted shrink-0" fallbackClassName="h-14 w-24 rounded-md bg-muted flex items-center justify-center shrink-0" />
                   <div className="min-w-0">
                     <h2 className="text-base font-semibold leading-tight truncate">{selectedItem.vehicle_label || selectedItem.vehicle_model}</h2>
-                    <p className="text-xs text-muted-foreground capitalize mt-0.5">{selectedItem.class || t('label_vehicle')}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">{formatClass(selectedItem.class) || t('label_vehicle')}</p>
                     <div className="flex items-center gap-2 mt-1">
                       {selectedItem.is_used && selectedItem.plate && (
                         <span className="text-[10px] bg-violet-500/20 text-violet-300 px-1 rounded font-mono">{selectedItem.plate}</span>

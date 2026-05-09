@@ -144,6 +144,12 @@ lib.callback.register('pickle_dealerships:getDealershipData', function(source, l
         employees = employeeResults or {}
     end
 
+    -- Surface the disableSelfPurchase toggle so the client can hide customer
+    -- purchase buttons before the request even goes server-side.
+    local meta = cached and cached.metadata or nil
+    if type(meta) == "string" then meta = json.decode(meta) or {} end
+    if type(meta) ~= "table" then meta = {} end
+
     return {
         id = cached and cached.id or nil,
         location = locationKey,
@@ -158,6 +164,7 @@ lib.callback.register('pickle_dealerships:getDealershipData', function(source, l
         displaySpots = resolved.displaySpots or {},
         deliveryMode = resolved.deliveryMode or 'timed',
         selfService = resolved.selfService or false,
+        disableSelfPurchase = meta.disableSelfPurchase == true,
         stock = stock,
         employees = employees,
         -- "How many models the store could ever carry" (all tiers unlocked) —

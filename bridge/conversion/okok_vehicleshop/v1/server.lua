@@ -176,7 +176,9 @@ function OkokConversionHelpers.catalogEntity()
                         r.vehicle_id, r.vehicle_name or r.vehicle_id, wholesale,
                         r.category or 'sedan', okokTypeToPickleType(r.type),
                     })
-                    if affected and affected > 0 then res.inserted = res.inserted + 1
+                    if affected and affected > 0 then
+                        res.inserted = res.inserted + 1
+                        AssignCatalogModelToGroups(r.vehicle_id, options)
                     else res.skipped = res.skipped + 1 end
                 end
             end

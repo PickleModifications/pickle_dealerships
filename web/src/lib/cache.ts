@@ -10,6 +10,10 @@ export function setCache<T>(key: string, data: T): void {
   cache.set(key, { data, timestamp: Date.now() })
 }
 
+export function clearCache(): void {
+  cache.clear()
+}
+
 export function buildKey(dealershipId: number, tab: string): string {
   return `${dealershipId}:${tab}`
 }
