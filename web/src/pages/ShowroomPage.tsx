@@ -270,7 +270,7 @@ export default function ShowroomPage({ data }: Props) {
     fetchNui('showroomFinance', {
       dealershipId: data.dealershipId,
       stockId: selected.id,
-      downPayment: Math.floor(selected.retail_price * Math.round(financingSettings.minDownPercent) / 100),
+      downPayment: Math.floor(selected.retail_price * financingSettings.minDownPercent / 100),
       installments,
       paymentMethod,
       location: data.location,
@@ -389,6 +389,16 @@ export default function ShowroomPage({ data }: Props) {
   const handlePurchase = useCallback(() => {
     if (!selected || purchasing) return
     setPurchasing(true)
+    // Safety timeout: if the server callback never resolves (e.g. a bridge
+    // regression like the missing 'bank' branch), clear the spinner after 15s
+    // so the UI stays usable instead of being permanently locked.
+    let settled = false
+    const timeoutId = window.setTimeout(() => {
+      if (settled) return
+      settled = true
+      setPurchasing(false)
+      console.warn('[pickle_dealerships] showroomPurchase did not resolve within 15s; clearing spinner.')
+    }, 15000)
     fetchNui('showroomPurchase', {
       dealershipId: data.dealershipId,
       stockId: selected.id,
@@ -397,8 +407,16 @@ export default function ShowroomPage({ data }: Props) {
       secondaryColor: secondaryColor,
       location: data.location,
     }).then(() => {
+      if (settled) return
+      settled = true
+      window.clearTimeout(timeoutId)
       setPurchasing(false)
-    }).catch(() => setPurchasing(false))
+    }).catch(() => {
+      if (settled) return
+      settled = true
+      window.clearTimeout(timeoutId)
+      setPurchasing(false)
+    })
   }, [selected, purchasing, paymentMethod, primaryColor, secondaryColor, data.dealershipId, data.location])
 
   const handleClose = useCallback(() => {

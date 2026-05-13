@@ -76,6 +76,13 @@ local function GetFinancingSettings(dealershipId)
         settings.maxMissedPayments = Config.FinancingMaxMissed or 3
     end
 
+    -- Backfill any keys still missing (e.g. row exists but has a partial blob).
+    -- Prevents the customer UI from receiving nil for fields like minDownPercent
+    -- and rendering $0 down payments.
+    for k, v in pairs(DEFAULT_SETTINGS) do
+        if settings[k] == nil then settings[k] = v end
+    end
+
     return settings
 end
 

@@ -59,7 +59,10 @@ export default function FinancingContractDialog({ vehicleLabel, vehicleModel, ve
   }
 
   const interestRate = Math.round(settings.interestRate)
-  const downPayment = Math.floor(price * settings.minDownPercent / 100)
+  // Normalize minDownPercent: default to 30 if nullish; if it's a legacy decimal (< 1, e.g. 0.3), convert to percent form.
+  const rawMinDown = settings.minDownPercent
+  const normalizedMinDown = rawMinDown == null ? 30 : (rawMinDown < 1 ? rawMinDown * 100 : rawMinDown)
+  const downPayment = Math.floor(price * normalizedMinDown / 100)
   const financed = price - downPayment
   const totalInterest = Math.floor(financed * interestRate / 100)
   const totalWithInterest = financed + totalInterest

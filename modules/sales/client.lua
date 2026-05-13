@@ -49,16 +49,41 @@ function SpawnPurchasedVehicle(model, spawnPoint, color, secondaryColor, propert
         if type(properties) == "table" then
             lib.setVehicleProperties(veh, properties)
         end
-    elseif color and type(color) == "table" then
-        if color.r and color.g and color.b then
-            SetVehicleCustomPrimaryColour(veh, color.r, color.g, color.b)
-            if secondaryColor and type(secondaryColor) == "table" and secondaryColor.r then
-                SetVehicleCustomSecondaryColour(veh, secondaryColor.r, secondaryColor.g, secondaryColor.b)
-            else
-                SetVehicleCustomSecondaryColour(veh, color.r, color.g, color.b)
+    elseif color then
+        -- Route the chosen color through lib.setVehicleProperties so the keys
+        -- match what ProcessSale persists server-side (customPrimaryColor /
+        -- customSecondaryColor for RGB, color1/color2 for paletted). Keeping
+        -- the client and server shapes identical means the in-world car at
+        -- spawn matches the very first garage respawn.
+        local applyProps = {}
+        if type(color) == "table" then
+            if color.r and color.g and color.b then
+                local primary = { color.r, color.g, color.b }
+                local secondary
+                if type(secondaryColor) == "table" and secondaryColor.r then
+                    secondary = { secondaryColor.r, secondaryColor.g, secondaryColor.b }
+                elseif type(color.secondary) == "table" and color.secondary.r then
+                    secondary = { color.secondary.r, color.secondary.g, color.secondary.b }
+                else
+                    secondary = primary
+                end
+                applyProps.customPrimaryColor = primary
+                applyProps.customSecondaryColor = secondary
+            elseif color.colorId then
+                applyProps.color1 = color.colorId
+                applyProps.color2 = color.colorId
+            elseif color.primary ~= nil or color.secondary ~= nil then
+                local p = tonumber(color.primary)
+                local s = tonumber(color.secondary) or p
+                if p then applyProps.color1 = p end
+                if s then applyProps.color2 = s end
             end
-        elseif color.colorId then
-            SetVehicleColours(veh, color.colorId, color.colorId)
+        elseif type(color) == "number" then
+            applyProps.color1 = color
+            applyProps.color2 = color
+        end
+        if next(applyProps) ~= nil then
+            lib.setVehicleProperties(veh, applyProps)
         end
     end
 

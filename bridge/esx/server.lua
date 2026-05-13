@@ -118,6 +118,8 @@ function AddMoney(source, count, currency)
         xPlayer.addMoney(count)
     elseif (currency == "dirty") then
         xPlayer.addAccountMoney("black_money", count)
+    elseif (currency == "bank") then
+        xPlayer.addAccountMoney("bank", count)
     end
     TriggerClientEvent("pickle_dealerships:updateMoney", source, GetMoney(source, currency))
 end
@@ -129,6 +131,8 @@ function RemoveMoney(source, count, currency)
         xPlayer.removeMoney(count)
     elseif (currency == "dirty") then
         xPlayer.removeAccountMoney("black_money", count)
+    elseif (currency == "bank") then
+        xPlayer.removeAccountMoney("bank", count)
     end
     TriggerClientEvent("pickle_dealerships:updateMoney", source, GetMoney(source, currency))
 end
@@ -141,7 +145,9 @@ function GetMoney(source, currency)
         money = xPlayer.getMoney()
     elseif (currency == "dirty") then
         money = xPlayer.getAccount("black_money").money
-    end    
+    elseif (currency == "bank") then
+        money = xPlayer.getAccount("bank").money
+    end
     TriggerClientEvent("pickle_dealerships:updateMoney", source, money)
     return money
 end

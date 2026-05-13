@@ -371,9 +371,50 @@ local function ProcessSale(source, dealershipId, stockItem, paymentMethod, coupo
         if type(props) == 'string' then props = json.decode(props) or {} end
         if type(props) ~= 'table' then props = {} end
         props.plate = plate
+
+        -- Strip paint-related keys so qbx_garages doesn't override LS Customs
+        -- paint on every respawn. The customer is buying the pre-owned car
+        -- with whatever colors were captured, but going forward we let the
+        -- player's paint shop changes survive normal garage round-trips.
+        -- (modSmokeEnabled is a tire-smoke flag; safe to strip together.)
+        local PAINT_KEYS = {
+            'color1', 'color2', 'pearlescentColor', 'wheelColor',
+            'interiorColor', 'dashboardColor', 'xenonColor', 'tyreSmokeColor',
+            'modSmokeEnabled', 'windowTint', 'paintType',
+            'customPrimaryColor', 'customSecondaryColor',
+        }
+        for _, k in ipairs(PAINT_KEYS) do props[k] = nil end
     else
         plate = GeneratePlate()
         props = { plate = plate }
+
+        -- Persist the customer-chosen color so the first garage store/respawn
+        -- keeps the paint they picked at the dealership. `stockItem.color` is
+        -- written by stock/server.lua as JSON; getVehicleDetails has already
+        -- decoded it here. Two shapes supported:
+        --   1) RGB table:   { r,g,b, secondary = { r,g,b } | nil }
+        --   2) Paletted:    a number, or { primary = N, secondary = N }
+        local chosen = stockItem.color
+        if type(chosen) == 'string' then chosen = json.decode(chosen) end
+        if type(chosen) == 'table' then
+            if chosen.r ~= nil and chosen.g ~= nil and chosen.b ~= nil then
+                local primary = { tonumber(chosen.r) or 0, tonumber(chosen.g) or 0, tonumber(chosen.b) or 0 }
+                local secondary = primary
+                if type(chosen.secondary) == 'table' and chosen.secondary.r ~= nil then
+                    secondary = { tonumber(chosen.secondary.r) or 0, tonumber(chosen.secondary.g) or 0, tonumber(chosen.secondary.b) or 0 }
+                end
+                props.customPrimaryColor = primary
+                props.customSecondaryColor = secondary
+            elseif chosen.primary ~= nil or chosen.secondary ~= nil then
+                local p = tonumber(chosen.primary)
+                local s = tonumber(chosen.secondary) or p
+                if p then props.color1 = p end
+                if s then props.color2 = s end
+            end
+        elseif type(chosen) == 'number' then
+            props.color1 = chosen
+            props.color2 = chosen
+        end
     end
     AddOwnedVehicleWithProps(source, stockItem.vehicle_model, plate, props)
 
