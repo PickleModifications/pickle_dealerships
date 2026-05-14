@@ -1054,10 +1054,58 @@ function AcquireStockLock(stockId)
     if not id then return false end
     if _G.PickleStockLocks[id] then return false end
     _G.PickleStockLocks[id] = true
+    -- Safety net: if the holder errors before calling ReleaseStockLock the
+    -- lock would otherwise stay set until resource restart, permanently
+    -- blocking that stock row with "Vehicle has already been sold."
+    SetTimeout(30000, function()
+        if _G.PickleStockLocks[id] then _G.PickleStockLocks[id] = nil end
+    end)
     return true
 end
 
 function ReleaseStockLock(stockId)
     local id = tonumber(stockId)
     if id then _G.PickleStockLocks[id] = nil end
+end
+
+-- oxmysql on this server returns SQL NULL DATETIME columns as the number 0
+-- (DATETIMEs come back as epoch-ms numbers; NULL → 0). Pickle's escrowed
+-- checks like `if stockItem.sold_at then` treat 0 as truthy and erroneously
+-- return "Vehicle has already been sold." for every unsold row. Wrap the
+-- query path to coerce any column whose name ends in `_at` from 0 back to
+-- nil, restoring the nil-on-NULL contract pickle expects.
+do
+    local function normalizeDatetimeZeros(rows)
+        if type(rows) ~= 'table' then return rows end
+        for _, row in ipairs(rows) do
+            if type(row) == 'table' then
+                for k, v in pairs(row) do
+                    if v == 0 and type(k) == 'string' and k:sub(-3) == '_at' then
+                        row[k] = nil
+                    end
+                end
+            end
+        end
+        return rows
+    end
+
+    if MySQL and MySQL.query and MySQL.query.await then
+        local orig = MySQL.query.await
+        MySQL.query.await = function(...)
+            return normalizeDatetimeZeros(orig(...))
+        end
+    end
+    if MySQL and MySQL.single and MySQL.single.await then
+        local orig = MySQL.single.await
+        MySQL.single.await = function(...)
+            local row = orig(...)
+            if type(row) ~= 'table' then return row end
+            for k, v in pairs(row) do
+                if v == 0 and type(k) == 'string' and k:sub(-3) == '_at' then
+                    row[k] = nil
+                end
+            end
+            return row
+        end
+    end
 end
