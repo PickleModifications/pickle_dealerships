@@ -94,45 +94,49 @@ lib.callback.register('pickle_dealerships:getCatalog', function(source, data)
     }
 end)
 
---- Returns all unsold stock for a dealership (including pending deliveries)
----@param source number
----@param locationKey string
-lib.callback.register('pickle_dealerships:getStock', function(source, locationKey)
-    local dealership = MySQL.single.await(
-        'SELECT * FROM pickle_dealerships WHERE location = ?',
-        { locationKey }
-    )
-    if not dealership then return {} end
+-- ─── In-transit + orders summary ───────────────────────────────────────────
+--
+-- The "in-transit" cards rendered above the available grid in StockPage come
+-- from two sources:
+--   1. Stock rows that exist but whose delivered_at is still in the future
+--      (admin-added stock with delayed delivery).
+--   2. Pending rows in pickle_dealership_orders (purchased from wholesale,
+--      not yet entered into stock). Local orders are collapsed into trailer
+--      bundles to match the driver queue UI.
+-- Both are small datasets — never thousands of rows — so they're returned in
+-- full as part of the summary block instead of being paginated.
+local function buildInTransitSummary(dealership)
+    local rows = MySQL.query.await(
+        [[
+            SELECT ds.id, ds.vehicle_model, ds.vehicle_label, ds.retail_price,
+                   ds.wholesale_cost, ds.quantity, ds.ordered_at, ds.delivered_at,
+                   ds.unlisted, ds.auction_id, ds.acquired_from, ds.is_used,
+                   wc.image, wc.class
+              FROM pickle_dealership_stock ds
+              LEFT JOIN pickle_wholesale_catalog wc ON wc.model = ds.vehicle_model
+             WHERE ds.dealership_id = ?
+               AND ds.sold_at IS NULL
+               AND (ds.delivered_at IS NULL OR ds.delivered_at > NOW())
+        ]],
+        { dealership.id }
+    ) or {}
 
-    -- Process any orders that have arrived
-    ProcessDeliveredOrders(dealership.id)
-
-    local isManager = CanPlayerManage(source, dealership.id)
-    -- Managers see every stock row (including auctioned items so they can manage
-    -- them). Customers never see auctioned vehicles in the normal pre-owned /
-    -- new lists — those live exclusively in the Auctions tab.
-    local stockQuery = isManager
-        and 'SELECT ds.*, wc.image, wc.class FROM pickle_dealership_stock ds LEFT JOIN pickle_wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL ORDER BY ds.ordered_at DESC'
-        or  'SELECT ds.*, wc.image, wc.class FROM pickle_dealership_stock ds LEFT JOIN pickle_wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.unlisted = 0 AND ds.auction_id IS NULL ORDER BY ds.ordered_at DESC'
-    local stock = MySQL.query.await(stockQuery, { dealership.id }) or {}
-
-    -- Include pending orders as in-transit stock cards.
-    -- Local orders collapse into trailer-sized bundles (matching the driver queue view) so a dealership
-    -- with 3 Comets + 1 Sultan shows one pending card with "+3 more" rather than four duplicate rows.
-    -- Expedited orders stay individual — they resolve on independent timers.
-    local orders = MySQL.query.await([[
-        SELECT dor.id, dor.dealership_id, dor.vehicle_model, dor.vehicle_label, dor.retail_price,
-               dor.wholesale_cost, dor.quantity, dor.delivery_mode, dor.delivery_fee,
-               dor.ordered_at, dor.delivered_at, dor.claimed_by,
-               wc.image, COALESCE(wc.class, 'sedan') AS class
-          FROM pickle_dealership_orders dor
-          LEFT JOIN pickle_wholesale_catalog wc ON wc.model = dor.vehicle_model
-         WHERE dor.dealership_id = ?
-         ORDER BY dor.ordered_at DESC
-    ]], { dealership.id }) or {}
+    local orderRows = MySQL.query.await(
+        [[
+            SELECT dor.id, dor.dealership_id, dor.vehicle_model, dor.vehicle_label, dor.retail_price,
+                   dor.wholesale_cost, dor.quantity, dor.delivery_mode, dor.delivery_fee,
+                   dor.ordered_at, dor.delivered_at, dor.claimed_by,
+                   wc.image, COALESCE(wc.class, 'sedan') AS class
+              FROM pickle_dealership_orders dor
+              LEFT JOIN pickle_wholesale_catalog wc ON wc.model = dor.vehicle_model
+             WHERE dor.dealership_id = ?
+             ORDER BY dor.ordered_at DESC
+        ]],
+        { dealership.id }
+    ) or {}
 
     local localOrders, expeditedOrders = {}, {}
-    for _, o in ipairs(orders) do
+    for _, o in ipairs(orderRows) do
         if o.delivery_mode == 'local' then
             o.dealership_name = dealership.name
             localOrders[#localOrders + 1] = o
@@ -141,9 +145,11 @@ lib.callback.register('pickle_dealerships:getStock', function(source, locationKe
         end
     end
 
-    -- Group local orders into trailer-load cards (streakMult = 1.0: management view doesn't care about driver streak).
+    local out = {}
+    for i = 1, #rows do out[#out + 1] = rows[i] end
+
     for _, g in ipairs(GroupLocalOrders(localOrders, 1.0)) do
-        local row = {
+        out[#out + 1] = {
             is_order = true,
             is_used = 0,
             id = -g.primaryOrderId, -- negative ID keeps React keys distinct from real stock
@@ -153,7 +159,7 @@ lib.callback.register('pickle_dealerships:getStock', function(source, locationKe
             wholesale_cost = g.primaryWholesale,
             quantity = g.totalQty,
             ordered_at = g.orderedAt,
-            delivered_at = nil, -- local orders have no timer
+            delivered_at = nil,
             image = g.primaryImage,
             class = g.primaryClass,
             delivery_mode = 'local',
@@ -166,10 +172,8 @@ lib.callback.register('pickle_dealerships:getStock', function(source, locationKe
                 bucket = g.bucket,
             },
         }
-        stock[#stock + 1] = row
     end
 
-    -- Expedited orders render individually as before
     for _, o in ipairs(expeditedOrders) do
         o.is_order = true
         o.is_used = 0
@@ -178,10 +182,281 @@ lib.callback.register('pickle_dealerships:getStock', function(source, locationKe
         o.sold_to = nil
         o.sold_by = nil
         o.display_spot = nil
-        stock[#stock + 1] = o
+        out[#out + 1] = o
     end
 
-    return stock
+    return out
+end
+
+-- ─── WHERE-clause builder ──────────────────────────────────────────────────
+-- Builds the WHERE clause and parameters shared between the count and select
+-- queries so pagination math stays consistent.
+local function buildStockWhere(dealership, opts)
+    local where = 'ds.dealership_id = ? AND ds.sold_at IS NULL'
+    local params = { dealership.id }
+
+    local tab = opts.tab
+    if tab == 'new' then
+        where = where .. ' AND ds.is_used = 0'
+    elseif tab == 'used' then
+        where = where .. ' AND ds.is_used = 1'
+    end -- 'all' or anything else: no is_used filter
+
+    -- 'public' scope is what customers (and the immersive showroom / NPC
+    -- showroom / sales tablet for non-staff) see — strip unlisted, auctioned,
+    -- and pre-delivery rows. 'manager' includes everything so staff can
+    -- manage them.
+    if opts.scope == 'public' then
+        where = where .. ' AND ds.unlisted = 0 AND ds.auction_id IS NULL AND ds.delivered_at IS NOT NULL AND ds.delivered_at <= NOW()'
+    elseif opts.availableOnly then
+        where = where .. ' AND ds.delivered_at IS NOT NULL AND ds.delivered_at <= NOW()'
+    end
+
+    local search = type(opts.search) == 'string' and opts.search ~= '' and opts.search or nil
+    if search then
+        where = where .. ' AND (ds.vehicle_label LIKE ? OR ds.vehicle_model LIKE ?)'
+        local pattern = '%' .. search .. '%'
+        params[#params + 1] = pattern
+        params[#params + 1] = pattern
+    end
+
+    if opts.classFilter and opts.classFilter ~= '' and opts.classFilter ~= 'all' then
+        where = where .. ' AND wc.class = ?'
+        params[#params + 1] = opts.classFilter
+    end
+
+    local minPrice = tonumber(opts.minPrice)
+    if minPrice and minPrice > 0 then
+        where = where .. ' AND ds.retail_price >= ?'
+        params[#params + 1] = minPrice
+    end
+
+    local maxPrice = tonumber(opts.maxPrice)
+    if maxPrice and maxPrice > 0 then
+        where = where .. ' AND ds.retail_price <= ?'
+        params[#params + 1] = maxPrice
+    end
+
+    return where, params
+end
+
+local SORT_MAP = {
+    name_asc      = 'ds.vehicle_label ASC',
+    name_desc     = 'ds.vehicle_label DESC',
+    price_asc     = 'ds.retail_price ASC',
+    price_desc    = 'ds.retail_price DESC',
+    ordered_desc  = 'ds.ordered_at DESC',
+    ordered_asc   = 'ds.ordered_at ASC',
+}
+
+local function clampPageSize(n)
+    n = tonumber(n) or 50
+    if n < 1 then n = 1 end
+    if n > 200 then n = 200 end
+    return math.floor(n)
+end
+
+-- Pull summary metadata (counts per tab, available classes, max price,
+-- in-transit rows) in one shot. Returned with page=1 responses so the
+-- React UI can populate filter chips, header counts, and the in-transit
+-- strip without extra round-trips.
+local function buildStockSummary(dealership, scope)
+    local scopePredicate = (scope == 'public')
+        and 'AND ds.unlisted = 0 AND ds.auction_id IS NULL AND ds.delivered_at IS NOT NULL AND ds.delivered_at <= NOW()'
+        or  ''
+
+    local newCount = MySQL.scalar.await(
+        ('SELECT COUNT(*) FROM (SELECT 1 FROM pickle_dealership_stock ds LEFT JOIN pickle_wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.is_used = 0 %s GROUP BY ds.vehicle_model, ds.retail_price) sub'):format(scopePredicate),
+        { dealership.id }
+    ) or 0
+
+    local usedCount = MySQL.scalar.await(
+        ('SELECT COUNT(*) FROM pickle_dealership_stock ds LEFT JOIN pickle_wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.is_used = 1 %s'):format(scopePredicate),
+        { dealership.id }
+    ) or 0
+
+    local totalQuantity = MySQL.scalar.await(
+        ('SELECT COALESCE(SUM(ds.quantity), 0) FROM pickle_dealership_stock ds LEFT JOIN pickle_wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL %s'):format(scopePredicate),
+        { dealership.id }
+    ) or 0
+
+    local classRows = MySQL.query.await(
+        ('SELECT DISTINCT wc.class FROM pickle_dealership_stock ds LEFT JOIN pickle_wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL %s AND wc.class IS NOT NULL AND wc.class <> \'\' ORDER BY wc.class'):format(scopePredicate),
+        { dealership.id }
+    ) or {}
+    local classes = {}
+    for _, row in ipairs(classRows) do classes[#classes + 1] = row.class end
+
+    local maxRetailPrice = MySQL.scalar.await(
+        ('SELECT COALESCE(MAX(ds.retail_price), 0) FROM pickle_dealership_stock ds LEFT JOIN pickle_wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL %s'):format(scopePredicate),
+        { dealership.id }
+    ) or 0
+
+    -- In-transit only meaningful for managers — customers don't see incoming
+    -- stock until it's actually on the lot.
+    local inTransit = (scope == 'public') and {} or buildInTransitSummary(dealership)
+
+    return {
+        totals = {
+            ['new']   = tonumber(newCount) or 0,
+            used      = tonumber(usedCount) or 0,
+            all       = (tonumber(newCount) or 0) + (tonumber(usedCount) or 0),
+            quantity  = tonumber(totalQuantity) or 0,
+        },
+        classes = classes,
+        maxRetailPrice = tonumber(maxRetailPrice) or 0,
+        inTransit = inTransit,
+    }
+end
+
+--- Paginated stock fetch.
+---
+--- opts:
+---   displayOnly    — legacy display-spawner shortcut, returns rows with
+---                    display_spot set, no pagination.
+---   tab            — 'new' | 'used' | 'all'. 'new' consolidates rows that
+---                    share (vehicle_model, retail_price) into a single card
+---                    via SQL GROUP BY so a 1000-row Comet dealership ships
+---                    one row, not 1000.
+---   scope          — 'manager' (sees unlisted/auctioned/pending) or
+---                    'public' (only available, listed, non-auctioned).
+---   availableOnly  — when scope=manager but caller only wants delivered
+---                    rows (the available grid).
+---   page, pageSize — pagination. Default 1 / 50, pageSize capped at 200.
+---   search, classFilter, minPrice, maxPrice, sortBy — filters / sort.
+---   includeSummary — returns totals / classes / maxRetailPrice / inTransit.
+---                    Send only on first page, not on infinite-scroll loads.
+---@param source number
+---@param locationKey string
+---@param opts table|nil
+lib.callback.register('pickle_dealerships:getStock', function(source, locationKey, opts)
+    opts = type(opts) == 'table' and opts or {}
+
+    local dealership = MySQL.single.await(
+        'SELECT * FROM pickle_dealerships WHERE location = ?',
+        { locationKey }
+    )
+    if not dealership then
+        return { items = {}, total = 0, page = 1, pageSize = 50 }
+    end
+
+    -- Process any orders that have arrived
+    ProcessDeliveredOrders(dealership.id)
+
+    -- displayOnly: caller (SpawnDisplayVehicles) only needs rows actually
+    -- placed on a display spot — typically a handful out of potentially
+    -- thousands of stock rows. Returns the bare array for back-compat.
+    if opts.displayOnly == true then
+        return MySQL.query.await(
+            'SELECT ds.*, wc.image, wc.class FROM pickle_dealership_stock ds LEFT JOIN pickle_wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.display_spot IS NOT NULL',
+            { dealership.id }
+        ) or {}
+    end
+
+    -- Resolve scope. If the caller didn't request explicitly, default by role
+    -- (managers see everything, customers only see public).
+    local scope = opts.scope
+    if scope ~= 'manager' and scope ~= 'public' then
+        scope = CanPlayerManage(source, dealership.id) and 'manager' or 'public'
+    end
+
+    local page = math.max(1, math.floor(tonumber(opts.page) or 1))
+    local pageSize = clampPageSize(opts.pageSize)
+    local offset = (page - 1) * pageSize
+    local tab = opts.tab == 'new' and 'new' or opts.tab == 'used' and 'used' or 'all'
+    local orderBy = SORT_MAP[opts.sortBy] or 'ds.ordered_at DESC'
+
+    local where, params = buildStockWhere(dealership, {
+        tab = tab,
+        scope = scope,
+        availableOnly = opts.availableOnly == true,
+        search = opts.search,
+        classFilter = opts.classFilter,
+        minPrice = opts.minPrice,
+        maxPrice = opts.maxPrice,
+    })
+
+    local items, total
+
+    if tab == 'new' then
+        -- Consolidate by (model, retail_price). Same-model duplicates collapse
+        -- to one card with summed quantity. ANY_VALUE picks a representative
+        -- for the columns that vary within a group; MIN(ds.id) gives the row
+        -- mutations (set price, set min grade, etc.) will target.
+        local groupBy = 'ds.vehicle_model, ds.retail_price'
+        local countParams = { table.unpack(params) }
+        total = MySQL.scalar.await(
+            ('SELECT COUNT(*) FROM (SELECT 1 FROM pickle_dealership_stock ds LEFT JOIN pickle_wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE %s GROUP BY %s) sub'):format(where, groupBy),
+            countParams
+        ) or 0
+
+        local pageParams = { table.unpack(params) }
+        pageParams[#pageParams + 1] = pageSize
+        pageParams[#pageParams + 1] = offset
+        items = MySQL.query.await(
+            -- MariaDB lacks ANY_VALUE, so we use MAX as the "pick a
+            -- representative" aggregate. Within a (model, retail_price)
+            -- group the model-derived columns (label, image, class,
+            -- acquired_from) are functionally dependent on the model and
+            -- MAX returns whichever non-NULL value is highest — which is
+            -- fine for display purposes.
+            ([[
+                SELECT MIN(ds.id) AS id,
+                       ds.dealership_id,
+                       ds.vehicle_model,
+                       MAX(ds.vehicle_label) AS vehicle_label,
+                       ds.retail_price,
+                       MAX(ds.wholesale_cost) AS wholesale_cost,
+                       SUM(ds.quantity) AS quantity,
+                       0 AS is_used,
+                       MAX(ds.unlisted) AS unlisted,
+                       MAX(ds.auction_id) AS auction_id,
+                       MIN(ds.ordered_at) AS ordered_at,
+                       MAX(ds.delivered_at) AS delivered_at,
+                       MAX(ds.acquired_from) AS acquired_from,
+                       MAX(ds.metadata) AS metadata,
+                       MAX(ds.display_spot) AS display_spot,
+                       MAX(ds.color) AS color,
+                       MAX(wc.image) AS image,
+                       MAX(wc.class) AS class
+                  FROM pickle_dealership_stock ds
+                  LEFT JOIN pickle_wholesale_catalog wc ON wc.model = ds.vehicle_model
+                 WHERE %s
+                 GROUP BY ds.dealership_id, ds.vehicle_model, ds.retail_price
+                 ORDER BY %s
+                 LIMIT ? OFFSET ?
+            ]]):format(where, orderBy),
+            pageParams
+        ) or {}
+    else
+        -- 'used' and 'all' return individual rows.
+        local countParams = { table.unpack(params) }
+        total = MySQL.scalar.await(
+            ('SELECT COUNT(*) FROM pickle_dealership_stock ds LEFT JOIN pickle_wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE %s'):format(where),
+            countParams
+        ) or 0
+
+        local pageParams = { table.unpack(params) }
+        pageParams[#pageParams + 1] = pageSize
+        pageParams[#pageParams + 1] = offset
+        items = MySQL.query.await(
+            ('SELECT ds.*, wc.image, wc.class FROM pickle_dealership_stock ds LEFT JOIN pickle_wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE %s ORDER BY %s LIMIT ? OFFSET ?'):format(where, orderBy),
+            pageParams
+        ) or {}
+    end
+
+    local response = {
+        items = items,
+        total = tonumber(total) or 0,
+        page = page,
+        pageSize = pageSize,
+    }
+
+    if opts.includeSummary == true then
+        response.summary = buildStockSummary(dealership, scope)
+    end
+
+    return response
 end)
 
 --- Returns paginated available stock for the showroom
@@ -342,12 +617,12 @@ lib.callback.register('pickle_dealerships:orderVehicle', function(source, locati
     -- Check role
     local isOwner = dealership.owner_identifier == identifier
     local employee = nil
-    if not isOwner then
+    if not isOwner and not IsPlayerAdmin(source) then
         employee = MySQL.single.await(
             'SELECT role FROM pickle_dealership_employees WHERE dealership_id = ? AND identifier = ?',
             { dealership.id, identifier }
         )
-        if not employee or (employee.role ~= 'manager' and not IsPlayerAdmin(source)) then
+        if not employee or employee.role ~= 'manager' then
             return false, 'You do not have permission to order vehicles.'
         end
     end
@@ -539,12 +814,12 @@ lib.callback.register('pickle_dealerships:setRetailPrice', function(source, loca
 
     -- Verify permission
     local isOwner = dealership.owner_identifier == identifier
-    if not isOwner then
+    if not isOwner and not IsPlayerAdmin(source) then
         local employee = MySQL.single.await(
             'SELECT role FROM pickle_dealership_employees WHERE dealership_id = ? AND identifier = ?',
             { dealership.id, identifier }
         )
-        if not employee or (employee.role ~= 'manager' and not IsPlayerAdmin(source)) then
+        if not employee or employee.role ~= 'manager' then
             return false, 'You do not have permission.'
         end
     end
@@ -694,12 +969,12 @@ lib.callback.register('pickle_dealerships:setDisplaySpot', function(source, loca
 
     -- Verify permission
     local isOwner = dealership.owner_identifier == identifier
-    if not isOwner then
+    if not isOwner and not IsPlayerAdmin(source) then
         local employee = MySQL.single.await(
             'SELECT role FROM pickle_dealership_employees WHERE dealership_id = ? AND identifier = ?',
             { dealership.id, identifier }
         )
-        if not employee or (employee.role ~= 'manager' and not IsPlayerAdmin(source)) then
+        if not employee or employee.role ~= 'manager' then
             return false, 'You do not have permission.'
         end
     end

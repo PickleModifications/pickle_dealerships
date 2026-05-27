@@ -27,50 +27,6 @@ interface Props {
   dealershipId: number
 }
 
-// TEMPORARY — flip to false to go back to live server data. While true, the
-// report renders a synthetic 90-day dataset so the chart UI can be validated
-// end-to-end without needing real sales in the DB.
-const USE_DUMMY_DATA = true
-
-function buildDummyReport(days: number): ReportPayload {
-  const daily: DailyPoint[] = []
-  let totalRevenue = 0
-  let totalSales = 0
-  // Drift the daily average around a slow sine wave so the line has gentle
-  // peaks and valleys instead of random spikes — reads as a realistic
-  // business-as-usual trend.
-  const meanRevenue = 1800
-  const amplitude = 450
-  for (let i = days - 1; i >= 0; i--) {
-    const d = new Date()
-    d.setDate(d.getDate() - i)
-    const date = d.toISOString().slice(0, 10)
-
-    const wave = Math.sin((i / days) * Math.PI * 2) * amplitude
-    const noise = (Math.random() - 0.5) * 280
-    const revenue = Math.max(250, Math.floor(meanRevenue + wave + noise))
-    const sales = 1 + Math.floor(revenue / 900)
-
-    daily.push({ date, revenue, sales })
-    totalRevenue += revenue
-    totalSales += sales
-  }
-  return {
-    days,
-    daily,
-    totalRevenue,
-    totalSales,
-    transactions: totalSales,
-    avgPrice: totalSales > 0 ? Math.floor(totalRevenue / totalSales) : 0,
-    previous: {
-      revenue: Math.floor(totalRevenue * 0.75),
-      sales: Math.floor(totalSales * 0.8),
-    },
-    topSeller: { name: 'Demo Seller', sales: Math.max(1, Math.floor(totalSales / 3)), revenue: Math.floor(totalRevenue / 3) },
-    popularVehicle: { model: 'demo', label: 'Demo Coupe', sales: Math.max(1, Math.floor(totalSales / 4)), revenue: Math.floor(totalRevenue / 4) },
-  }
-}
-
 // Compact revenue chart for the dashboard. Rendered with inline SVG so we don't
 // pull a chart library for a single component — the area uses `hsl(var(--accent))`
 // so it always matches whatever theme color the server has configured.
@@ -81,11 +37,6 @@ export default function RevenueReport({ dealershipId }: Props) {
   const [hover, setHover] = useState<{ i: number; x: number; y: number } | null>(null)
 
   useEffect(() => {
-    if (USE_DUMMY_DATA) {
-      setReport(buildDummyReport(days))
-      setLoading(false)
-      return
-    }
     setLoading(true)
     fetchNui<ReportPayload | null>('getRevenueReport', { dealershipId, days })
       .then((res) => setReport(res ?? null))

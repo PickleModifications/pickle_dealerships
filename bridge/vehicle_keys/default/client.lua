@@ -30,4 +30,11 @@ function GiveVehicleKeys(veh)
             end
         end
     end
+
+    -- mk_vehiclekeys doesn't expose an event-based API — call its export
+    -- directly when the resource is running. The check is cheap and harmless
+    -- on servers that don't use it.
+    if cfg.mkVehiclekeys ~= false and GetResourceState('mk_vehiclekeys') == 'started' then
+        pcall(function() exports['mk_vehiclekeys']:AddKey(plate) end)
+    end
 end

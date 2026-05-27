@@ -119,6 +119,7 @@ RegisterNUICallback("purchaseVehicle", function(data, cb)
         paymentMethod = data.paymentMethod or "cash",
         color = data.color,
         couponCode = data.couponCode,
+        addons = data.addons,
     })
 
     if result and result.success then
@@ -161,6 +162,19 @@ RegisterNUICallback("purchaseVehicle", function(data, cb)
     end
 
     cb(result or { success = false })
+end)
+
+-- Preview-only coupon validation for the purchase dialog. Does NOT consume
+-- the coupon — the live sale path calls ValidateCoupon server-side, which is
+-- the one that increments uses.
+RegisterNUICallback("validateCouponPreview", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:validateCoupon", false, {
+        dealershipId   = data.dealershipId,
+        code           = data.code,
+        purchaseAmount = data.purchaseAmount,
+        vehicleModel   = data.vehicleModel,
+    })
+    cb(result or { valid = false })
 end)
 
 RegisterNUICallback("getStockDetails", function(data, cb)

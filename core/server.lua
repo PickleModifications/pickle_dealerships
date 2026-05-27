@@ -149,22 +149,45 @@ CreateThread(function()
         -- pickle_dealership_coupons
         MySQL.Async.execute([[
             CREATE TABLE IF NOT EXISTS `pickle_dealership_coupons` (
-                `id`              INT UNSIGNED   NOT NULL AUTO_INCREMENT,
-                `dealership_id`   INT UNSIGNED   NOT NULL,
-                `code`            VARCHAR(50)    NOT NULL,
-                `discount_type`   VARCHAR(30)    NOT NULL DEFAULT 'percent',
-                `discount_value`  DECIMAL(12,2)  NOT NULL DEFAULT 0.00,
-                `max_uses`        INT UNSIGNED   NOT NULL DEFAULT 1,
-                `uses`            INT UNSIGNED   NOT NULL DEFAULT 0,
-                `min_purchase`    BIGINT         NOT NULL DEFAULT 0,
-                `vehicle_filter`  JSON           DEFAULT NULL,
-                `expires_at`      TIMESTAMP      NULL DEFAULT NULL,
-                `created_by`      VARCHAR(50)    DEFAULT NULL,
-                `created_at`      TIMESTAMP      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                `id`                   INT UNSIGNED   NOT NULL AUTO_INCREMENT,
+                `dealership_id`        INT UNSIGNED   NOT NULL,
+                `code`                 VARCHAR(50)    NOT NULL,
+                `discount_type`        VARCHAR(30)    NOT NULL DEFAULT 'percent',
+                `discount_value`       DECIMAL(12,2)  NOT NULL DEFAULT 0.00,
+                `max_uses`             INT UNSIGNED   NOT NULL DEFAULT 1,
+                `max_uses_per_player`  INT UNSIGNED   NOT NULL DEFAULT 0,
+                `uses`                 INT UNSIGNED   NOT NULL DEFAULT 0,
+                `min_purchase`         BIGINT         NOT NULL DEFAULT 0,
+                `vehicle_filter`       JSON           DEFAULT NULL,
+                `expires_at`           TIMESTAMP      NULL DEFAULT NULL,
+                `created_by`           VARCHAR(50)    DEFAULT NULL,
+                `created_at`           TIMESTAMP      NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (`id`),
                 KEY `idx_dealership` (`dealership_id`),
                 UNIQUE KEY `idx_code` (`dealership_id`, `code`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ]])
+
+        -- Per-player redemption tally. Lets the coupon system enforce a
+        -- "first N unique players" rule via `max_uses_per_player`. Composite
+        -- PK so an UPSERT atomically increments the row for (coupon, player).
+        MySQL.Async.execute([[
+            CREATE TABLE IF NOT EXISTS `pickle_dealership_coupon_uses` (
+                `coupon_id`   INT UNSIGNED   NOT NULL,
+                `identifier`  VARCHAR(64)    NOT NULL,
+                `uses`        INT UNSIGNED   NOT NULL DEFAULT 0,
+                `last_used`   TIMESTAMP      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (`coupon_id`, `identifier`),
+                KEY `idx_coupon` (`coupon_id`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        ]])
+
+        -- Older installs already have pickle_dealership_coupons without the
+        -- per-player column. Default 0 keeps existing rows behaving exactly
+        -- like before (no per-player limit).
+        MySQL.Async.execute([[
+            ALTER TABLE `pickle_dealership_coupons`
+            ADD COLUMN IF NOT EXISTS `max_uses_per_player` INT UNSIGNED NOT NULL DEFAULT 0
         ]])
 
         -- pickle_dealership_deliveries
@@ -1108,4 +1131,94 @@ do
             return row
         end
     end
+end
+
+-- ─── Purchase add-ons ──────────────────────────────────────────────────────
+-- Shared helpers for vehicle add-ons (custom license plate, etc.) used by
+-- both the sales and financing flows. Kept here so adding a new add-on type
+-- means one config entry + one CalculateAddonCost case.
+
+--- Validates and normalizes a customer-supplied license plate. Strips
+--- whitespace, uppercases, and enforces the length/pattern rules from
+--- Config.PurchaseAddons.customPlate. Returns the normalized plate or
+--- (nil, errorCode) on failure.
+function NormalizeCustomPlate(input)
+    local cfg = (Config.PurchaseAddons and Config.PurchaseAddons.customPlate) or {}
+    if cfg.enabled == false then return nil, "addon_disabled" end
+    if type(input) ~= "string" then return nil, "plate_invalid" end
+    local normalized = input:gsub("%s+", ""):upper()
+    if normalized == "" then return nil, "plate_invalid" end
+    local minLen = tonumber(cfg.minLength) or 2
+    local maxLen = tonumber(cfg.maxLength) or 8
+    if #normalized < minLen or #normalized > maxLen then return nil, "plate_length" end
+    local pattern = cfg.pattern or "^[A-Z0-9%-]+$"
+    if not normalized:match(pattern) then return nil, "plate_pattern" end
+    return normalized
+end
+
+--- Soft uniqueness check across the common owned-vehicle tables. Returns
+--- false if any framework's owned-vehicle table already holds this plate.
+--- Tables that don't exist on this server are silently skipped — the pcall
+--- swallows the schema error so a single missing table doesn't break the
+--- check on other frameworks.
+function IsPlateAvailable(plate)
+    if type(plate) ~= "string" or plate == "" then return false end
+    local checks = {
+        "SELECT 1 FROM player_vehicles WHERE plate = ? LIMIT 1", -- qb / qbx
+        "SELECT 1 FROM owned_vehicles WHERE plate = ? LIMIT 1",  -- esx
+    }
+    for _, sql in ipairs(checks) do
+        local ok, rows = pcall(function()
+            return MySQL.query.await(sql, { plate })
+        end)
+        if ok and rows and #rows > 0 then return false end
+    end
+    return true
+end
+
+--- Total cost of the requested add-ons, charged on top of `basePrice` (the
+--- post-coupon vehicle price). Returns 0 when no add-ons were requested or
+--- when the add-on is disabled in config.
+function CalculateAddonCost(basePrice, addons)
+    if type(addons) ~= "table" then return 0 end
+    local total = 0
+    if addons.customPlate then
+        local cfg = (Config.PurchaseAddons and Config.PurchaseAddons.customPlate) or {}
+        if cfg.enabled ~= false then
+            local pct = tonumber(cfg.costPercent) or 0
+            total = total + math.floor((tonumber(basePrice) or 0) * pct)
+        end
+    end
+    return total
+end
+
+--- Resolves the add-ons payload from a callback. Returns:
+---   ok, addonCost, customPlate, errorMessage
+--- When `addons.customPlate` is set, validates the plate format and
+--- uniqueness. On error returns ok=false and a user-facing message.
+function ResolvePurchaseAddons(basePrice, addons)
+    if type(addons) ~= "table" then return true, 0, nil end
+    local addonCost = CalculateAddonCost(basePrice, addons)
+    local customPlate = nil
+    if addons.customPlate then
+        local cfg = (Config.PurchaseAddons and Config.PurchaseAddons.customPlate) or {}
+        if cfg.enabled == false then
+            return false, 0, nil, _L("error_addon_disabled") or "Add-on is currently disabled."
+        end
+        local normalized, err = NormalizeCustomPlate(addons.customPlate)
+        if not normalized then
+            local msg = ({
+                plate_invalid = _L("error_plate_invalid") or "Invalid license plate.",
+                plate_length  = _L("error_plate_length")  or "License plate must be the right length.",
+                plate_pattern = _L("error_plate_pattern") or "License plate contains invalid characters.",
+                addon_disabled = _L("error_addon_disabled") or "Add-on is currently disabled.",
+            })[err] or "Invalid license plate."
+            return false, 0, nil, msg
+        end
+        if not IsPlateAvailable(normalized) then
+            return false, 0, nil, _L("error_plate_taken") or "That license plate is already in use."
+        end
+        customPlate = normalized
+    end
+    return true, addonCost, customPlate
 end

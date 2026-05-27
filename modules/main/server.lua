@@ -127,22 +127,11 @@ lib.callback.register('pickle_dealerships:getDealershipData', function(source, l
     local resolved = ResolveDealershipConfig(cached)
     if not resolved then return nil end
 
-    local stock = {}
-    local employees = {}
-
-    if cached then
-        local stockResults = MySQL.query.await(
-            'SELECT * FROM pickle_dealership_stock WHERE dealership_id = ? AND sold_at IS NULL',
-            { cached.id }
-        )
-        stock = stockResults or {}
-
-        local employeeResults = MySQL.query.await(
-            'SELECT * FROM pickle_dealership_employees WHERE dealership_id = ?',
-            { cached.id }
-        )
-        employees = employeeResults or {}
-    end
+    -- Stock and employees are intentionally NOT loaded here. Earlier versions
+    -- shipped every stock row (potentially thousands) on every zone entry, but
+    -- no caller of getDealershipData consumes .stock or .employees — the
+    -- management UI, sales UI, and display spawner each call their own
+    -- targeted endpoints (`getStock` with displayOnly, `getEmployees`, etc.).
 
     -- Surface the disableSelfPurchase toggle so the client can hide customer
     -- purchase buttons before the request even goes server-side.
@@ -165,8 +154,6 @@ lib.callback.register('pickle_dealerships:getDealershipData', function(source, l
         deliveryMode = resolved.deliveryMode or 'timed',
         selfService = resolved.selfService or false,
         disableSelfPurchase = meta.disableSelfPurchase == true,
-        stock = stock,
-        employees = employees,
         -- "How many models the store could ever carry" (all tiers unlocked) —
         -- denominator on the dashboard stock bar.
         stockCapacity = GetDealershipCatalogMax({ type = resolved.type or 'car' }),

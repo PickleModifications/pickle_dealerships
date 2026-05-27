@@ -21,84 +21,81 @@ local function GenerateNPCProfile(dealershipId)
 
     local tier = dealership.tier or 1
 
-    -- Query actual available stock with wholesale costs and classes
-    local availableStock = MySQL.query.await(
-        'SELECT ds.wholesale_cost, wc.class FROM pickle_dealership_stock ds LEFT JOIN pickle_wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.unlisted = 0 AND ds.auction_id IS NULL AND ds.delivered_at IS NOT NULL AND ds.delivered_at <= NOW()',
+    -- Aggregate classes server-side so we don't ship every stock row across the
+    -- wire just to count distinct classes. One row per class.
+    local classRows = MySQL.query.await(
+        [[
+            SELECT LOWER(wc.class) AS class, COUNT(*) AS cnt
+            FROM pickle_dealership_stock ds
+            LEFT JOIN pickle_wholesale_catalog wc ON wc.model = ds.vehicle_model
+            WHERE ds.dealership_id = ?
+              AND ds.sold_at IS NULL
+              AND ds.unlisted = 0
+              AND ds.auction_id IS NULL
+              AND ds.delivered_at IS NOT NULL
+              AND ds.delivered_at <= NOW()
+              AND wc.class IS NOT NULL
+              AND wc.class <> ''
+            GROUP BY LOWER(wc.class)
+        ]],
         { dealershipId }
     )
 
-    if not availableStock or #availableStock == 0 then return nil end
+    if not classRows or #classRows == 0 then return nil end
 
-    -- Build available classes and MSRP price range from stock
     local availableClasses = {}
-    local classSet = {}
-    local minMSRP = math.huge
-    local maxMSRP = 0
-    for _, item in ipairs(availableStock) do
-        local cls = item.class
-        if cls and cls ~= '' then
-            local clsLower = string.lower(cls)
-            if not classSet[clsLower] then
-                classSet[clsLower] = true
-                availableClasses[#availableClasses + 1] = clsLower
-            end
-        end
-        local msrp = tonumber(item.wholesale_cost) or 0
-        if msrp > 0 then
-            if msrp < minMSRP then minMSRP = msrp end
-            if msrp > maxMSRP then maxMSRP = msrp end
-        end
+    for _, row in ipairs(classRows) do
+        availableClasses[#availableClasses + 1] = row.class
     end
-
-    if #availableClasses == 0 or maxMSRP == 0 then return nil end
 
     -- Pick type preference from what's actually in stock
     local typePreference = availableClasses[math.random(#availableClasses)]
 
-    -- Build budget based on MSRP of available vehicles in this class (+ 5% margin)
-    local classMinMSRP = math.huge
-    local classMaxMSRP = 0
-    for _, item in ipairs(availableStock) do
-        local cls = item.class and string.lower(item.class) or ''
-        if cls == typePreference then
-            local msrp = tonumber(item.wholesale_cost) or 0
-            if msrp > 0 then
-                if msrp < classMinMSRP then classMinMSRP = msrp end
-                if msrp > classMaxMSRP then classMaxMSRP = msrp end
-            end
-        end
+    -- Pick a random wholesale cost from the chosen class. Single-row result,
+    -- no client-side filtering needed.
+    local targetRow = MySQL.single.await(
+        [[
+            SELECT ds.wholesale_cost
+            FROM pickle_dealership_stock ds
+            LEFT JOIN pickle_wholesale_catalog wc ON wc.model = ds.vehicle_model
+            WHERE ds.dealership_id = ?
+              AND ds.sold_at IS NULL
+              AND ds.unlisted = 0
+              AND ds.auction_id IS NULL
+              AND ds.delivered_at IS NOT NULL
+              AND ds.delivered_at <= NOW()
+              AND LOWER(wc.class) = ?
+              AND ds.wholesale_cost > 0
+            ORDER BY RAND()
+            LIMIT 1
+        ]],
+        { dealershipId, typePreference }
+    )
+
+    local targetMSRP = targetRow and tonumber(targetRow.wholesale_cost) or 0
+
+    if targetMSRP <= 0 then
+        -- Fallback: any in-stock row with a positive cost (class data missing).
+        local fallback = MySQL.single.await(
+            [[
+                SELECT ds.wholesale_cost
+                FROM pickle_dealership_stock ds
+                WHERE ds.dealership_id = ?
+                  AND ds.sold_at IS NULL
+                  AND ds.unlisted = 0
+                  AND ds.auction_id IS NULL
+                  AND ds.delivered_at IS NOT NULL
+                  AND ds.delivered_at <= NOW()
+                  AND ds.wholesale_cost > 0
+                ORDER BY RAND()
+                LIMIT 1
+            ]],
+            { dealershipId }
+        )
+        targetMSRP = fallback and tonumber(fallback.wholesale_cost) or 0
     end
 
-    -- Fallback to all stock if class has no MSRP data
-    if classMaxMSRP == 0 then
-        classMinMSRP = minMSRP
-        classMaxMSRP = maxMSRP
-    end
-
-    -- Pick a random vehicle from this class as the budget target
-    local classMSRPs = {}
-    for _, item in ipairs(availableStock) do
-        local cls = item.class and string.lower(item.class) or ''
-        if cls == typePreference then
-            local msrp = tonumber(item.wholesale_cost) or 0
-            if msrp > 0 then
-                classMSRPs[#classMSRPs + 1] = msrp
-            end
-        end
-    end
-
-    local targetMSRP
-    if #classMSRPs > 0 then
-        targetMSRP = classMSRPs[math.random(#classMSRPs)]
-    else
-        -- Fallback: pick a random MSRP from all stock
-        local allMSRPs = {}
-        for _, item in ipairs(availableStock) do
-            local msrp = tonumber(item.wholesale_cost) or 0
-            if msrp > 0 then allMSRPs[#allMSRPs + 1] = msrp end
-        end
-        targetMSRP = allMSRPs[math.random(#allMSRPs)]
-    end
+    if targetMSRP <= 0 then return nil end
 
     -- Budget = target vehicle MSRP + 5-15% random margin so they can afford it
     local budget = math.floor(targetMSRP * (1.05 + math.random() * 0.10))

@@ -12,6 +12,9 @@ RegisterNUICallback("createFinancing", function(data, cb)
         downPayment = tonumber(data.downPayment) or 0,
         installments = tonumber(data.installments) or 12,
         paymentMethod = data.paymentMethod,
+        addons = data.addons,
+        couponCode = data.couponCode,
+        couponItemSlot = data.couponItemSlot,
     })
 
     if result and result.success then

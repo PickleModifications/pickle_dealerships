@@ -1086,4 +1086,18 @@ Language["pt"] = {
     spot_remove_vehicle = "Remove From Display",
     btn_place_here = "Place Here",
     catalog_unlocks_at_level = "Unlocks at Level %s",
+
+    -- Purchase add-ons
+    addon_custom_plate     = "Custom License Plate",
+    addon_plate_placeholder = "e.g. NIGHTOWL",
+    addon_plate_hint       = "%s-%s chars · letters, numbers, dashes",
+    contract_addons        = "Optional Add-ons",
+    label_due_at_signing   = "Due at signing (down + add-ons)",
+    label_total            = "Total",
+    error_addon_disabled   = "Add-on is currently disabled.",
+    error_plate_invalid    = "Invalid license plate.",
+    error_plate_length     = "License plate must be the right length.",
+    error_plate_pattern    = "License plate contains invalid characters.",
+    error_plate_taken      = "That license plate is already in use.",
+    coupon_typed_validated_at_submit = "Code will be validated when you confirm.",
 }

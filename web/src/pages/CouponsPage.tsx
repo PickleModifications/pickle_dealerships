@@ -29,6 +29,7 @@ export default function CouponsPage({ data, onClose }: Props) {
   const [discountType, setDiscountType] = useState<'percent' | 'flat'>('percent')
   const [discountValue, setDiscountValue] = useState('')
   const [maxUses, setMaxUses] = useState('0')
+  const [maxUsesPerPlayer, setMaxUsesPerPlayer] = useState('0')
   const [minPurchase, setMinPurchase] = useState('0')
   const [printingCoupon, setPrintingCoupon] = useState<Coupon | null>(null)
   const [printCount, setPrintCount] = useState('5')
@@ -53,12 +54,14 @@ export default function CouponsPage({ data, onClose }: Props) {
       discountType,
       discountValue: parseInt(discountValue),
       maxUses: parseInt(maxUses) || 0,
+      maxUsesPerPlayer: parseInt(maxUsesPerPlayer) || 0,
       minPurchase: parseInt(minPurchase) || 0,
     }).then(() => {
       setCreateOpen(false)
       setCode('')
       setDiscountValue('')
       setMaxUses('0')
+      setMaxUsesPerPlayer('0')
       setMinPurchase('0')
       loadCoupons()
     })
@@ -86,24 +89,27 @@ export default function CouponsPage({ data, onClose }: Props) {
 
   return (
     <>
-      {!data.embedded && (
+      {!data.embedded ? (
         <>
           <div className="flex items-center justify-between p-5 pb-0">
             <div>
               <h1 className="text-xl font-bold">{t('coupons_title')}</h1>
               <p className="text-sm text-muted-foreground">{data.dealershipName}</p>
             </div>
-            <div className="flex gap-2">
-              <Button size="sm" onClick={() => setCreateOpen(true)} className="gap-1">
-                <Plus className="h-4 w-4" /> {t('btn_create')}
-              </Button>
-              <Button variant="ghost" size="icon" onClick={onClose}>
-                <X className="h-5 w-5" />
-              </Button>
-            </div>
+            <Button variant="ghost" size="icon" onClick={onClose}>
+              <X className="h-5 w-5" />
+            </Button>
           </div>
 
           <Separator className="mt-4" />
+        </>
+      ) : (
+        <>
+          <div className="p-5 pb-3">
+            <h1 className="text-xl font-bold">{t('coupons_title')}</h1>
+            <p className="text-sm text-muted-foreground">{t('menu_coupons_desc')}</p>
+          </div>
+          <Separator />
         </>
       )}
 
@@ -154,6 +160,10 @@ export default function CouponsPage({ data, onClose }: Props) {
                       <p>{coupon.uses} / {coupon.max_uses === 0 ? t('coupons_unlimited') : coupon.max_uses}</p>
                     </div>
                     <div>
+                      <p className="text-xs text-muted-foreground">{t('coupons_max_uses_per_player')}</p>
+                      <p>{coupon.max_uses_per_player > 0 ? coupon.max_uses_per_player : t('coupons_unlimited')}</p>
+                    </div>
+                    <div>
                       <p className="text-xs text-muted-foreground">{t('coupons_min_purchase')}</p>
                       <p>{coupon.min_purchase > 0 ? formatCurrency(coupon.min_purchase) : t('coupons_none_value')}</p>
                     </div>
@@ -170,6 +180,12 @@ export default function CouponsPage({ data, onClose }: Props) {
           </div>
         )}
       </ScrollArea>
+
+      <div className="border-t p-4">
+        <Button className="w-full gap-1" onClick={() => setCreateOpen(true)}>
+          <Plus className="h-4 w-4" /> {t('btn_create')}
+        </Button>
+      </div>
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent onClose={() => setCreateOpen(false)}>
@@ -215,12 +231,18 @@ export default function CouponsPage({ data, onClose }: Props) {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-sm font-medium">{t('coupons_max_uses')}</label>
-                <Input type="number" value={maxUses} onChange={(e) => setMaxUses(e.target.value)} className="mt-1" />
+                <Input type="number" min={0} value={maxUses} onChange={(e) => setMaxUses(e.target.value)} className="mt-1" />
+                <p className="text-[10px] text-muted-foreground mt-1">{t('coupons_max_uses_hint')}</p>
               </div>
               <div>
-                <label className="text-sm font-medium">{t('coupons_min_purchase')}</label>
-                <Input type="number" value={minPurchase} onChange={(e) => setMinPurchase(e.target.value)} className="mt-1" />
+                <label className="text-sm font-medium">{t('coupons_max_uses_per_player')}</label>
+                <Input type="number" min={0} value={maxUsesPerPlayer} onChange={(e) => setMaxUsesPerPlayer(e.target.value)} className="mt-1" />
+                <p className="text-[10px] text-muted-foreground mt-1">{t('coupons_max_uses_per_player_hint')}</p>
               </div>
+            </div>
+            <div>
+              <label className="text-sm font-medium">{t('coupons_min_purchase')}</label>
+              <Input type="number" min={0} value={minPurchase} onChange={(e) => setMinPurchase(e.target.value)} className="mt-1" />
             </div>
             <Button className="w-full" onClick={handleCreate}>{t('coupons_create_title')}</Button>
           </div>

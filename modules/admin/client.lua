@@ -985,6 +985,18 @@ RegisterNUICallback("adminStartPhotoCapture", function(data, cb)
     OpenNui('photoBooth', nuiData)
 end)
 
+-- UI-driven error notifications. The capture path covers screenshot-side
+-- failures, but upload failures happen entirely inside the NUI (fetch to the
+-- configured upload endpoint) and weren't surfacing as game notifications.
+-- This lets the photo booth UI ask the client to show one.
+RegisterNUICallback("photoBoothError", function(data, cb)
+    local message = type(data) == "table" and data.message
+    if type(message) == "string" and message ~= "" then
+        ShowNotification(message)
+    end
+    cb({ success = true })
+end)
+
 RegisterNUICallback("photoBoothCapture", function(_, cb)
     if not PhotoBoothState then cb({ success = false }) return end
 
@@ -992,8 +1004,7 @@ RegisterNUICallback("photoBoothCapture", function(_, cb)
     CloseNui()
     Wait(200)
 
-    CaptureScreenshot(function(screenshotData)
-        -- Reopen the photo booth UI so the component is mounted
+    local function reopenBooth()
         OpenNui('photoBooth', {
             dealershipId = 0,
             dealershipName = 'Photo Booth',
@@ -1005,12 +1016,30 @@ RegisterNUICallback("photoBoothCapture", function(_, cb)
             vehicleClass = PhotoBoothState and PhotoBoothState.vehicleClass,
             uploadConfig = PhotoBoothState and PhotoBoothState.uploadConfig,
         })
+    end
+
+    CaptureScreenshot(function(screenshotData)
+        -- Always reopen the UI so the user isn't left stuck in a hidden state.
+        reopenBooth()
+
+        -- CaptureScreenshot returns nil when no screenshot resource is
+        -- installed (standalone fallback) and an empty string from some
+        -- upload bridges if the upload itself failed. Both used to silently
+        -- proceed and the UI would just show an empty/broken image with no
+        -- explanation — surface the failure as a notification + a typed
+        -- NUI message so the photo-booth modal can also react.
+        if type(screenshotData) ~= "string" or screenshotData == "" then
+            ShowNotification(_L("admin_capture_failed"))
+            Wait(100)
+            SendNUIMessage({ type = 'photoBoothCaptured', imageData = nil, error = true })
+            cb({ success = false, message = _L("admin_capture_failed") })
+            return
+        end
 
         Wait(100)
         SendNUIMessage({ type = 'photoBoothCaptured', imageData = screenshotData })
+        cb({ success = true })
     end)
-
-    cb({ success = true })
 end)
 
 RegisterNUICallback("photoBoothSave", function(data, cb)

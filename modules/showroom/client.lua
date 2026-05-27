@@ -531,6 +531,7 @@ RegisterNUICallback("showroomPurchase", function(data, cb)
         stockId = data.stockId,
         paymentMethod = data.paymentMethod or "cash",
         couponCode = data.couponCode,
+        addons = data.addons,
     })
 
     if not result or not result.success then
@@ -572,6 +573,9 @@ RegisterNUICallback("showroomFinance", function(data, cb)
         downPayment = data.downPayment,
         installments = data.installments,
         paymentMethod = data.paymentMethod,
+        addons = data.addons,
+        couponCode = data.couponCode,
+        couponItemSlot = data.couponItemSlot,
     })
 
     if not result or not result.success then

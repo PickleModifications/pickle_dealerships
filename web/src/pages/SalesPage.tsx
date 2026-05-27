@@ -9,11 +9,12 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { fetchNui, formatClass, formatCurrency, getVehicleImage } from '../lib/utils'
 import { t } from '../lib/locale'
-import { getCached, setCache, buildKey } from '../lib/cache'
 import { SkeletonCardGrid } from '../components/ui/skeleton'
 import { X, Search, CreditCard, Car, Tag, Banknote, FileText, Shield, Coins } from 'lucide-react'
 import VehicleImg from '../components/VehicleImg'
 import { PickleFaxDialog } from '../components/PickleFax'
+import PurchaseAddons, { type PurchaseAddonsValue } from '../components/PurchaseAddons'
+import CouponPickerDialog, { type InventoryCoupon } from '../components/CouponPickerDialog'
 import type { DealershipData, StockItem, SocietyMatch, AltPaymentOption } from '../types'
 
 function getStockMinGrade(item: StockItem): number {
@@ -34,19 +35,18 @@ interface Props {
 }
 
 const TABLET_PAGE_SIZE = 20
+const DESK_PAGE_SIZE = 50
 
 export default function SalesPage({ data, onClose }: Props) {
   const tabletMode = !!data.tabletMode
-  const cacheKey = buildKey(data.dealershipId, 'sales')
-  const cached = getCached<StockItem[]>(cacheKey)
-  // The in-world / front-desk flow keeps the legacy "load all stock then
-  // filter client-side" path so the existing UI features (used / display
-  // badges, etc.) work without a server round-trip per scroll. The tablet
-  // path is paginated server-side because operators may have hundreds of
-  // vehicles and we don't want to ship every row over NUI on open.
-  const [stock, setStock] = useState<StockItem[]>(tabletMode ? [] : (cached ?? []))
+  // Both paths now use the same paginated server endpoint. Tablet uses a
+  // tighter page size (it's the rapid-fire operator view, smaller cards);
+  // the in-world / front-desk view uses larger cards so it can load fewer
+  // per page without making the user scroll constantly.
+  const PAGE_SIZE = tabletMode ? TABLET_PAGE_SIZE : DESK_PAGE_SIZE
+  const [stock, setStock] = useState<StockItem[]>([])
   const [search, setSearch] = useState('')
-  const [loading, setLoading] = useState(tabletMode || !cached)
+  const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState<StockItem | null>(null)
   const [couponCode, setCouponCode] = useState('')
   // paymentMethod: 'cash' | 'bank' | 'society' | `alt:${key}`
@@ -57,24 +57,13 @@ export default function SalesPage({ data, onClose }: Props) {
   const [sellToOpen, setSellToOpen] = useState(false)
   const [couponItemSlot, setCouponItemSlot] = useState<number | null>(null)
   const [couponPickerOpen, setCouponPickerOpen] = useState(false)
-  // Tablet pagination state — unused outside tablet mode.
+  const [addons, setAddons] = useState<PurchaseAddonsValue>({})
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
   const [loadingMore, setLoadingMore] = useState(false)
 
-  // Front-desk path: load every available row in one shot.
   useEffect(() => {
     if (tabletMode) return
-    fetchNui<StockItem[] | { stock: StockItem[] }>('getStock', {
-      dealershipId: data.dealershipId,
-      location: data.location,
-    }).then((res) => {
-      const items = Array.isArray(res) ? res : (res && 'stock' in res ? res.stock : [])
-      setStock(items)
-      setCache(cacheKey, items)
-      setLoading(false)
-    }).catch(() => setLoading(false))
-
     fetchNui<{ match: SocietyMatch | null }>('canUseSocietyFunds', {
       dealershipId: data.dealershipId,
     }).then((res) => {
@@ -82,19 +71,22 @@ export default function SalesPage({ data, onClose }: Props) {
     }).catch(() => setSocietyMatch(null))
   }, [data.dealershipId, tabletMode])
 
-  // Tablet path: server-side paginated fetch, debounced on search input.
+  // Server-side paginated fetch, debounced on search input. Scope=public +
+  // tab=all returns only available, listed, non-auctioned, delivered rows —
+  // no client-side filtering needed.
   useEffect(() => {
-    if (!tabletMode) return
     let cancelled = false
     setLoading(true)
     const handle = setTimeout(() => {
-      fetchNui<{ items: StockItem[]; total: number; page: number }>('getShowroomStock', {
+      fetchNui<{ items: StockItem[]; total: number; page: number }>('getStock', {
         dealershipId: data.dealershipId,
         location: data.location,
+        tab: 'all',
+        scope: 'public',
         page: 1,
-        pageSize: TABLET_PAGE_SIZE,
+        pageSize: PAGE_SIZE,
         search: search || '',
-        classFilter: 'all',
+        sortBy: 'name_asc',
       }).then((res) => {
         if (cancelled) return
         setStock(res?.items ?? [])
@@ -104,19 +96,21 @@ export default function SalesPage({ data, onClose }: Props) {
       }).catch(() => { if (!cancelled) setLoading(false) })
     }, search ? 220 : 0)
     return () => { cancelled = true; clearTimeout(handle) }
-  }, [tabletMode, data.dealershipId, data.location, search])
+  }, [data.dealershipId, data.location, search, PAGE_SIZE])
 
   const loadMore = () => {
-    if (!tabletMode || loadingMore || stock.length >= total) return
+    if (loadingMore || stock.length >= total) return
     setLoadingMore(true)
     const next = page + 1
-    fetchNui<{ items: StockItem[]; total: number; page: number }>('getShowroomStock', {
+    fetchNui<{ items: StockItem[]; total: number; page: number }>('getStock', {
       dealershipId: data.dealershipId,
       location: data.location,
+      tab: 'all',
+      scope: 'public',
       page: next,
-      pageSize: TABLET_PAGE_SIZE,
+      pageSize: PAGE_SIZE,
       search: search || '',
-      classFilter: 'all',
+      sortBy: 'name_asc',
     }).then((res) => {
       setStock((prev) => [...prev, ...(res?.items ?? [])])
       setTotal(res?.total ?? total)
@@ -124,16 +118,9 @@ export default function SalesPage({ data, onClose }: Props) {
     }).finally(() => setLoadingMore(false))
   }
 
-  // The tablet endpoint already returns only the available + filtered set,
-  // so skip the client-side `available`/`filtered` derivation in that mode.
-  const available = tabletMode
-    ? stock
-    : stock.filter((s) => !s.sold_at && !s.unlisted && !s.auction_id && s.delivered_at && new Date(s.delivered_at) <= new Date())
-  const filtered = tabletMode
-    ? stock
-    : available.filter((item) =>
-        (item.vehicle_label || item.vehicle_model).toLowerCase().includes(search.toLowerCase())
-      )
+  // Server already filters: only available, listed, non-auctioned, delivered.
+  const available = stock
+  const filtered = stock
 
   // Fetch alt-payment balances whenever the selected vehicle (or its price) changes
   useEffect(() => {
@@ -149,6 +136,10 @@ export default function SalesPage({ data, onClose }: Props) {
     }).catch(() => setAltOptions([]))
   }, [selected?.id, selected?.retail_price, data.dealershipId])
 
+  // Clear the addons state any time the customer switches vehicles so the
+  // previous selection's plate input doesn't carry over.
+  useEffect(() => { setAddons({}) }, [selected?.id])
+
   const handlePurchase = () => {
     if (!selected) return
     fetchNui('purchaseVehicle', {
@@ -163,10 +154,12 @@ export default function SalesPage({ data, onClose }: Props) {
       paymentMethod,
       couponCode: couponCode || undefined,
       couponItemSlot: couponItemSlot ?? undefined,
+      addons,
     }).then(() => {
       setSelected(null)
       setCouponCode('')
       setCouponItemSlot(null)
+      setAddons({})
       setStock((prev) => prev.filter((s) => s.id !== selected.id))
     })
   }
@@ -293,7 +286,7 @@ export default function SalesPage({ data, onClose }: Props) {
             ))}
           </div>
         )}
-        {tabletMode && stock.length < total && !loading && (
+        {stock.length < total && !loading && (
           <div className="flex justify-center pt-3 pb-1">
             <Button
               size="sm"
@@ -412,6 +405,13 @@ export default function SalesPage({ data, onClose }: Props) {
                 )}
               </div>
 
+              <PurchaseAddons
+                price={selected.retail_price}
+                value={addons}
+                onChange={setAddons}
+                disabled={!!selected.is_used}
+              />
+
               {data.disableSelfPurchase && !isEmployee ? (
                 <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-200 flex items-start gap-2">
                   <Shield className="h-4 w-4 shrink-0 mt-0.5" />
@@ -471,81 +471,6 @@ export default function SalesPage({ data, onClose }: Props) {
       )}
       </div>
     </>
-  )
-}
-
-type InventoryCoupon = {
-  slot: number | null
-  count: number
-  code: string
-  discountType?: 'percent' | 'flat' | string
-  discountValue?: number
-  minPurchase?: number
-  expiresAt?: number | null
-  dealershipName?: string
-}
-
-function CouponPickerDialog(props: {
-  dealershipId: number
-  price: number
-  onClose: () => void
-  onPick: (c: InventoryCoupon) => void
-}) {
-  const { dealershipId, price, onClose, onPick } = props
-  const [rows, setRows] = useState<InventoryCoupon[] | null>(null)
-
-  useEffect(() => {
-    fetchNui<{ coupons: InventoryCoupon[] }>('listInventoryCoupons', {
-      dealershipId, price,
-    }).then((res) => setRows(res?.coupons ?? [])).catch(() => setRows([]))
-  }, [dealershipId, price])
-
-  return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent onClose={onClose}>
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2"><Tag className="h-4 w-4" /> {t('coupon_picker_title')}</DialogTitle>
-          <DialogDescription>{t('coupon_picker_desc')}</DialogDescription>
-        </DialogHeader>
-        <div className="space-y-2 pt-2">
-          {rows === null ? (
-            <div className="text-sm text-muted-foreground py-4 text-center">{t('loading')}</div>
-          ) : rows.length === 0 ? (
-            <div className="text-sm text-muted-foreground py-4 text-center">{t('coupon_no_eligible')}</div>
-          ) : (
-            <div className="max-h-72 overflow-y-auto space-y-1.5">
-              {rows.map((c, i) => {
-                const discountText = c.discountType === 'percent'
-                  ? `${c.discountValue}% off`
-                  : c.discountValue
-                    ? formatCurrency(c.discountValue) + ' off'
-                    : ''
-                return (
-                  <button
-                    key={`${c.code}-${c.slot ?? 'none'}-${i}`}
-                    type="button"
-                    onClick={() => onPick(c)}
-                    className="w-full text-left rounded-md border border-border p-2.5 hover:border-accent/50 hover:bg-muted/50 transition-colors"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-mono text-sm">{c.code}</span>
-                      <Badge variant="secondary" className="text-[10px]">x{c.count}</Badge>
-                    </div>
-                    <div className="text-xs text-muted-foreground mt-0.5 flex items-center gap-2">
-                      {discountText && <span className="text-accent">{discountText}</span>}
-                      {c.dealershipName && <span>· {c.dealershipName}</span>}
-                    </div>
-                  </button>
-                )
-              })}
-            </div>
-          )}
-          <div className="flex justify-end pt-2">
-            <Button variant="outline" onClick={onClose}>{t('btn_cancel')}</Button>
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
   )
 }
 

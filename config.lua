@@ -268,12 +268,33 @@ Config.VehicleKeys = {
         { name = 'qb-vehiclekeys:server:AcquireVehicleKeys',  scope = 'server' }, -- qb-vehiclekeys
         { name = 'vehiclekeys:server:setVehicleOwner',        scope = 'server' }, -- cd_garage / Renewed-Vehiclekeys
     },
+    -- mk_vehiclekeys ships an export rather than an event, so it's detected
+    -- and called from the bridge directly when the resource is running. Set
+    -- to false to opt out (e.g. if you've wired it through customHandler).
+    mkVehiclekeys = true,
     customHandler = nil, -- function(veh, plate) ... end
 }
 
 -- Test Drive Settings
 Config.TestDriveTime = 120 -- Seconds
 Config.TestDriveRadius = 500.0
+
+-- Purchase Add-ons
+-- Optional extras the buyer can tack on at checkout. The cost is a flat
+-- percentage of the vehicle's retail price (the post-coupon final price).
+Config.PurchaseAddons = {
+    customPlate = {
+        enabled = true,
+        costPercent = 0.02, -- 2% of vehicle price
+        -- Plate validation. GTA plates fit in 8 chars; spaces and dashes are
+        -- accepted but stripped on save so they don't break key lookups.
+        minLength = 2,
+        maxLength = 8,
+        -- Allowed pattern after stripping whitespace. Letters, numbers, and
+        -- a few punctuation chars commonly accepted by key systems.
+        pattern = "^[A-Z0-9%-]+$",
+    },
+}
 
 -- Lot Rent (0 = disabled, otherwise daily cost)
 Config.LotRent = 0

@@ -1,10 +1,19 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { X, FileText, CreditCard, AlertTriangle, PenLine, Banknote, Wallet } from 'lucide-react'
+import { X, FileText, CreditCard, AlertTriangle, PenLine, Banknote, Wallet, Hash, Tag } from 'lucide-react'
 import Vara from 'vara'
 import satisfyFont from '../../public/fonts/satisfy.json'
 import { formatCurrency, fetchNui } from '../lib/utils'
 import { t } from '../lib/locale'
 import type { FinancingSettings } from '../types'
+import { type PurchaseAddonsValue, usePurchaseAddonsConfig, calculateAddonCost } from './PurchaseAddons'
+import CouponPickerDialog, { type InventoryCoupon } from './CouponPickerDialog'
+
+export interface FinancingCoupon {
+  code: string
+  slot?: number | null
+  /** Optional discount preview, populated when picked from inventory. */
+  discount?: number
+}
 
 interface Props {
   vehicleLabel: string
@@ -12,18 +21,19 @@ interface Props {
   vehicleClass?: string
   isUsed?: boolean
   price: number
+  dealershipId: number
   dealershipName: string
   settings: FinancingSettings
   initialInstallments?: number
   playerName?: string
-  onSign: (installments: number, paymentMethod: 'cash' | 'bank') => void
+  onSign: (installments: number, paymentMethod: 'cash' | 'bank', addons: PurchaseAddonsValue, coupon: FinancingCoupon | null) => void
   onClose: () => void
   signing?: boolean
 }
 
 const SIGN_DURATION = 5000
 
-export default function FinancingContractDialog({ vehicleLabel, vehicleModel, vehicleClass, isUsed, price, dealershipName, settings, initialInstallments, playerName, onSign, onClose, signing }: Props) {
+export default function FinancingContractDialog({ vehicleLabel, vehicleModel, vehicleClass, isUsed, price, dealershipId, dealershipName, settings, initialInstallments, playerName, onSign, onClose, signing }: Props) {
   const [visible, setVisible] = useState(false)
   const [closing, setClosing] = useState(false)
   const [installments, setInstallments] = useState(initialInstallments ?? settings.installmentOptions[0] ?? 8)
@@ -32,6 +42,20 @@ export default function FinancingContractDialog({ vehicleLabel, vehicleModel, ve
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'bank'>('bank')
   const [balances, setBalances] = useState<{ cash: number; bank: number } | null>(null)
   const [fundsError, setFundsError] = useState<string | null>(null)
+  const [addons, setAddons] = useState<PurchaseAddonsValue>({})
+  const [coupon, setCoupon] = useState<FinancingCoupon | null>(null)
+  const [couponInput, setCouponInput] = useState('')
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const addonsConfig = usePurchaseAddonsConfig()
+  const plateCfg = addonsConfig?.customPlate
+  // Addon cost is paid upfront at signing — it sits beside the down payment,
+  // not inside the financed/interest-bearing balance.
+  const addonCost = calculateAddonCost(price, addons, addonsConfig)
+  const customPlateEnabled = addons.customPlate !== undefined
+  const sanitizePlate = (raw: string) => {
+    const max = plateCfg?.maxLength ?? 8
+    return raw.toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, max)
+  }
   const varaContainerRef = useRef<HTMLDivElement>(null)
   const varaInstanceRef = useRef<Vara | null>(null)
   const signTimerRef = useRef<number | null>(null)
@@ -62,8 +86,12 @@ export default function FinancingContractDialog({ vehicleLabel, vehicleModel, ve
   // Normalize minDownPercent: default to 30 if nullish; if it's a legacy decimal (< 1, e.g. 0.3), convert to percent form.
   const rawMinDown = settings.minDownPercent
   const normalizedMinDown = rawMinDown == null ? 30 : (rawMinDown < 1 ? rawMinDown * 100 : rawMinDown)
-  const downPayment = Math.floor(price * normalizedMinDown / 100)
-  const financed = price - downPayment
+  // Coupon (if any) discounts the vehicle price BEFORE the down/financed
+  // split — matches the server-side flow in createFinancing.
+  const couponDiscount = coupon?.discount ?? 0
+  const effectivePrice = Math.max(0, price - couponDiscount)
+  const downPayment = Math.floor(effectivePrice * normalizedMinDown / 100)
+  const financed = effectivePrice - downPayment
   const totalInterest = Math.floor(financed * interestRate / 100)
   const totalWithInterest = financed + totalInterest
   const installmentAmount = Math.ceil(totalWithInterest / installments)
@@ -85,10 +113,12 @@ export default function FinancingContractDialog({ vehicleLabel, vehicleModel, ve
   useEffect(() => () => URL.revokeObjectURL(fontBlobUrl), [fontBlobUrl])
 
   const startSigning = useCallback(() => {
-    // Pre-flight: check if the player has enough in the chosen account
+    // Pre-flight: check if the player has enough in the chosen account.
+    // Addon cost is also paid upfront, so it must clear the same balance.
+    const upfront = downPayment + addonCost
     const available = paymentMethod === 'cash' ? (balances?.cash ?? 0) : (balances?.bank ?? 0)
-    if (available < downPayment) {
-      setFundsError(t('contract_insufficient_funds', formatCurrency(downPayment), formatCurrency(available)))
+    if (available < upfront) {
+      setFundsError(t('contract_insufficient_funds', formatCurrency(upfront), formatCurrency(available)))
       return
     }
     setFundsError(null)
@@ -96,7 +126,7 @@ export default function FinancingContractDialog({ vehicleLabel, vehicleModel, ve
     setSignProgress(0)
     signStartRef.current = Date.now()
     onSignCalledRef.current = false
-  }, [balances, downPayment, paymentMethod])
+  }, [balances, downPayment, addonCost, paymentMethod])
 
   // Initialize Vara when the signing UI mounts
   useEffect(() => {
@@ -120,7 +150,7 @@ export default function FinancingContractDialog({ vehicleLabel, vehicleModel, ve
     instance.animationEnd(() => {
       if (!onSignCalledRef.current) {
         onSignCalledRef.current = true
-        onSign(installments, paymentMethod)
+        onSign(installments, paymentMethod, addons, coupon)
       }
     })
 
@@ -128,7 +158,7 @@ export default function FinancingContractDialog({ vehicleLabel, vehicleModel, ve
       varaInstanceRef.current = null
       if (container) container.innerHTML = ''
     }
-  }, [isSigning, sigName, installments, onSign, fontBlobUrl, paymentMethod])
+  }, [isSigning, sigName, installments, onSign, fontBlobUrl, paymentMethod, addons, coupon])
 
   // Progress bar tick — independent of Vara internals
   useEffect(() => {
@@ -234,12 +264,80 @@ export default function FinancingContractDialog({ vehicleLabel, vehicleModel, ve
             {/* Purchase Summary */}
             <Section title={t('contract_purchase_summary')}>
               <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
-                <FactRow label={t('label_vehicle_price')}><span className="font-semibold">{formatCurrency(price)}</span></FactRow>
+                <FactRow label={t('label_vehicle_price')}>
+                  {couponDiscount > 0 ? (
+                    <span>
+                      <span className="line-through text-stone-400 mr-1.5">{formatCurrency(price)}</span>
+                      <span className="font-semibold">{formatCurrency(effectivePrice)}</span>
+                    </span>
+                  ) : (
+                    <span className="font-semibold">{formatCurrency(price)}</span>
+                  )}
+                </FactRow>
                 <FactRow label={t('label_down_payment', Math.round(settings.minDownPercent))}><span className="font-semibold text-emerald-700">{formatCurrency(downPayment)}</span></FactRow>
                 <FactRow label={t('label_financed_amount')}><span className="font-semibold">{formatCurrency(financed)}</span></FactRow>
                 <FactRow label={t('label_interest_rate')}><span className="font-semibold">{interestRate}%</span></FactRow>
               </div>
             </Section>
+
+            {/* Coupon. Customers can paste a code or pull one from inventory.
+                Discount applies to the vehicle price before the down/financed
+                split (see effectivePrice math above), so the down payment %
+                and the loan balance both shrink. */}
+            {!isSigning && (
+              <Section title={t('coupons_title') || 'Coupon'}>
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Tag className="h-4 w-4 text-stone-600 shrink-0" />
+                    <input
+                      type="text"
+                      value={couponInput}
+                      onChange={(e) => setCouponInput(e.target.value.toUpperCase())}
+                      onBlur={() => {
+                        const code = couponInput.trim().toUpperCase()
+                        if (!code) { setCoupon(null); return }
+                        setCoupon({ code, slot: null })
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          const code = couponInput.trim().toUpperCase()
+                          if (!code) { setCoupon(null); return }
+                          setCoupon({ code, slot: null })
+                        }
+                      }}
+                      placeholder={t('label_enter_coupon')}
+                      className="flex-1 h-8 px-2 rounded border-2 border-stone-400 bg-white/60 text-stone-900 font-mono uppercase tracking-widest text-sm focus:outline-none focus:border-blue-800"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setPickerOpen(true)}
+                      className="text-[11px] text-blue-800 hover:text-blue-900 underline shrink-0"
+                    >
+                      {t('coupon_select_existing')}
+                    </button>
+                    {coupon && (
+                      <button
+                        type="button"
+                        onClick={() => { setCoupon(null); setCouponInput('') }}
+                        className="text-stone-500 hover:text-stone-900 shrink-0"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+                  {coupon && couponDiscount > 0 && (
+                    <FactRow label={`${t('label_coupon_code')} (${coupon.code})`}>
+                      <span className="font-semibold text-emerald-700">-{formatCurrency(couponDiscount)}</span>
+                    </FactRow>
+                  )}
+                  {coupon && !couponDiscount && (
+                    <p className="text-[10px] text-stone-500">
+                      {t('coupon_typed_validated_at_submit') || 'Code will be validated when you sign.'}
+                    </p>
+                  )}
+                </div>
+              </Section>
+            )}
 
             {/* Payment Terms */}
             <Section title={t('contract_payment_schedule')}>
@@ -250,6 +348,59 @@ export default function FinancingContractDialog({ vehicleLabel, vehicleModel, ve
                 <FactRow label={t('label_payment_interval')}><span className="font-semibold">{t('label_every', intervalLabel)}</span></FactRow>
               </div>
             </Section>
+
+            {/* Optional Add-ons. Hidden for pre-owned (the existing plate
+                carries over) and when the dealership owner has disabled
+                the add-on in config. */}
+            {plateCfg && plateCfg.enabled && !isUsed && (
+              <Section title={t('contract_addons') || 'Optional Add-ons'}>
+                <div className="space-y-3">
+                  <label className="flex items-center justify-between gap-3 cursor-pointer">
+                    <span className="flex items-center gap-2 text-sm">
+                      <Hash className="h-4 w-4 text-stone-600" />
+                      <span className="font-semibold">{t('addon_custom_plate') || 'Custom License Plate'}</span>
+                      <span className="text-[10px] uppercase tracking-wider text-stone-500">
+                        {Math.round(plateCfg.costPercent * 100)}% of price
+                      </span>
+                    </span>
+                    <span className="flex items-center gap-3">
+                      <span className={`text-sm font-semibold ${customPlateEnabled ? 'text-blue-800' : 'text-stone-400'}`}>
+                        +{formatCurrency(Math.floor(price * plateCfg.costPercent))}
+                      </span>
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 accent-blue-800 cursor-pointer"
+                        checked={customPlateEnabled}
+                        disabled={isSigning}
+                        onChange={(e) => setAddons((prev) => ({ ...prev, customPlate: e.target.checked ? '' : undefined }))}
+                      />
+                    </span>
+                  </label>
+                  {customPlateEnabled && (
+                    <div>
+                      <input
+                        type="text"
+                        value={addons.customPlate ?? ''}
+                        disabled={isSigning}
+                        onChange={(e) => setAddons((prev) => ({ ...prev, customPlate: sanitizePlate(e.target.value) }))}
+                        placeholder={t('addon_plate_placeholder')}
+                        maxLength={plateCfg.maxLength}
+                        className="w-full h-9 px-3 rounded border-2 border-stone-400 bg-white/60 text-stone-900 font-mono uppercase tracking-widest text-sm focus:outline-none focus:border-blue-800"
+                      />
+                      <p className="text-[10px] text-stone-500 mt-1">
+                        {t('addon_plate_hint', String(plateCfg.minLength), String(plateCfg.maxLength)) ||
+                          `${plateCfg.minLength}-${plateCfg.maxLength} chars · letters, numbers, dashes · paid upfront at signing`}
+                      </p>
+                    </div>
+                  )}
+                  {addonCost > 0 && (
+                    <FactRow label={t('label_due_at_signing') || 'Due at signing (down + add-ons)'}>
+                      <span className="font-bold text-blue-800">{formatCurrency(downPayment + addonCost)}</span>
+                    </FactRow>
+                  )}
+                </div>
+              </Section>
+            )}
 
             {/* Terms & Conditions */}
             <Section title={t('contract_terms_title')}>
@@ -330,6 +481,21 @@ export default function FinancingContractDialog({ vehicleLabel, vehicleModel, ve
           </div>
         </div>
       </div>
+      {pickerOpen && (
+        <CouponPickerDialog
+          dealershipId={dealershipId}
+          price={price}
+          onClose={() => setPickerOpen(false)}
+          onPick={(c: InventoryCoupon) => {
+            setCouponInput(c.code)
+            const discount = c.discountType === 'percent' && c.discountValue
+              ? Math.floor(price * (c.discountValue / 100))
+              : (c.discountValue ?? 0)
+            setCoupon({ code: c.code, slot: c.slot ?? null, discount })
+            setPickerOpen(false)
+          }}
+        />
+      )}
     </>
   )
 }

@@ -432,6 +432,22 @@ RegisterNUICallback('close', function(_, cb)
     cb('ok')
 end)
 
+-- Surfaces the configured purchase add-ons (custom plate, etc.) to the React
+-- UI so it can render the appropriate toggle / input and preview the cost.
+-- Read straight from the shared Config — no server round-trip needed.
+RegisterNUICallback('getPurchaseAddons', function(_, cb)
+    local cfg = Config.PurchaseAddons or {}
+    local plate = cfg.customPlate or {}
+    cb({
+        customPlate = {
+            enabled     = plate.enabled ~= false,
+            costPercent = tonumber(plate.costPercent) or 0,
+            minLength   = tonumber(plate.minLength) or 2,
+            maxLength   = tonumber(plate.maxLength) or 8,
+        },
+    })
+end)
+
 RegisterNUICallback('ready', function(_, cb)
     cb('ok')
 end)

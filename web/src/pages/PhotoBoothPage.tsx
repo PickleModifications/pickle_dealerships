@@ -60,22 +60,42 @@ async function cropImage(base64: string, crop: { x: number; y: number; w: number
   })
 }
 
-async function uploadImage(blob: Blob, config: NonNullable<DealershipData['uploadConfig']>): Promise<string | null> {
+type UploadResult =
+  | { ok: true, url: string }
+  | { ok: false, reason: 'http', status: number, body: string }
+  | { ok: false, reason: 'no_url_in_response', body: string }
+  | { ok: false, reason: 'network', message: string }
+
+async function uploadImage(blob: Blob, config: NonNullable<DealershipData['uploadConfig']>): Promise<UploadResult> {
   const formData = new FormData()
   formData.append(config.field, blob, 'photo.png')
 
+  let res: Response
   try {
-    const res = await fetch(config.url, {
+    res = await fetch(config.url, {
       method: 'POST',
       headers: config.headers || {},
       body: formData,
     })
-    const json = await res.json()
-    const key = config.returnPathKey || 'url'
-    return json[key] || null
-  } catch {
-    return null
+  } catch (e) {
+    return { ok: false, reason: 'network', message: (e as Error)?.message || 'fetch threw' }
   }
+
+  // Always grab the body once so we can include it in the diagnostic
+  // regardless of which branch fails.
+  const body = await res.text().catch(() => '')
+  if (!res.ok) {
+    return { ok: false, reason: 'http', status: res.status, body }
+  }
+
+  let json: any = null
+  try { json = JSON.parse(body) } catch { /* fall through */ }
+  const key = config.returnPathKey || 'url'
+  const url = json && typeof json[key] === 'string' ? json[key] : null
+  if (!url) {
+    return { ok: false, reason: 'no_url_in_response', body }
+  }
+  return { ok: true, url }
 }
 
 export default function PhotoBoothPage({ data }: Props) {
@@ -93,8 +113,34 @@ export default function PhotoBoothPage({ data }: Props) {
     return () => window.removeEventListener('resize', onResize)
   }, [])
 
-  useNuiEvent('photoBoothCaptured', async (payload: { imageData: string }) => {
-    if (!payload.imageData || !data.uploadConfig) {
+  // Bubble an error back to the player as a game notification so they
+  // actually know the capture failed instead of just snapping back to the
+  // camera with no feedback. Kept tiny — message text is computed inline.
+  const reportError = (reason: 'screenshot' | 'upload' | 'crop' | 'no_upload_config') => {
+    const message = (() => {
+      switch (reason) {
+        case 'no_upload_config': return t('admin_upload_not_configured')
+        case 'upload':           return t('admin_image_failed')
+        case 'crop':             return t('admin_image_failed')
+        default:                 return t('admin_capture_failed')
+      }
+    })()
+    fetchNui('photoBoothError', { message, reason }).catch(() => {})
+  }
+
+  useNuiEvent('photoBoothCaptured', async (payload: { imageData: string, error?: boolean }) => {
+    if (payload.error) {
+      // Lua side already showed the screenshot-resource notification.
+      setMode('camera')
+      return
+    }
+    if (!payload.imageData) {
+      reportError('screenshot')
+      setMode('camera')
+      return
+    }
+    if (!data.uploadConfig) {
+      reportError('no_upload_config')
       setMode('camera')
       return
     }
@@ -104,15 +150,38 @@ export default function PhotoBoothPage({ data }: Props) {
     try {
       const crop = cropRef.current
       const blob = await cropImage(payload.imageData, crop)
-      const url = await uploadImage(blob, data.uploadConfig)
+      const result = await uploadImage(blob, data.uploadConfig)
 
-      if (url) {
-        setCroppedUrl(url)
+      if (result.ok) {
+        setCroppedUrl(result.url)
         setMode('preview')
       } else {
+        // Build a concise diagnostic so the player isn't left guessing.
+        // The full body lands in the F8 console for deeper debugging.
+        // eslint-disable-next-line no-console
+        console.error('[pickle_dealerships] photo upload failed:', result)
+        let detail = ''
+        if (result.reason === 'http') {
+          detail = `HTTP ${result.status}`
+          if (result.status === 401 || result.status === 403) {
+            detail += ' — check your image-host token in config_sv.lua'
+          }
+        } else if (result.reason === 'no_url_in_response') {
+          detail = `upload returned no '${data.uploadConfig.returnPathKey || 'url'}' field`
+        } else if (result.reason === 'network') {
+          detail = 'network error — endpoint unreachable'
+        }
+        fetchNui('photoBoothError', {
+          message: detail ? `${t('admin_image_failed')} (${detail})` : t('admin_image_failed'),
+          reason: 'upload',
+          detail,
+        }).catch(() => {})
         setMode('camera')
       }
-    } catch {
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[pickle_dealerships] photo crop threw:', e)
+      reportError('crop')
       setMode('camera')
     }
   })

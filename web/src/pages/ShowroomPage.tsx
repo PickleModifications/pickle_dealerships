@@ -11,6 +11,8 @@ import { Search, X, CreditCard, Banknote, Car, Coins, Loader2, Palette, SlidersH
 import VehicleImg from '../components/VehicleImg'
 import { PickleFaxDialog } from '../components/PickleFax'
 import FinancingContractDialog from '../components/FinancingContractDialog'
+import { type PurchaseAddonsValue } from '../components/PurchaseAddons'
+import ConfirmPurchaseDialog, { type ConfirmCoupon } from '../components/ConfirmPurchaseDialog'
 import { useNuiEvent } from '../hooks/useNuiEvent'
 import { formatTimeRemaining, isEndingSoon, nextBidFloor, maskBidder } from '../lib/auction'
 import type { DealershipData, StockItem, VehicleColor, Auction, FinancingSettings } from '../types'
@@ -38,13 +40,25 @@ const PRESET_COLORS = [
   { label: 'Wine Red', r: 100, g: 10, b: 20 },
 ]
 
+const SHOWROOM_PAGE_SIZE = 50
+
+interface ShowroomSummary {
+  totals: { new: number; used: number; all: number; quantity: number }
+  classes: string[]
+  maxRetailPrice: number
+}
+
 export default function ShowroomPage({ data }: Props) {
-  const [allStock, setAllStock] = useState<StockItem[]>([])
+  const [items, setItems] = useState<StockItem[]>([])
+  const [summary, setSummary] = useState<ShowroomSummary | null>(null)
+  const [page, setPage] = useState(1)
+  const [total, setTotal] = useState(0)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [classFilter, setClassFilter] = useState('all')
   const [priceRange, setPriceRange] = useState<[number, number]>([0, 0])
-  const [maxRetailPrice, setMaxRetailPrice] = useState(0)
+  const [committedPriceRange, setCommittedPriceRange] = useState<[number, number]>([0, 0])
   const [showFilters, setShowFilters] = useState(false)
   const [sortBy, setSortBy] = useState<'name_asc' | 'name_desc' | 'price_asc' | 'price_desc'>('name_asc')
   const [tab, setTab] = useState<'new' | 'preowned' | 'auctions'>('new')
@@ -59,6 +73,9 @@ export default function ShowroomPage({ data }: Props) {
   const [secondaryColor, setSecondaryColor] = useState<VehicleColor | null>(null)
   const [colorPicker, setColorPicker] = useState<'primary' | 'secondary' | null>(null)
   const [pickleFaxId, setPickleFaxId] = useState<number | null>(null)
+  const [addons, setAddons] = useState<PurchaseAddonsValue>({})
+  const [confirmPurchaseOpen, setConfirmPurchaseOpen] = useState(false)
+  const [purchaseCoupon, setPurchaseCoupon] = useState<ConfirmCoupon | null>(null)
 
   // ── Auction state ──
   const [auctions, setAuctions] = useState<Auction[]>([])
@@ -123,37 +140,78 @@ export default function ShowroomPage({ data }: Props) {
     else if (altCurrencies.length > 0) setPaymentMethod(`alt:${altCurrencies[0].key}`)
   }, [basePayments, altCurrencies, paymentMethod])
 
-  // Single fetch on mount — all filtering/sorting is client-side
-  useEffect(() => {
-    fetchNui<StockItem[] | { stock: StockItem[] }>('getStock', {
+  // Server-driven pagination. Auctions tab uses its own data source so we only
+  // hit getStock when the user is on new/preowned.
+  const buildStockParams = useCallback((pageNum: number, includeSummary: boolean) => {
+    const max = committedPriceRange[1]
+    const cap = summary?.maxRetailPrice ?? 0
+    return {
       dealershipId: data.dealershipId,
       location: data.location,
-    }).then((res) => {
-      const items = Array.isArray(res) ? res : (res && 'stock' in res ? res.stock : [])
-      // Auctioned rows live in the Auctions tab only; hide them from the
-      // new/pre-owned showcase lists even when the viewer is a manager (the
-      // StockPage is where managers handle auctioned stock).
-      const available = items.filter((s) => !s.sold_at && !s.unlisted && !s.auction_id && s.delivered_at && new Date(s.delivered_at) <= new Date())
-      setAllStock(available)
-      const highest = available.reduce((max, s) => Math.max(max, s.retail_price), 0)
-      setMaxRetailPrice(highest)
-      setPriceRange([0, highest])
-      if (available.length > 0) {
-        // Spot-view mode: seed the selection with the specific stock the player
-        // walked up to instead of defaulting to the first item in the list.
-        // Skip the preview-vehicle swap — the physical display car at the spot
-        // is what the player is already looking at.
-        const target = data.spotViewStockId
-          ? available.find((s) => s.id === data.spotViewStockId) ?? available[0]
-          : available[0]
-        setSelected(target)
-        if (!data.spotViewStockId) {
-          fetchNui('showroomSwapVehicle', { model: target.vehicle_model, stockId: target.is_used ? target.id : undefined })
+      tab: tab === 'preowned' ? 'used' : 'new',
+      scope: 'public',
+      page: pageNum,
+      pageSize: SHOWROOM_PAGE_SIZE,
+      search: search || '',
+      classFilter,
+      minPrice: committedPriceRange[0] > 0 ? committedPriceRange[0] : undefined,
+      maxPrice: max > 0 && cap > 0 && max < cap ? max : undefined,
+      sortBy,
+      includeSummary,
+    }
+  }, [data.dealershipId, data.location, tab, search, classFilter, committedPriceRange, sortBy, summary?.maxRetailPrice])
+
+  useEffect(() => {
+    if (tab === 'auctions') return
+    let cancelled = false
+    setLoading(true)
+    const handle = setTimeout(() => {
+      fetchNui<{ items: StockItem[]; total: number; summary?: ShowroomSummary }>('getStock', buildStockParams(1, true)).then((res) => {
+        if (cancelled) return
+        const newItems = res?.items ?? []
+        setItems(newItems)
+        setTotal(res?.total ?? 0)
+        setPage(1)
+        if (res?.summary) {
+          setSummary(res.summary)
+          if (priceRange[1] === 0 && res.summary.maxRetailPrice > 0) {
+            setPriceRange([0, res.summary.maxRetailPrice])
+            setCommittedPriceRange([0, res.summary.maxRetailPrice])
+          }
         }
-      }
-      setLoading(false)
-    }).catch(() => setLoading(false))
-  }, [data.dealershipId])
+        // First-load seed of `selected` — only if we don't have one yet so we
+        // don't yank the player off a vehicle they were viewing.
+        if (!selected && newItems.length > 0) {
+          const target = data.spotViewStockId
+            ? newItems.find((s) => s.id === data.spotViewStockId) ?? newItems[0]
+            : newItems[0]
+          setSelected(target)
+          if (!data.spotViewStockId) {
+            fetchNui('showroomSwapVehicle', { model: target.vehicle_model, stockId: target.is_used ? target.id : undefined })
+          }
+        }
+        setLoading(false)
+      }).catch(() => { if (!cancelled) setLoading(false) })
+    }, search ? 220 : 0)
+    return () => { cancelled = true; clearTimeout(handle) }
+  }, [buildStockParams, tab])
+
+  const loadMoreStock = useCallback(() => {
+    if (loadingMore || loading || items.length >= total) return
+    setLoadingMore(true)
+    const next = page + 1
+    fetchNui<{ items: StockItem[]; total: number }>('getStock', buildStockParams(next, false)).then((res) => {
+      setItems((prev) => [...prev, ...(res?.items ?? [])])
+      setTotal(res?.total ?? total)
+      setPage(next)
+    }).finally(() => setLoadingMore(false))
+  }, [buildStockParams, items.length, loading, loadingMore, page, total])
+
+  const commitPriceRange = useCallback(() => {
+    if (priceRange[0] !== committedPriceRange[0] || priceRange[1] !== committedPriceRange[1]) {
+      setCommittedPriceRange(priceRange)
+    }
+  }, [priceRange, committedPriceRange])
 
   // ── Auction fetching ──
   const loadAuctions = useCallback(() => {
@@ -264,16 +322,24 @@ export default function ShowroomPage({ data }: Props) {
     }).finally(() => setClaimingId(null))
   }, [loadPickups])
 
-  const handleFinanceSign = useCallback((installments: number, paymentMethod: 'cash' | 'bank') => {
+  const handleFinanceSign = useCallback((installments: number, paymentMethod: 'cash' | 'bank', signAddons: PurchaseAddonsValue, signCoupon: import('../components/FinancingContractDialog').FinancingCoupon | null) => {
     if (!selected || !financingSettings) return
     setFinancingSigning(true)
+    // Apply coupon discount to the price BEFORE computing the down payment so
+    // it matches what createFinancing does server-side. Using the raw retail
+    // price here would request more down than the discounted minimum requires.
+    const discount = signCoupon?.discount ?? 0
+    const effectivePrice = Math.max(0, selected.retail_price - discount)
     fetchNui('showroomFinance', {
       dealershipId: data.dealershipId,
       stockId: selected.id,
-      downPayment: Math.floor(selected.retail_price * financingSettings.minDownPercent / 100),
+      downPayment: Math.floor(effectivePrice * financingSettings.minDownPercent / 100),
       installments,
       paymentMethod,
       location: data.location,
+      addons: signAddons,
+      couponCode: signCoupon?.code,
+      couponItemSlot: signCoupon?.slot ?? undefined,
     }).finally(() => {
       setFinancingSigning(false)
       setShowContract(false)
@@ -289,36 +355,16 @@ export default function ShowroomPage({ data }: Props) {
     return maskBidder(id)
   }, [myIdentifier])
 
-  // Derive classes from cached stock
-  const classes = Array.from(new Set(allStock.map((s) => s.class).filter(Boolean))).sort() as string[]
+  // Server returns per-tab filtered + sorted rows; the only client work left
+  // is grouping pre-owned units by model so each model gets a single card.
+  const classes = summary?.classes ?? []
+  const maxRetailPrice = summary?.maxRetailPrice ?? 0
 
   const isPriceFiltered = (range: [number, number]) => range[0] > 0 || (maxRetailPrice > 0 && range[1] < maxRetailPrice)
-  const activeFilterCount = (classFilter !== 'all' ? 1 : 0) + (isPriceFiltered(priceRange) ? 1 : 0)
+  const activeFilterCount = (classFilter !== 'all' ? 1 : 0) + (isPriceFiltered(committedPriceRange) ? 1 : 0)
 
-  // Client-side filter + sort
-  const filtered = allStock.filter((item) => {
-    if (search) {
-      const q = search.toLowerCase()
-      if (!(item.vehicle_label || item.vehicle_model).toLowerCase().includes(q)) return false
-    }
-    if (classFilter !== 'all' && item.class !== classFilter) return false
-    if (isPriceFiltered(priceRange)) {
-      if (item.retail_price < priceRange[0] || item.retail_price > priceRange[1]) return false
-    }
-    return true
-  }).sort((a, b) => {
-    switch (sortBy) {
-      case 'name_asc': return (a.vehicle_label || a.vehicle_model).localeCompare(b.vehicle_label || b.vehicle_model)
-      case 'name_desc': return (b.vehicle_label || b.vehicle_model).localeCompare(a.vehicle_label || a.vehicle_model)
-      case 'price_asc': return a.retail_price - b.retail_price
-      case 'price_desc': return b.retail_price - a.retail_price
-      default: return 0
-    }
-  })
-
-  // Split into new vs pre-owned views
-  const newStock = filtered.filter((s) => !s.is_used)
-  const preOwnedStock = filtered.filter((s) => !!s.is_used)
+  const newStock = tab === 'new' ? items : []
+  const preOwnedStock = tab === 'preowned' ? items : []
 
   // Group pre-owned by vehicle_model so each model shows a single card with a sub-list
   const preOwnedGroups = (() => {
@@ -344,11 +390,13 @@ export default function ShowroomPage({ data }: Props) {
     return Array.from(map.values())
   })()
 
-  // Deselect when the current selection is no longer in the rendered list.
-  // Spot-view mode has no tab switcher and is always viewing the specific
-  // stock row the player walked up to, so the tab-pool check would mis-fire
-  // (e.g. a used car is not in the "new" pool) and clear the selection —
-  // which reads to the player as a blank screen / crash.
+  // Deselect when the current selection clearly no longer applies. With
+  // pagination, an item being absent from the loaded page doesn't mean it's
+  // gone — it might just live on a later page. So we only clear when:
+  //   - on the auctions tab, the selected auction is no longer active, or
+  //   - the selected item's `is_used` doesn't match the current tab (i.e.
+  //     the player switched tabs and the selection belongs to the other one),
+  //   - or the selection is missing AND we've loaded all rows for the tab.
   useEffect(() => {
     if (data.spotViewStockId) return
     if (tab === 'auctions') {
@@ -356,14 +404,17 @@ export default function ShowroomPage({ data }: Props) {
         setSelectedAuction(null)
         fetchNui('showroomClearVehicle')
       }
-    } else {
-      if (selected) {
-        const pool = tab === 'new' ? newStock : preOwnedStock
-        if (!pool.some((s) => s.id === selected.id)) {
-          setSelected(null)
-          fetchNui('showroomClearVehicle')
-        }
-      }
+      return
+    }
+    if (!selected) return
+    const tabExpectsUsed = tab === 'preowned'
+    const selectedIsUsed = !!selected.is_used
+    const tabMismatch = tabExpectsUsed !== selectedIsUsed
+    const allLoaded = items.length >= total
+    const missingFromLoaded = !items.some((s) => s.id === selected.id)
+    if (tabMismatch || (allLoaded && missingFromLoaded)) {
+      setSelected(null)
+      fetchNui('showroomClearVehicle')
     }
   })
 
@@ -379,14 +430,34 @@ export default function ShowroomPage({ data }: Props) {
     overscan: 5,
   })
 
+  // Infinite scroll: when the last few rendered rows are visible, request the
+  // next page from the server.
+  useEffect(() => {
+    if (tab === 'auctions') return
+    const virtualRows = virtualizer.getVirtualItems()
+    if (virtualRows.length === 0) return
+    const lastVisible = virtualRows[virtualRows.length - 1].index
+    if (lastVisible >= rowCount - 2 && items.length < total) {
+      loadMoreStock()
+    }
+  }, [virtualizer.getVirtualItems(), rowCount, items.length, total, loadMoreStock, tab])
+
   const handleSelect = useCallback((item: StockItem) => {
     if (swapping || (selected && selected.id === item.id)) return
     setSelected(item)
+    setAddons({})
     setSwapping(true)
     fetchNui('showroomSwapVehicle', { model: item.vehicle_model, stockId: item.is_used ? item.id : undefined }).finally(() => setSwapping(false))
   }, [selected, swapping])
 
-  const handlePurchase = useCallback(() => {
+  const openPurchaseConfirm = useCallback(() => {
+    if (!selected || purchasing) return
+    setAddons({}) // reset addon state each time the confirm dialog opens
+    setPurchaseCoupon(null)
+    setConfirmPurchaseOpen(true)
+  }, [selected, purchasing])
+
+  const submitPurchase = useCallback(() => {
     if (!selected || purchasing) return
     setPurchasing(true)
     // Safety timeout: if the server callback never resolves (e.g. a bridge
@@ -406,18 +477,22 @@ export default function ShowroomPage({ data }: Props) {
       color: primaryColor,
       secondaryColor: secondaryColor,
       location: data.location,
+      addons,
+      couponCode: purchaseCoupon?.code,
+      couponItemSlot: purchaseCoupon?.slot ?? undefined,
     }).then(() => {
       if (settled) return
       settled = true
       window.clearTimeout(timeoutId)
       setPurchasing(false)
+      setConfirmPurchaseOpen(false)
     }).catch(() => {
       if (settled) return
       settled = true
       window.clearTimeout(timeoutId)
       setPurchasing(false)
     })
-  }, [selected, purchasing, paymentMethod, primaryColor, secondaryColor, data.dealershipId, data.location])
+  }, [selected, purchasing, paymentMethod, primaryColor, secondaryColor, data.dealershipId, data.location, addons, purchaseCoupon])
 
   const handleClose = useCallback(() => {
     fetchNui('showroomClose', {})
@@ -579,9 +654,9 @@ export default function ShowroomPage({ data }: Props) {
               <div>
                 <div className="flex items-center justify-between mb-1.5">
                   <p className="text-[10px] uppercase tracking-wider text-white/40">{t('label_price_range')}</p>
-                  {isPriceFiltered(priceRange) && (
+                  {isPriceFiltered(committedPriceRange) && (
                     <button
-                      onClick={() => setPriceRange([0, maxRetailPrice])}
+                      onClick={() => { setPriceRange([0, maxRetailPrice]); setCommittedPriceRange([0, maxRetailPrice]) }}
                       className="text-[9px] text-accent hover:text-accent/80"
                     >
                       {t('label_reset')}
@@ -599,7 +674,7 @@ export default function ShowroomPage({ data }: Props) {
                   value={priceRange}
                   step={Math.max(1, Math.round(maxRetailPrice / 100))}
                   onChange={setPriceRange}
-                  onCommit={() => {}}
+                  onCommit={commitPriceRange}
                 />
               </div>
             )}
@@ -1071,7 +1146,7 @@ export default function ShowroomPage({ data }: Props) {
                 ) : (
                   <Button
                     className="h-9 px-5 gap-2"
-                    onClick={handlePurchase}
+                    onClick={openPurchaseConfirm}
                     disabled={purchasing}
                   >
                     {purchasing ? (
@@ -1117,6 +1192,25 @@ export default function ShowroomPage({ data }: Props) {
         </div>
       ) : null}
 
+      {/* Confirm-purchase modal — opened from the bottom-bar Purchase button.
+          Customer reviews the price breakdown, picks add-ons (custom plate
+          etc.) and signs off. The actual server call fires from submitPurchase. */}
+      {confirmPurchaseOpen && selected && (
+        <ConfirmPurchaseDialog
+          stock={selected}
+          dealershipId={data.dealershipId}
+          paymentMethod={paymentMethod}
+          altCurrencies={altCurrencies}
+          addons={addons}
+          onAddonsChange={setAddons}
+          coupon={purchaseCoupon}
+          onCouponChange={setPurchaseCoupon}
+          onConfirm={submitPurchase}
+          onClose={() => setConfirmPurchaseOpen(false)}
+          submitting={purchasing}
+        />
+      )}
+
       {/* Financing contract dialog */}
       {showContract && selected && financingSettings && (
         <FinancingContractDialog
@@ -1125,6 +1219,7 @@ export default function ShowroomPage({ data }: Props) {
           vehicleClass={selected.class}
           isUsed={!!selected.is_used}
           price={selected.retail_price}
+          dealershipId={data.dealershipId}
           dealershipName={data.dealershipName}
           settings={financingSettings}
           initialInstallments={selectedInstallments ?? undefined}

@@ -289,7 +289,7 @@ local function SpawnDisplayVehicles(locationKey)
     local cfg = DealershipConfigs[locationKey]
     if not cfg or not cfg.displaySpots then return end
 
-    local stock = lib.callback.await('pickle_dealerships:getStock', false, locationKey)
+    local stock = lib.callback.await('pickle_dealerships:getStock', false, locationKey, { displayOnly = true })
     if not stock then stock = {} end
 
     local occupiedSpots = {}
@@ -573,11 +573,26 @@ end)
 RegisterNUICallback("getStock", function(data, cb)
     local location = ResolveLocation(data)
     if not location then
-        cb({})
+        cb({ items = {}, total = 0, page = 1, pageSize = 50 })
         return
     end
-    local result = lib.callback.await('pickle_dealerships:getStock', false, location)
-    cb(result or {})
+    -- Whitelisted pass-through: only forward known fields so the server callback
+    -- gets a clean opts table regardless of what the React side throws at us.
+    local opts = {
+        tab            = data.tab,
+        scope          = data.scope,
+        availableOnly  = data.availableOnly,
+        page           = data.page,
+        pageSize       = data.pageSize,
+        search         = data.search,
+        classFilter    = data.classFilter,
+        minPrice       = data.minPrice,
+        maxPrice       = data.maxPrice,
+        sortBy         = data.sortBy,
+        includeSummary = data.includeSummary,
+    }
+    local result = lib.callback.await('pickle_dealerships:getStock', false, location, opts)
+    cb(result or { items = {}, total = 0, page = 1, pageSize = 50 })
 end)
 
 RegisterNUICallback("getShowroomStock", function(data, cb)

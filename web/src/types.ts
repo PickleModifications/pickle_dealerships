@@ -182,6 +182,7 @@ export interface Coupon {
   discount_type: 'percent' | 'flat'
   discount_value: number
   max_uses: number
+  max_uses_per_player: number
   uses: number
   min_purchase: number
   vehicle_filter: string[] | null

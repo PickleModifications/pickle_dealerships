@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useMemo, useCallback } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { Card, CardContent } from '../components/ui/card'
 import { Badge } from '../components/ui/badge'
@@ -9,9 +9,8 @@ import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog'
 import { fetchNui, formatClass, formatCurrency, getVehicleImage } from '../lib/utils'
 import { t } from '../lib/locale'
-import { getCached, setCache, buildKey } from '../lib/cache'
 import { SkeletonCardGrid } from '../components/ui/skeleton'
-import { X, Search, Package, Truck, Clock, Car, Pencil, SlidersHorizontal, FileText, Gavel, EyeOff, Eye, Settings, Shield } from 'lucide-react'
+import { X, Search, Package, Truck, Clock, Car, Pencil, SlidersHorizontal, FileText, Gavel, EyeOff, Eye, Settings, Shield, Loader2 } from 'lucide-react'
 import VehicleImg from '../components/VehicleImg'
 import { PickleFaxDialog } from '../components/PickleFax'
 import AuctionListDialog from '../components/AuctionListDialog'
@@ -24,6 +23,14 @@ interface Props {
 
 const COLUMNS = 3
 const GAP = 8
+const PAGE_SIZE = 60
+
+interface StockSummary {
+  totals: { new: number; used: number; all: number; quantity: number }
+  classes: string[]
+  maxRetailPrice: number
+  inTransit: StockItem[]
+}
 
 // NPC-seeded stock is intentionally infinite on the server (quantity=999999) —
 // for UI purposes we clamp it to 1 so the "xN" badge and summary counter don't
@@ -71,20 +78,24 @@ function getDeliveryProgress(item: StockItem): number {
 }
 
 export default function StockPage({ data, onClose }: Props) {
-  const cacheKey = buildKey(data.dealershipId, 'stock')
-  const cached = getCached<StockItem[]>(cacheKey)
-  const [stock, setStock] = useState<StockItem[]>(cached ?? [])
+  const [items, setItems] = useState<StockItem[]>([])
+  const [summary, setSummary] = useState<StockSummary | null>(null)
+  const [page, setPage] = useState(1)
+  const [total, setTotal] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+
   const [search, setSearch] = useState('')
-  const [loading, setLoading] = useState(!cached)
-  const [, setTick] = useState(0)
-  const [editingPrice, setEditingPrice] = useState<StockItem | null>(null)
-  const [priceInput, setPriceInput] = useState('')
+  const [stockTab, setStockTab] = useState<'new' | 'used'>('new')
   const [classFilter, setClassFilter] = useState('all')
   const [sortBy, setSortBy] = useState<'name_asc' | 'name_desc' | 'price_asc' | 'price_desc'>('name_asc')
   const [priceRange, setPriceRange] = useState<[number, number]>([0, 0])
-  const [maxRetailPrice, setMaxRetailPrice] = useState(0)
+  const [committedPriceRange, setCommittedPriceRange] = useState<[number, number]>([0, 0])
   const [showFilters, setShowFilters] = useState(false)
-  const [stockTab, setStockTab] = useState<'new' | 'used'>('new')
+  const [, setTick] = useState(0)
+
+  const [editingPrice, setEditingPrice] = useState<StockItem | null>(null)
+  const [priceInput, setPriceInput] = useState('')
   const [pickleFaxId, setPickleFaxId] = useState<number | null>(null)
   const [auctionListingItem, setAuctionListingItem] = useState<StockItem | null>(null)
   const [selectedItem, setSelectedItem] = useState<StockItem | null>(null)
@@ -95,39 +106,101 @@ export default function StockPage({ data, onClose }: Props) {
   const [factionType, setFactionType] = useState<'job' | 'gang'>('job')
   const parentRef = useRef<HTMLDivElement>(null)
 
-  const loadStock = () => {
-    if (!cached) setLoading(true)
-    fetchNui<StockItem[] | { stock: StockItem[] }>('getStock', {
+  // The committed price range is what we send to the server. The pending
+  // range tracks slider drag so we don't refetch on every mouse move.
+  const isPriceFiltered = useCallback((r: [number, number], cap: number): boolean => {
+    return r[0] > 0 || (cap > 0 && r[1] < cap)
+  }, [])
+
+  const buildParams = useCallback((overrides?: Partial<{ page: number; includeSummary: boolean }>) => {
+    const max = committedPriceRange[1]
+    const cap = summary?.maxRetailPrice ?? 0
+    return {
       dealershipId: data.dealershipId,
       location: data.location,
-    }).then((res) => {
-      const items = Array.isArray(res) ? res : (res && 'stock' in res ? res.stock : [])
-      setStock(items)
-      setCache(cacheKey, items)
-      const highest = items.reduce((max, s) => Math.max(max, s.retail_price), 0)
-      if (highest > 0 && maxRetailPrice === 0) {
-        setMaxRetailPrice(highest)
-        setPriceRange([0, highest])
-      }
+      tab: stockTab,
+      scope: 'manager',
+      availableOnly: true,
+      page: overrides?.page ?? 1,
+      pageSize: PAGE_SIZE,
+      search: search || '',
+      classFilter,
+      minPrice: committedPriceRange[0] > 0 ? committedPriceRange[0] : undefined,
+      // Only send maxPrice if the slider is actually pulled below the cap —
+      // otherwise we filter out the most expensive vehicle.
+      maxPrice: max > 0 && cap > 0 && max < cap ? max : undefined,
+      sortBy,
+      includeSummary: overrides?.includeSummary ?? false,
+    }
+  }, [data.dealershipId, data.location, stockTab, search, classFilter, committedPriceRange, sortBy, summary?.maxRetailPrice])
+
+  // Initial load + refetch whenever tab/search/filter/sort changes.
+  // Search is debounced so we don't fire a request on every keystroke.
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    const handle = setTimeout(() => {
+      fetchNui<{ items: StockItem[]; total: number; summary?: StockSummary }>('getStock', buildParams({ page: 1, includeSummary: true })).then((res) => {
+        if (cancelled) return
+        setItems(res?.items ?? [])
+        setTotal(res?.total ?? 0)
+        setPage(1)
+        if (res?.summary) {
+          setSummary(res.summary)
+          // Seed the slider's upper bound on first load so the range covers
+          // the dealership's full price spread. Subsequent loads keep the
+          // user's chosen range.
+          if (priceRange[1] === 0 && res.summary.maxRetailPrice > 0) {
+            setPriceRange([0, res.summary.maxRetailPrice])
+            setCommittedPriceRange([0, res.summary.maxRetailPrice])
+          }
+        }
+        // Keep the currently selected item in sync if it's still in the page.
+        setSelectedItem((prev) => {
+          if (!prev) return null
+          return (res?.items ?? []).find((s) => s.id === prev.id) || null
+        })
+        setLoading(false)
+      }).catch(() => { if (!cancelled) setLoading(false) })
+    }, search ? 220 : 0)
+    return () => { cancelled = true; clearTimeout(handle) }
+    // priceRange itself is excluded — only committed changes trigger a refetch.
+  }, [buildParams])
+
+  const loadMore = useCallback(() => {
+    if (loadingMore || loading || items.length >= total) return
+    setLoadingMore(true)
+    const next = page + 1
+    fetchNui<{ items: StockItem[]; total: number }>('getStock', buildParams({ page: next })).then((res) => {
+      setItems((prev) => [...prev, ...(res?.items ?? [])])
+      setTotal(res?.total ?? total)
+      setPage(next)
+    }).finally(() => setLoadingMore(false))
+  }, [buildParams, items.length, loading, loadingMore, page, total])
+
+  // Trigger an explicit refresh when something mutates (price edit, list/unlist,
+  // grade change). Re-runs the current page with summary so totals stay correct.
+  const reloadStock = useCallback(() => {
+    fetchNui<{ items: StockItem[]; total: number; summary?: StockSummary }>('getStock', buildParams({ page: 1, includeSummary: true })).then((res) => {
+      setItems(res?.items ?? [])
+      setTotal(res?.total ?? 0)
+      setPage(1)
+      if (res?.summary) setSummary(res.summary)
       setSelectedItem((prev) => {
         if (!prev) return null
-        return items.find((s) => s.id === prev.id) || null
+        return (res?.items ?? []).find((s) => s.id === prev.id) || null
       })
-      setLoading(false)
-    }).catch(() => setLoading(false))
-  }
+    })
+  }, [buildParams])
 
+  // Tick every second while there are in-transit timers visible so the
+  // countdown updates without a full reload.
   useEffect(() => {
-    loadStock()
-  }, [data.dealershipId])
-
-  useEffect(() => {
-    const hasInTransit = stock.some((s) => getDeliveryStatus(s) !== 'available')
-    if (!hasInTransit) return
+    const inTransit = summary?.inTransit ?? []
+    if (inTransit.length === 0) return
     const interval = setInterval(() => setTick((t) => t + 1), 1000)
     return () => clearInterval(interval)
-  }, [stock])
-
+  }, [summary?.inTransit])
 
   const handleSetPrice = () => {
     if (!editingPrice) return
@@ -141,7 +214,7 @@ export default function StockPage({ data, onClose }: Props) {
     }).then(() => {
       setEditingPrice(null)
       setPriceInput('')
-      loadStock()
+      reloadStock()
     })
   }
 
@@ -173,7 +246,7 @@ export default function StockPage({ data, onClose }: Props) {
     }).then(() => {
       setEditingGrade(null)
       setSelectedItem(null)
-      loadStock()
+      reloadStock()
     })
   }
 
@@ -182,71 +255,64 @@ export default function StockPage({ data, onClose }: Props) {
       dealershipId: data.dealershipId,
       location: data.location,
       stockId: item.id,
-    }).then(() => loadStock())
+    }).then(() => reloadStock())
   }
 
-  const classes = Array.from(new Set(stock.map((s) => s.class).filter(Boolean))).sort() as string[]
-  const isPriceFiltered = (r: [number, number]) => r[0] > 0 || (maxRetailPrice > 0 && r[1] < maxRetailPrice)
-  const activeFilterCount = (classFilter !== 'all' ? 1 : 0) + (isPriceFiltered(priceRange) ? 1 : 0)
+  const classes = summary?.classes ?? []
+  const maxRetailPrice = summary?.maxRetailPrice ?? 0
+  const inTransit = summary?.inTransit ?? []
+  const totalQuantity = summary?.totals.quantity ?? 0
+  const newCount = summary?.totals.new ?? 0
+  const usedCount = summary?.totals.used ?? 0
+  const activeFilterCount = (classFilter !== 'all' ? 1 : 0) + (isPriceFiltered(committedPriceRange, maxRetailPrice) ? 1 : 0)
 
-  const filtered = stock.filter((item) => {
-    if (search && !(item.vehicle_label || item.vehicle_model).toLowerCase().includes(search.toLowerCase())) return false
-    if (classFilter !== 'all' && item.class !== classFilter) return false
-    if (isPriceFiltered(priceRange) && (item.retail_price < priceRange[0] || item.retail_price > priceRange[1])) return false
-    return true
-  }).sort((a, b) => {
-    switch (sortBy) {
-      case 'name_asc': return (a.vehicle_label || a.vehicle_model).localeCompare(b.vehicle_label || b.vehicle_model)
-      case 'name_desc': return (b.vehicle_label || b.vehicle_model).localeCompare(a.vehicle_label || a.vehicle_model)
-      case 'price_asc': return a.retail_price - b.retail_price
-      case 'price_desc': return b.retail_price - a.retail_price
-      default: return 0
-    }
-  })
-
-  const availableRaw = filtered.filter((s) => getDeliveryStatus(s) === 'available')
-  const allInTransit = filtered.filter((s) => getDeliveryStatus(s) !== 'available' && !s.is_used)
-
-  // UI-level consolidation for NEW stock: merge rows with same model+retail into one card.
-  // Pre-owned units are kept as individual cards (each carries unique properties).
-  const availableGroups = new Map<string, StockItem>()
-  const preOwned: StockItem[] = []
-  for (const item of availableRaw) {
-    if (item.is_used) {
-      preOwned.push(item)
-      continue
-    }
-    const key = `${item.vehicle_model}|${item.retail_price}`
-    const existing = availableGroups.get(key)
-    if (existing) {
-      existing.quantity = (existing.quantity || 1) + displayQty(item)
-    } else {
-      availableGroups.set(key, { ...item, quantity: displayQty(item) })
-    }
-  }
-  const availableNew = Array.from(availableGroups.values())
-  const available = stockTab === 'used' ? preOwned : availableNew
-
-  // Sum in-transit quantities per model so the +X badge reflects all pending orders.
-  const inTransitByModel = new Map<string, StockItem>()
-  for (const item of allInTransit) {
-    const existing = inTransitByModel.get(item.vehicle_model)
-    if (existing) {
-      existing.quantity = (existing.quantity || 1) + (item.quantity || 1)
-      // Keep the soonest delivery time for the badge
-      if (item.delivered_at && existing.delivered_at && new Date(item.delivered_at) < new Date(existing.delivered_at)) {
-        existing.delivered_at = item.delivered_at
-        existing.ordered_at = item.ordered_at
+  // Build a quick lookup from in-transit data so available cards can show a
+  // "+N incoming" badge for the same model. Quantities are summed across all
+  // in-flight rows (raw stock + pending orders).
+  const inTransitByModel = useMemo(() => {
+    const map = new Map<string, { quantity: number; delivered_at?: string; ordered_at?: string }>()
+    for (const item of inTransit) {
+      const existing = map.get(item.vehicle_model)
+      const qty = item.quantity || 1
+      if (existing) {
+        existing.quantity += qty
+        if (item.delivered_at && existing.delivered_at && new Date(item.delivered_at) < new Date(existing.delivered_at)) {
+          existing.delivered_at = item.delivered_at
+          existing.ordered_at = item.ordered_at
+        }
+      } else {
+        map.set(item.vehicle_model, {
+          quantity: qty,
+          delivered_at: item.delivered_at ?? undefined,
+          ordered_at: item.ordered_at ?? undefined,
+        })
       }
-    } else {
-      inTransitByModel.set(item.vehicle_model, { ...item, quantity: item.quantity || 1 })
     }
-  }
-  const inTransit = Array.from(inTransitByModel.values())
+    return map
+  }, [inTransit])
+
+  // For the in-transit strip we collapse by model so a dealership with 5
+  // separate Comet orders shows one row with "x5".
+  const inTransitDisplay = useMemo(() => {
+    const map = new Map<string, StockItem>()
+    for (const item of inTransit) {
+      const existing = map.get(item.vehicle_model)
+      if (existing) {
+        existing.quantity = (existing.quantity || 1) + (item.quantity || 1)
+        if (item.delivered_at && existing.delivered_at && new Date(item.delivered_at) < new Date(existing.delivered_at)) {
+          existing.delivered_at = item.delivered_at
+          existing.ordered_at = item.ordered_at
+        }
+      } else {
+        map.set(item.vehicle_model, { ...item, quantity: item.quantity || 1 })
+      }
+    }
+    return Array.from(map.values())
+  }, [inTransit])
 
   const canManage = data.role === 'owner' || data.role === 'manager' || data.role === 'admin'
 
-  const rowCount = Math.ceil(available.length / COLUMNS)
+  const rowCount = Math.ceil(items.length / COLUMNS)
   const virtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => parentRef.current,
@@ -254,13 +320,31 @@ export default function StockPage({ data, onClose }: Props) {
     overscan: 5,
   })
 
+  // Infinite scroll: fire loadMore when the user has scrolled past most of
+  // the rendered rows. Triggered as a side effect of virtualization rather
+  // than a scroll listener so it stays in sync with the virtualizer.
+  useEffect(() => {
+    const virtualRows = virtualizer.getVirtualItems()
+    if (virtualRows.length === 0) return
+    const lastVisible = virtualRows[virtualRows.length - 1].index
+    if (lastVisible >= rowCount - 2 && items.length < total) {
+      loadMore()
+    }
+  }, [virtualizer.getVirtualItems(), rowCount, items.length, total, loadMore])
+
+  const commitPriceRange = () => {
+    if (priceRange[0] !== committedPriceRange[0] || priceRange[1] !== committedPriceRange[1]) {
+      setCommittedPriceRange(priceRange)
+    }
+  }
+
   return (
     <>
       {!data.embedded && (
         <div className="flex items-center justify-between p-5 pb-0">
           <div>
             <h1 className="text-xl font-bold">{t('title_stock_inventory')}</h1>
-            <p className="text-sm text-muted-foreground">{data.dealershipName} &mdash; {stock.reduce((sum, s) => sum + displayQty(s), 0)} vehicles</p>
+            <p className="text-sm text-muted-foreground">{data.dealershipName} &mdash; {totalQuantity} vehicles</p>
           </div>
           <Button variant="ghost" size="icon" onClick={onClose}>
             <X className="h-5 w-5" />
@@ -315,8 +399,8 @@ export default function StockPage({ data, onClose }: Props) {
             <div>
               <div className="flex items-center justify-between mb-1.5">
                 <p className="text-[10px] uppercase tracking-wider text-muted-foreground">{t('label_price_range')}</p>
-                {isPriceFiltered(priceRange) && (
-                  <button onClick={() => setPriceRange([0, maxRetailPrice])} className="text-[9px] text-accent hover:text-accent/80">{t('label_reset')}</button>
+                {isPriceFiltered(committedPriceRange, maxRetailPrice) && (
+                  <button onClick={() => { setPriceRange([0, maxRetailPrice]); setCommittedPriceRange([0, maxRetailPrice]) }} className="text-[9px] text-accent hover:text-accent/80">{t('label_reset')}</button>
                 )}
               </div>
               <div className="flex items-center gap-2 mb-1.5">
@@ -324,7 +408,7 @@ export default function StockPage({ data, onClose }: Props) {
                 <span className="text-[10px] text-muted-foreground/50">&mdash;</span>
                 <span className="text-[10px] text-muted-foreground">{formatCurrency(priceRange[1])}</span>
               </div>
-              <DualRangeSlider min={0} max={maxRetailPrice} value={priceRange} step={Math.max(1, Math.round(maxRetailPrice / 100))} onChange={setPriceRange} onCommit={() => {}} />
+              <DualRangeSlider min={0} max={maxRetailPrice} value={priceRange} step={Math.max(1, Math.round(maxRetailPrice / 100))} onChange={setPriceRange} onCommit={commitPriceRange} />
             </div>
           )}
         </div>
@@ -336,23 +420,23 @@ export default function StockPage({ data, onClose }: Props) {
         <Tabs value={stockTab} onValueChange={(v) => setStockTab(v as 'new' | 'used')}>
           <TabsList className="h-8 w-full grid grid-cols-2">
             <TabsTrigger value="new" className="text-xs gap-1.5">
-              {t('tab_new')} <span className="text-[10px] text-muted-foreground">({availableNew.length})</span>
+              {t('tab_new')} <span className="text-[10px] text-muted-foreground">({newCount})</span>
             </TabsTrigger>
             <TabsTrigger value="used" className="text-xs gap-1.5">
-              {t('tab_preowned')} <span className="text-[10px] text-muted-foreground">({preOwned.length})</span>
+              {t('tab_preowned')} <span className="text-[10px] text-muted-foreground">({usedCount})</span>
             </TabsTrigger>
           </TabsList>
         </Tabs>
       </div>
 
-      {/* In-transit — not virtualized (usually small count) */}
-      {!loading && stockTab === 'new' && inTransit.length > 0 && (
+      {/* In-transit — not virtualized (always a small set) */}
+      {!loading && stockTab === 'new' && inTransitDisplay.length > 0 && (
         <div className="px-5 pt-3">
           <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1.5">
-            <Truck className="h-3.5 w-3.5" /> {t('label_in_transit')} ({inTransit.length})
+            <Truck className="h-3.5 w-3.5" /> {t('label_in_transit')} ({inTransitDisplay.length})
           </p>
           <div className="space-y-1.5">
-            {inTransit.map((item) => (
+            {inTransitDisplay.map((item) => (
               <Card key={item.id} className="overflow-hidden border-dashed">
                 <CardContent className="p-3">
                   <div className="flex items-center justify-between mb-2">
@@ -408,27 +492,22 @@ export default function StockPage({ data, onClose }: Props) {
         <div ref={parentRef} className="flex-1 overflow-auto p-5">
           {loading ? (
             <SkeletonCardGrid count={6} columns={3} />
-          ) : filtered.length === 0 ? (
+          ) : items.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
               <Package className="h-10 w-10 mb-2 opacity-50" />
-              <p>{search ? t('empty_no_matching') : t('empty_no_vehicles')}</p>
-            </div>
-          ) : available.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
-              <Package className="h-10 w-10 mb-2 opacity-50" />
-              <p>{stockTab === 'used' ? t('empty_no_preowned') : t('empty_no_new')}</p>
+              <p>{search ? t('empty_no_matching') : stockTab === 'used' ? t('empty_no_preowned') : t('empty_no_new')}</p>
             </div>
           ) : (
             <div>
-              {inTransit.length > 0 && (
+              {inTransitDisplay.length > 0 && stockTab === 'new' && (
                 <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1.5">
-                  <Package className="h-3.5 w-3.5" /> {t('label_available', String(available.length))}
+                  <Package className="h-3.5 w-3.5" /> {t('label_available', String(total))}
                 </p>
               )}
               <div className="relative w-full" style={{ height: `${virtualizer.getTotalSize()}px` }}>
                   {virtualizer.getVirtualItems().map((virtualRow) => {
                     const startIdx = virtualRow.index * COLUMNS
-                    const rowItems = available.slice(startIdx, startIdx + COLUMNS)
+                    const rowItems = items.slice(startIdx, startIdx + COLUMNS)
 
                     return (
                       <div
@@ -498,6 +577,11 @@ export default function StockPage({ data, onClose }: Props) {
                     )
                   })}
                 </div>
+              {loadingMore && (
+                <div className="flex items-center justify-center py-4 text-xs text-muted-foreground gap-2">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> {t('loading')}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -511,7 +595,7 @@ export default function StockPage({ data, onClose }: Props) {
         <AuctionListDialog
           item={auctionListingItem}
           onClose={() => setAuctionListingItem(null)}
-          onListed={() => loadStock()}
+          onListed={() => reloadStock()}
         />
       )}
 

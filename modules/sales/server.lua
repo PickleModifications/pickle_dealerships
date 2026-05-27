@@ -76,7 +76,12 @@ local function GetStockItem(stockId)
     return rows and rows[1] or nil
 end
 
-local function ValidateCoupon(dealershipId, code, purchasePrice)
+-- Global so other modules (financing, etc.) can reuse the same validation +
+-- atomic uses-counter increment without duplicating the logic.
+-- `identifier` is the buyer's stable player id; when provided we also enforce
+-- the per-player cap (`max_uses_per_player`) and record the redemption in
+-- pickle_dealership_coupon_uses so the next redemption sees the new total.
+function ValidateCoupon(dealershipId, code, purchasePrice, identifier)
     if not code or code == "" then return nil end
     local rows = MySQL.query.await(
         "SELECT * FROM `pickle_dealership_coupons` WHERE `dealership_id` = ? AND `code` = ? LIMIT 1",
@@ -84,19 +89,48 @@ local function ValidateCoupon(dealershipId, code, purchasePrice)
     )
     local coupon = rows and rows[1] or nil
     if not coupon then return nil end
-    if coupon.uses >= coupon.max_uses then return nil end
+    -- max_uses = 0 means unlimited; only enforce the cap when a positive
+    -- limit is set, otherwise every unlimited coupon would fail (0 >= 0).
+    if coupon.max_uses and coupon.max_uses > 0 and coupon.uses >= coupon.max_uses then return nil end
     if coupon.expires_at and os.time() > coupon.expires_at then return nil end
     if coupon.min_purchase > 0 and purchasePrice < coupon.min_purchase then return nil end
 
-    local discount = 0
-    if coupon.discount_type == "percent" then
-        discount = math.floor(purchasePrice * (tonumber(coupon.discount_value) / 100))
-    else
-        discount = math.floor(tonumber(coupon.discount_value))
+    -- Per-player cap. Only meaningful when we know which player is buying;
+    -- callers that lack an identifier (rare) skip this check.
+    local perPlayerCap = tonumber(coupon.max_uses_per_player) or 0
+    if perPlayerCap > 0 and identifier then
+        local used = MySQL.scalar.await(
+            "SELECT `uses` FROM `pickle_dealership_coupon_uses` WHERE `coupon_id` = ? AND `identifier` = ?",
+            { coupon.id, identifier }
+        ) or 0
+        if used >= perPlayerCap then return nil end
     end
 
-    -- Increment uses
+    local discount = 0
+    local value = tonumber(coupon.discount_value) or 0
+    if coupon.discount_type == "percent" then
+        -- Clamp percent to [0, 100] so a bad row can't produce a negative
+        -- discount (which would inflate the price) or exceed the vehicle cost.
+        local pct = math.max(0, math.min(100, value))
+        discount = math.floor(purchasePrice * (pct / 100))
+    else
+        discount = math.floor(math.max(0, value))
+    end
+    -- Belt and braces: never let the discount exceed the price itself.
+    if discount > purchasePrice then discount = purchasePrice end
+
+    -- Increment global uses
     MySQL.update("UPDATE `pickle_dealership_coupons` SET `uses` = `uses` + 1 WHERE `id` = ?", { coupon.id })
+
+    -- And the per-player tally (UPSERT) so the next redemption from this
+    -- player sees the new total.
+    if identifier then
+        MySQL.update(
+            "INSERT INTO `pickle_dealership_coupon_uses` (`coupon_id`, `identifier`, `uses`) VALUES (?, ?, 1) " ..
+            "ON DUPLICATE KEY UPDATE `uses` = `uses` + 1, `last_used` = CURRENT_TIMESTAMP",
+            { coupon.id, identifier }
+        )
+    end
 
     return discount, coupon
 end
@@ -189,7 +223,7 @@ local function PlayerMeetsMinGrade(source, dealership, stockItem)
     end
 end
 
-local function ProcessSale(source, dealershipId, stockItem, paymentMethod, couponCode, soldByCitizenid)
+local function ProcessSale(source, dealershipId, stockItem, paymentMethod, couponCode, soldByCitizenid, addons)
     local identifier = GetIdentifier(source)
     if not identifier then return false, "Could not identify player." end
 
@@ -207,9 +241,23 @@ local function ProcessSale(source, dealershipId, stockItem, paymentMethod, coupo
     local price = stockItem.retail_price
     local discount = 0
     if couponCode and couponCode ~= "" then
-        discount = ValidateCoupon(dealershipId, couponCode, price) or 0
+        discount = ValidateCoupon(dealershipId, couponCode, price, identifier) or 0
     end
     local finalPrice = math.max(0, price - discount)
+
+    -- Add-ons (custom plate, etc.) are validated up front. Pre-owned units
+    -- carry their existing plate through and can't be re-plated at sale, so
+    -- skip the custom-plate addon for those.
+    local isUsedForAddon = stockItem.is_used == true or tonumber(stockItem.is_used) == 1
+    local addonsCleaned = addons
+    if isUsedForAddon and type(addons) == "table" and addons.customPlate then
+        addonsCleaned = {}
+        for k, v in pairs(addons) do addonsCleaned[k] = v end
+        addonsCleaned.customPlate = nil
+    end
+    local addonOk, addonCost, customPlate, addonErr = ResolvePurchaseAddons(finalPrice, addonsCleaned)
+    if not addonOk then return false, addonErr end
+    finalPrice = finalPrice + (addonCost or 0)
 
     local societyEntry = nil
     local altCurrencyUsed = nil -- populated when paymentMethod begins with "alt:"
@@ -385,7 +433,7 @@ local function ProcessSale(source, dealershipId, stockItem, paymentMethod, coupo
         }
         for _, k in ipairs(PAINT_KEYS) do props[k] = nil end
     else
-        plate = GeneratePlate()
+        plate = customPlate or GeneratePlate()
         props = { plate = plate }
 
         -- Persist the customer-chosen color so the first garage store/respawn
@@ -621,7 +669,7 @@ lib.callback.register("pickle_dealerships:purchaseVehicle", function(source, dat
         return { success = false, message = "This vehicle is not available for purchase." }
     end
 
-    local success, plate, finalPrice = ProcessSale(source, dealershipId, stockItem, paymentMethod, couponCode, nil)
+    local success, plate, finalPrice = ProcessSale(source, dealershipId, stockItem, paymentMethod, couponCode, nil, data.addons)
     ReleaseStockLock(stockId)
     if not success then
         return { success = false, message = plate } -- plate holds error message on failure
@@ -762,7 +810,7 @@ lib.callback.register("pickle_dealerships:confirmEmployeeSale", function(source,
         return { success = false, message = "Dealership not found." }
     end
 
-    local success, plate, finalPrice = ProcessSale(source, dealershipId, stockItem, paymentMethod, couponCode, soldBy)
+    local success, plate, finalPrice = ProcessSale(source, dealershipId, stockItem, paymentMethod, couponCode, soldBy, data.addons)
     ReleaseStockLock(stockId)
     if not success then
         -- Server-authored decline notification to the seller — the customer

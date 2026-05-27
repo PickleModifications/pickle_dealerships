@@ -228,13 +228,48 @@ lib.callback.register("pickle_dealerships:createFinancing", function(source, dat
         return { success = false, message = "Invalid installment plan." }
     end
 
+    -- Coupon: applied to the vehicle's retail price BEFORE the down/financed
+    -- split, so the minimum-down% is calculated on the discounted price and
+    -- interest accrues on the lower financed balance. ValidateCoupon atomically
+    -- increments the uses counter, so we only call it once we know the rest of
+    -- the deal is going through (after stock + installment validation).
     local price = stockItem.retail_price
+    local couponDiscount = 0
+    local couponRow = nil
+    if data.couponCode and data.couponCode ~= "" then
+        couponDiscount, couponRow = ValidateCoupon(dealershipId, data.couponCode, price, GetIdentifier(source))
+        if not couponDiscount or couponDiscount <= 0 then
+            ReleaseStockLock(stockId)
+            return { success = false, message = _L("coupon_invalid") or "Invalid coupon code." }
+        end
+        price = math.max(0, price - couponDiscount)
+    end
     local minDown = math.floor(price * settings.minDownPercent / 100)
 
     if downPayment < minDown then
         ReleaseStockLock(stockId)
         return { success = false, message = ("Minimum down payment is %s (%d%%)."):format(GetCurrencyString(minDown), settings.minDownPercent) }
     end
+
+    -- Resolve add-ons. The add-on cost is charged on top of the down payment
+    -- (paid upfront at signing) — it does NOT get rolled into the loan
+    -- balance, otherwise the customer would pay interest on personalization.
+    -- Pre-owned units keep their existing plate, so the custom-plate add-on
+    -- is silently dropped for them.
+    local isUsedForAddon = stockItem.is_used == true or tonumber(stockItem.is_used) == 1
+    local addonsCleaned = data.addons
+    if isUsedForAddon and type(addonsCleaned) == "table" and addonsCleaned.customPlate then
+        local tmp = {}
+        for k, v in pairs(addonsCleaned) do tmp[k] = v end
+        tmp.customPlate = nil
+        addonsCleaned = tmp
+    end
+    local addonOk, addonCost, customPlate, addonErr = ResolvePurchaseAddons(price, addonsCleaned)
+    if not addonOk then
+        ReleaseStockLock(stockId)
+        return { success = false, message = addonErr }
+    end
+    addonCost = addonCost or 0
 
     local identifier = GetIdentifier(source)
     if not identifier then
@@ -260,8 +295,9 @@ lib.callback.register("pickle_dealerships:createFinancing", function(source, dat
         end
     end
 
+    local upfrontTotal = downPayment + addonCost
     local playerMoney = GetMoney(source, paymentMethod)
-    if playerMoney < downPayment then
+    if playerMoney < upfrontTotal then
         ReleaseStockLock(stockId)
         return { success = false, message = "Insufficient funds for down payment." }
     end
@@ -272,14 +308,16 @@ lib.callback.register("pickle_dealerships:createFinancing", function(source, dat
     local totalWithInterest = remainingBalance + math.floor(remainingBalance * interestRate)
     local installmentAmount = math.ceil(totalWithInterest / installments)
 
-    -- Deduct down payment from the selected account
-    RemoveMoney(source, downPayment, paymentMethod)
+    -- Deduct down payment + addon cost from the selected account
+    RemoveMoney(source, upfrontTotal, paymentMethod)
 
     -- Sales tax
     local salesTax = math.floor(price * (Config.SalesTax or 0))
     local netDownPayment = downPayment - math.floor(downPayment * (Config.SalesTax or 0))
 
-    AddDealershipBalance(dealershipId, netDownPayment)
+    -- Add-on revenue (custom plate fee, etc.) goes straight to the
+    -- dealership balance — no commission, no sales tax handling.
+    AddDealershipBalance(dealershipId, netDownPayment + addonCost)
     MarkStockSold(stockId, identifier, nil)
     ReleaseStockLock(stockId)
 
@@ -295,7 +333,7 @@ lib.callback.register("pickle_dealerships:createFinancing", function(source, dat
         if type(properties) ~= "table" then properties = {} end
         properties.plate = plate
     else
-        plate = GeneratePlate()
+        plate = customPlate or GeneratePlate()
         properties = { plate = plate }
     end
     AddOwnedVehicleWithProps(source, stockItem.vehicle_model, plate, properties)
@@ -321,6 +359,16 @@ lib.callback.register("pickle_dealerships:createFinancing", function(source, dat
     AddLedgerEntry(dealershipId, "sale", price, ("Financed vehicle: %s (down: %s)"):format(stockItem.vehicle_label or stockItem.vehicle_model, GetCurrencyString(downPayment)), identifier)
     if salesTax > 0 then
         AddLedgerEntry(dealershipId, "tax", -salesTax, ("Sales tax on financed %s"):format(stockItem.vehicle_label or stockItem.vehicle_model), nil)
+    end
+    if couponRow then
+        AddLedgerEntry(dealershipId, "discount", -couponDiscount, ("Coupon %s applied to financed %s"):format(couponRow.code or "?", stockItem.vehicle_label or stockItem.vehicle_model), identifier)
+    end
+
+    -- Burn the inventory coupon item, if the customer redeemed one from the
+    -- picker rather than typing a raw code. The discount itself was already
+    -- consumed atomically inside ValidateCoupon.
+    if data.couponCode and data.couponCode ~= "" and data.couponItemSlot then
+        ConsumeCouponItem(source, data.couponItemSlot)
     end
 
     return {

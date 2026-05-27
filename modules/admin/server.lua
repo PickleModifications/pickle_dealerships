@@ -247,6 +247,7 @@ lib.callback.register("pickle_dealerships:adminResetDealership", function(source
     MySQL.update.await("DELETE FROM pickle_dealership_employees WHERE dealership_id = ?", { dealershipId })
     MySQL.update.await("DELETE FROM pickle_dealership_stock WHERE dealership_id = ?", { dealershipId })
     MySQL.update.await("DELETE FROM pickle_dealership_orders WHERE dealership_id = ?", { dealershipId })
+    MySQL.update.await("DELETE FROM pickle_dealership_coupon_uses WHERE coupon_id IN (SELECT id FROM pickle_dealership_coupons WHERE dealership_id = ?)", { dealershipId })
     MySQL.update.await("DELETE FROM pickle_dealership_coupons WHERE dealership_id = ?", { dealershipId })
 
     UpdateDealershipCache(dealershipId, {
@@ -286,6 +287,7 @@ lib.callback.register("pickle_dealerships:adminDeleteDealership", function(sourc
     MySQL.update.await("DELETE FROM pickle_dealership_deliveries WHERE dealership_id = ?", { dealershipId })
     MySQL.update.await("DELETE FROM pickle_dealership_financing WHERE dealership_id = ?",  { dealershipId })
     MySQL.update.await("DELETE FROM pickle_dealership_ledger WHERE dealership_id = ?",     { dealershipId })
+    MySQL.update.await("DELETE FROM pickle_dealership_coupon_uses WHERE coupon_id IN (SELECT id FROM pickle_dealership_coupons WHERE dealership_id = ?)", { dealershipId })
     MySQL.update.await("DELETE FROM pickle_dealership_coupons WHERE dealership_id = ?",    { dealershipId })
     MySQL.update.await("DELETE FROM pickle_dealership_orders WHERE dealership_id = ?",     { dealershipId })
     MySQL.update.await("DELETE FROM pickle_dealership_stock WHERE dealership_id = ?",      { dealershipId })
@@ -342,8 +344,13 @@ lib.callback.register("pickle_dealerships:adminToggleMode", function(source, dat
     local currentMode = dealership.mode or "managed"
     local newMode = currentMode == "player-owned" and "managed" or "player-owned"
 
-    MySQL.update.await("UPDATE pickle_dealerships SET mode = ? WHERE id = ?", { newMode, dealershipId })
+    -- Clearing owner on every mode flip prevents a stale owner_identifier from
+    -- silently granting permissions after a switch (e.g. a managed dealership
+    -- still treating the previous player as owner).
+    MySQL.update.await("UPDATE pickle_dealerships SET mode = ?, owner_identifier = NULL WHERE id = ?", { newMode, dealershipId })
     UpdateDealershipCache(dealershipId, { mode = newMode })
+    local cached = GetDealership(dealershipId)
+    if cached then cached.owner_identifier = nil end
 
     -- A player-owned dealership must always start with zero inventory —
     -- otherwise converting a fully-stocked NPC shop would hand the new owner
@@ -1042,8 +1049,8 @@ lib.callback.register("pickle_dealerships:adminGetUploadConfig", function(source
     end
 
     if cfg.provider == "fivemanage" then
-        if not cfg.token or cfg.token == "" then
-            print("[PhotoBooth:Server] ERROR: FiveManage token is not set in config_sv.lua")
+        if not cfg.token or cfg.token == "" or cfg.token == "TOKEN_HERE" then
+            print("[PhotoBooth:Server] ERROR: FiveManage token is not set in config_sv.lua (still the placeholder 'TOKEN_HERE').")
             return nil
         end
         return {

@@ -193,19 +193,36 @@ lib.callback.register("pickle_dealerships:createCoupon", function(source, data)
         return { success = false, message = "Coupon code is required." }
     end
 
+    -- Normalize + bound the discount value here so we never persist a row
+    -- that could later inflate the price (negative) or exceed the vehicle
+    -- cost (percent > 100).
+    local discountType = (data.discountType == "flat") and "flat" or "percent"
+    local discountValue = tonumber(data.discountValue) or 0
+    if discountValue < 0 then
+        return { success = false, message = "Discount value cannot be negative." }
+    end
+    if discountType == "percent" and discountValue > 100 then
+        return { success = false, message = "Percent discount cannot exceed 100." }
+    end
+
+    local maxUses = math.max(0, tonumber(data.maxUses) or 0)
+    local maxUsesPerPlayer = math.max(0, tonumber(data.maxUsesPerPlayer) or 0)
+    local minPurchase = math.max(0, tonumber(data.minPurchase) or 0)
+
     -- Check for duplicate code
     local existing = MySQL.scalar.await("SELECT id FROM pickle_dealership_coupons WHERE dealership_id = ? AND code = ?", { dealershipId, toupper(data.code) })
     if existing then
         return { success = false, message = "A coupon with that code already exists." }
     end
 
-    MySQL.insert.await("INSERT INTO pickle_dealership_coupons (dealership_id, code, discount_type, discount_value, max_uses, uses, min_purchase, vehicle_filter, expires_at, created_at) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, NOW())", {
+    MySQL.insert.await("INSERT INTO pickle_dealership_coupons (dealership_id, code, discount_type, discount_value, max_uses, max_uses_per_player, uses, min_purchase, vehicle_filter, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, NOW())", {
         dealershipId,
         toupper(data.code),
-        data.discountType or "percentage",
-        tonumber(data.discountValue) or 0,
-        tonumber(data.maxUses) or 0,
-        tonumber(data.minPurchase) or 0,
+        discountType,
+        discountValue,
+        maxUses,
+        maxUsesPerPlayer,
+        minPurchase,
         data.vehicleFilter and json.encode(data.vehicleFilter) or nil,
         data.expiresAt or nil,
     })
@@ -224,6 +241,9 @@ lib.callback.register("pickle_dealerships:deleteCoupon", function(source, data)
 
     local affected = MySQL.update.await("DELETE FROM pickle_dealership_coupons WHERE id = ? AND dealership_id = ?", { couponId, dealershipId })
     if affected and affected > 0 then
+        -- Drop the per-player tally too so a future coupon that recycles
+        -- this id (rare, but possible) starts with a clean slate.
+        MySQL.update("DELETE FROM `pickle_dealership_coupon_uses` WHERE `coupon_id` = ?", { couponId })
         return { success = true, message = "Coupon deleted." }
     else
         return { success = false, message = "Coupon not found." }
@@ -361,6 +381,22 @@ lib.callback.register("pickle_dealerships:validateCoupon", function(source, data
         return { valid = false, message = "This coupon has reached its maximum uses." }
     end
 
+    -- Check per-player cap so the live preview matches what the sale path
+    -- will actually allow. 0 = no per-player limit.
+    local perPlayerCap = tonumber(coupon.max_uses_per_player) or 0
+    if perPlayerCap > 0 then
+        local identifier = GetIdentifier and GetIdentifier(source) or nil
+        if identifier then
+            local used = MySQL.scalar.await(
+                "SELECT `uses` FROM `pickle_dealership_coupon_uses` WHERE `coupon_id` = ? AND `identifier` = ?",
+                { coupon.id, identifier }
+            ) or 0
+            if used >= perPlayerCap then
+                return { valid = false, message = "You've already used this coupon the maximum number of times." }
+            end
+        end
+    end
+
     -- Check minimum purchase
     if coupon.min_purchase and purchaseAmount < coupon.min_purchase then
         return { valid = false, message = "Minimum purchase of " .. GetCurrencyString(coupon.min_purchase) .. " required." }
@@ -385,11 +421,18 @@ lib.callback.register("pickle_dealerships:validateCoupon", function(source, data
 
     -- Calculate discount
     local discount = 0
-    if coupon.discount_type == "percentage" then
-        discount = math.floor(purchaseAmount * (coupon.discount_value / 100))
-    elseif coupon.discount_type == "flat" then
-        discount = math.min(coupon.discount_value, purchaseAmount)
+    -- Discount type stored as 'percent' (UI value) or 'flat'. Older callers
+    -- may have written 'percentage' — accept both so legacy rows still apply.
+    -- Mirror the sales-path clamping so the preview matches what the buyer
+    -- will actually be charged.
+    local dv = tonumber(coupon.discount_value) or 0
+    if coupon.discount_type == "percent" or coupon.discount_type == "percentage" then
+        local pct = math.max(0, math.min(100, dv))
+        discount = math.floor(purchaseAmount * (pct / 100))
+    else
+        discount = math.floor(math.max(0, dv))
     end
+    if discount > purchaseAmount then discount = purchaseAmount end
 
     return {
         valid        = true,

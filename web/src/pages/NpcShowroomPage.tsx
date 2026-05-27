@@ -18,15 +18,25 @@ interface Props {
 
 const COLUMNS = 2
 const GAP = 10
+const NPC_PAGE_SIZE = 60
+
+interface NpcSummary {
+  classes: string[]
+  maxRetailPrice: number
+}
 
 export default function NpcShowroomPage({ data, profile, greeting, onClose }: Props) {
-  const [allStock, setAllStock] = useState<StockItem[]>([])
+  const [items, setItems] = useState<StockItem[]>([])
+  const [summary, setSummary] = useState<NpcSummary | null>(null)
+  const [page, setPage] = useState(1)
+  const [total, setTotal] = useState(0)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [classFilter, setClassFilter] = useState('all')
   const [sortBy, setSortBy] = useState<'name_asc' | 'name_desc' | 'price_asc' | 'price_desc'>('name_asc')
   const [priceRange, setPriceRange] = useState<[number, number]>([0, 0])
-  const [maxRetailPrice, setMaxRetailPrice] = useState(0)
+  const [committedPriceRange, setCommittedPriceRange] = useState<[number, number]>([0, 0])
   const [showFilters, setShowFilters] = useState(false)
   const [selected, setSelected] = useState<StockItem | null>(null)
   const [swapping, setSwapping] = useState(false)
@@ -50,44 +60,74 @@ export default function NpcShowroomPage({ data, profile, greeting, onClose }: Pr
     return () => clearTimeout(t)
   }, [subtitle])
 
-  // Load stock once
-  useEffect(() => {
-    fetchNui<StockItem[] | { stock: StockItem[] }>('getStock', {
+  // Server-driven pagination. Default sort/filters request page 1; refetch
+  // whenever search/sort/filter changes (debounced for search).
+  const buildStockParams = useCallback((pageNum: number, includeSummary: boolean) => {
+    const max = committedPriceRange[1]
+    const cap = summary?.maxRetailPrice ?? 0
+    return {
       dealershipId: data.dealershipId,
       location: data.location,
-    }).then((res) => {
-      const items = Array.isArray(res) ? res : (res && 'stock' in res ? res.stock : [])
-      const available = items.filter((s) => !s.sold_at && !s.unlisted && !s.auction_id && s.delivered_at && new Date(s.delivered_at) <= new Date())
-      setAllStock(available)
-      const highest = available.reduce((max, s) => Math.max(max, s.retail_price), 0)
-      if (highest > 0) {
-        setMaxRetailPrice(highest)
-        setPriceRange([0, highest])
-      }
-      setLoading(false)
-    }).catch(() => setLoading(false))
-  }, [data.dealershipId])
+      tab: 'all',
+      scope: 'public',
+      page: pageNum,
+      pageSize: NPC_PAGE_SIZE,
+      search: search || '',
+      classFilter,
+      minPrice: committedPriceRange[0] > 0 ? committedPriceRange[0] : undefined,
+      maxPrice: max > 0 && cap > 0 && max < cap ? max : undefined,
+      sortBy,
+      includeSummary,
+    }
+  }, [data.dealershipId, data.location, search, classFilter, committedPriceRange, sortBy, summary?.maxRetailPrice])
 
-  // Client-side filter + sort
-  const classes = Array.from(new Set(allStock.map((s) => s.class).filter(Boolean))).sort() as string[]
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    const handle = setTimeout(() => {
+      fetchNui<{ items: StockItem[]; total: number; summary?: NpcSummary }>('getStock', buildStockParams(1, true)).then((res) => {
+        if (cancelled) return
+        setItems(res?.items ?? [])
+        setTotal(res?.total ?? 0)
+        setPage(1)
+        if (res?.summary) {
+          setSummary(res.summary)
+          if (priceRange[1] === 0 && res.summary.maxRetailPrice > 0) {
+            setPriceRange([0, res.summary.maxRetailPrice])
+            setCommittedPriceRange([0, res.summary.maxRetailPrice])
+          }
+        }
+        setLoading(false)
+      }).catch(() => { if (!cancelled) setLoading(false) })
+    }, search ? 220 : 0)
+    return () => { cancelled = true; clearTimeout(handle) }
+  }, [buildStockParams])
+
+  const loadMoreStock = useCallback(() => {
+    if (loadingMore || loading || items.length >= total) return
+    setLoadingMore(true)
+    const next = page + 1
+    fetchNui<{ items: StockItem[]; total: number }>('getStock', buildStockParams(next, false)).then((res) => {
+      setItems((prev) => [...prev, ...(res?.items ?? [])])
+      setTotal(res?.total ?? total)
+      setPage(next)
+    }).finally(() => setLoadingMore(false))
+  }, [buildStockParams, items.length, loading, loadingMore, page, total])
+
+  const commitPriceRange = useCallback(() => {
+    if (priceRange[0] !== committedPriceRange[0] || priceRange[1] !== committedPriceRange[1]) {
+      setCommittedPriceRange(priceRange)
+    }
+  }, [priceRange, committedPriceRange])
+
+  const classes = summary?.classes ?? []
+  const maxRetailPrice = summary?.maxRetailPrice ?? 0
   const isPriceFiltered = (r: [number, number]) => r[0] > 0 || (maxRetailPrice > 0 && r[1] < maxRetailPrice)
 
-  const filtered = allStock.filter((item) => {
-    if (search && !(item.vehicle_label || item.vehicle_model).toLowerCase().includes(search.toLowerCase())) return false
-    if (classFilter !== 'all' && item.class !== classFilter) return false
-    if (isPriceFiltered(priceRange) && (item.retail_price < priceRange[0] || item.retail_price > priceRange[1])) return false
-    return true
-  }).sort((a, b) => {
-    switch (sortBy) {
-      case 'name_asc': return (a.vehicle_label || a.vehicle_model).localeCompare(b.vehicle_label || b.vehicle_model)
-      case 'name_desc': return (b.vehicle_label || b.vehicle_model).localeCompare(a.vehicle_label || a.vehicle_model)
-      case 'price_asc': return a.retail_price - b.retail_price
-      case 'price_desc': return b.retail_price - a.retail_price
-      default: return 0
-    }
-  })
+  // Server already filtered/sorted; render items as-is.
+  const filtered = items
 
-  const activeFilterCount = (classFilter !== 'all' ? 1 : 0) + (isPriceFiltered(priceRange) ? 1 : 0)
+  const activeFilterCount = (classFilter !== 'all' ? 1 : 0) + (isPriceFiltered(committedPriceRange) ? 1 : 0)
   const rowCount = Math.ceil(filtered.length / COLUMNS)
   const virtualizer = useVirtualizer({
     count: rowCount,
@@ -96,6 +136,16 @@ export default function NpcShowroomPage({ data, profile, greeting, onClose }: Pr
     measureElement: (el: Element) => el.getBoundingClientRect().height,
     overscan: 5,
   })
+
+  // Infinite scroll
+  useEffect(() => {
+    const virtualRows = virtualizer.getVirtualItems()
+    if (virtualRows.length === 0) return
+    const lastVisible = virtualRows[virtualRows.length - 1].index
+    if (lastVisible >= rowCount - 2 && items.length < total) {
+      loadMoreStock()
+    }
+  }, [virtualizer.getVirtualItems(), rowCount, items.length, total, loadMoreStock])
 
   // Select vehicle: swap 3D model + present to NPC
   const handleSelect = useCallback((item: StockItem) => {
@@ -281,8 +331,8 @@ export default function NpcShowroomPage({ data, profile, greeting, onClose }: Pr
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <p className="text-[9px] uppercase tracking-wider text-white/30">{t('label_price')}</p>
-                  {isPriceFiltered(priceRange) && (
-                    <button onClick={() => setPriceRange([0, maxRetailPrice])} className="text-[9px] text-accent hover:text-accent/80">{t('label_reset')}</button>
+                  {isPriceFiltered(committedPriceRange) && (
+                    <button onClick={() => { setPriceRange([0, maxRetailPrice]); setCommittedPriceRange([0, maxRetailPrice]) }} className="text-[9px] text-accent hover:text-accent/80">{t('label_reset')}</button>
                   )}
                 </div>
                 <div className="flex items-center gap-2 mb-1">
@@ -290,7 +340,7 @@ export default function NpcShowroomPage({ data, profile, greeting, onClose }: Pr
                   <span className="text-[10px] text-white/20">&mdash;</span>
                   <span className="text-[10px] text-white/40">{formatCurrency(priceRange[1])}</span>
                 </div>
-                <DualRangeSlider min={0} max={maxRetailPrice} value={priceRange} step={Math.max(1, Math.round(maxRetailPrice / 100))} onChange={setPriceRange} />
+                <DualRangeSlider min={0} max={maxRetailPrice} value={priceRange} step={Math.max(1, Math.round(maxRetailPrice / 100))} onChange={setPriceRange} onCommit={commitPriceRange} />
               </div>
             )}
           </div>
@@ -474,9 +524,10 @@ export default function NpcShowroomPage({ data, profile, greeting, onClose }: Pr
   )
 }
 
-function DualRangeSlider({ min, max, value, step, onChange }: {
+function DualRangeSlider({ min, max, value, step, onChange, onCommit }: {
   min: number; max: number; value: [number, number]; step: number
   onChange: (value: [number, number]) => void
+  onCommit?: () => void
 }) {
   const pctLow = max > min ? ((value[0] - min) / (max - min)) * 100 : 0
   const pctHigh = max > min ? ((value[1] - min) / (max - min)) * 100 : 100
@@ -486,9 +537,11 @@ function DualRangeSlider({ min, max, value, step, onChange }: {
       <div className="absolute h-1 bg-accent/60 rounded-full" style={{ left: `${pctLow}%`, right: `${100 - pctHigh}%` }} />
       <input type="range" min={min} max={max} step={step} value={value[0]}
         onChange={(e) => { const v = Math.min(parseInt(e.target.value), value[1] - step); onChange([v, value[1]]) }}
+        onMouseUp={() => onCommit?.()}
         className="absolute w-full appearance-none bg-transparent pointer-events-none [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:bg-accent [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:relative [&::-webkit-slider-thumb]:z-10" />
       <input type="range" min={min} max={max} step={step} value={value[1]}
         onChange={(e) => { const v = Math.max(parseInt(e.target.value), value[0] + step); onChange([value[0], v]) }}
+        onMouseUp={() => onCommit?.()}
         className="absolute w-full appearance-none bg-transparent pointer-events-none [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:bg-accent [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:relative [&::-webkit-slider-thumb]:z-20" />
     </div>
   )
