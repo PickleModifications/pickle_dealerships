@@ -105,8 +105,12 @@ local catalogEntity = {
             if not r then
                 res.notFound[#res.notFound + 1] = id
             else
+                -- price_floor is the price players actually paid in jg (jg v1
+                -- has no separate cost column). Treat it as the sticker price and
+                -- back-derive wholesale so pickle's ×1.3 markup reproduces it on
+                -- seed/order, instead of marking it down to 70%.
                 local floor = tonumber(r.price_floor) or 50000
-                local wholesale = math.max(1000, math.floor(floor * 0.7))
+                local wholesale = math.max(1000, math.floor(floor / 1.3))
                 local label = r.model:sub(1,1):upper() .. r.model:sub(2)
                 local sql = policy == 'overwrite'
                     and "INSERT INTO pickle_wholesale_catalog (model, label, wholesale, tier, class, vehicle_type) VALUES (?, ?, ?, 'basic', 'sedan', 'car') ON DUPLICATE KEY UPDATE wholesale = VALUES(wholesale), label = VALUES(label)"

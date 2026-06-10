@@ -104,9 +104,9 @@ local catalogEntity = {
                     model = model,
                     label = v.label,
                     category = v.category,
-                    -- Prefer `price` as the wholesale input, sellingPrice is
-                    -- aty's retail — but fall back if price is missing.
-                    price = tonumber(v.price) or tonumber(v.sellingPrice) or 0,
+                    -- sellingPrice is aty's sticker (what players pay); show that
+                    -- in the picker since it's what the imported listing will be.
+                    price = tonumber(v.sellingPrice) or tonumber(v.price) or 0,
                 }
             end
         end)
@@ -138,11 +138,12 @@ local catalogEntity = {
             if not v then
                 res.notFound[#res.notFound + 1] = id
             else
-                -- aty's `price` is what the shop paid and `sellingPrice` is
-                -- what it charges — pickle's `wholesale` matches `price`.
-                -- Fall back to 70% of sellingPrice when only the retail is
-                -- available so the import never produces a zero-cost row.
-                local wholesale = math.floor(tonumber(v.price) or (tonumber(v.sellingPrice) or 0) * 0.7)
+                -- `sellingPrice` is what aty charges players. Back-derive
+                -- wholesale from it so pickle's ×1.3 markup reproduces the same
+                -- listing on seed/order. Fall back to aty's cost `price` when no
+                -- sticker is recorded so the import never produces a zero-cost row.
+                local sticker = tonumber(v.sellingPrice) or tonumber(v.price) or 0
+                local wholesale = math.floor(sticker / 1.3)
                 if wholesale <= 0 then wholesale = 1000 end
                 local class = classOf(v.category)
                 local vtype = vehicleTypeOfClass(class)
@@ -419,9 +420,12 @@ local stockEntity = {
                 for _, v in ipairs(list) do
                     local key = v.model and tostring(v.model):lower() or nil
                     if key and models[key] then
-                        local wholesale = tonumber(v.price) or math.floor((tonumber(v.sellingPrice) or 0) * 0.7)
+                        -- Keep the exact sticker players paid as retail; prefer
+                        -- aty's real cost for wholesale, otherwise back-derive it
+                        -- from the sticker so the implied margin matches pickle.
+                        local retail = tonumber(v.sellingPrice) or math.floor((tonumber(v.price) or 0) * 1.3)
+                        local wholesale = tonumber(v.price) or math.floor(retail / 1.3)
                         if wholesale <= 0 then wholesale = 1000 end
-                        local retail = tonumber(v.sellingPrice) or math.floor(wholesale * 1.3)
                         local qty = math.max(1, tonumber(v.stock) or 1)
                         local newId = MySQL.insert.await(
                             "INSERT INTO pickle_dealership_stock (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, quantity, ordered_at, delivered_at, acquired_from) VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW(), 'aty_v2_import')",

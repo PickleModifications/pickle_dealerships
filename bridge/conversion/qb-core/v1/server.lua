@@ -47,13 +47,17 @@ local function normalizeEntry(key, v)
     local model = tostring(v.model or v.spawncode or key or ''):lower()
     if model == '' then return nil end
     local name = v.name or v.label or model
+    -- QBShared's `price` is the sticker players pay. Back-derive wholesale so
+    -- pickle's ×1.3 markup reproduces it on seed/order; keep `price` for display.
     local price = tonumber(v.price) or 0
+    local wholesale = price > 0 and math.max(1, math.floor(price / 1.3)) or 0
     local category = v.category or v.class or 'sedan'
     local vehType = qbTypeToPickleType(v.type)
     return {
         model = model,
         name = name,
         price = price,
+        wholesale = wholesale,
         category = category,
         vehicle_type = vehType,
     }
@@ -74,7 +78,7 @@ local catalogEntity = {
                 out[#out + 1] = {
                     id = row.model,
                     label = row.name .. ' — $' .. row.price,
-                    meta = { class = row.category, type = row.vehicle_type, wholesale = row.price },
+                    meta = { class = row.category, type = row.vehicle_type, wholesale = row.wholesale },
                 }
             end
         end
@@ -107,7 +111,7 @@ local catalogEntity = {
                     and "INSERT INTO pickle_wholesale_catalog (model, label, wholesale, tier, class, vehicle_type) VALUES (?, ?, ?, 'basic', ?, ?) ON DUPLICATE KEY UPDATE wholesale = VALUES(wholesale), label = VALUES(label), class = VALUES(class), vehicle_type = VALUES(vehicle_type)"
                     or  "INSERT IGNORE INTO pickle_wholesale_catalog (model, label, wholesale, tier, class, vehicle_type) VALUES (?, ?, ?, 'basic', ?, ?)"
                 local affected = MySQL.update.await(sql, {
-                    row.model, prefix .. row.name, row.price, row.category, row.vehicle_type,
+                    row.model, prefix .. row.name, row.wholesale, row.category, row.vehicle_type,
                 })
                 if affected and affected > 0 then
                     res.inserted = res.inserted + 1

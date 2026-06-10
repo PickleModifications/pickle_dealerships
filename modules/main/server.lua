@@ -271,44 +271,15 @@ end)
 ---@param source number
 ---@param locationKey string
 lib.callback.register('pickle_dealerships:getPlayerRole', function(source, locationKey)
-    local identifier = GetIdentifier(source)
-    if not identifier then return nil end
+    -- Delegate to the single authoritative resolver in core/server.lua so the
+    -- role the client uses to OPEN the menu is exactly the role the server gates
+    -- enforce INSIDE it. (Previously this resolved from job grades while the
+    -- server gates resolved from the employee roster — they disagreed, so the
+    -- menu would open for staff the server then denied at every action.)
+    if IsPlayerAdmin(source) then return 'admin' end
 
     local cached = GetCachedByLocation(locationKey)
     if not cached then return nil end
 
-    -- Admin override
-    if IsPlayerAdmin(source) then
-        return 'admin'
-    end
-
-    -- Owner check (by identifier)
-    if cached.owner_identifier == identifier then
-        return 'owner'
-    end
-
-    -- Framework job check
-    if cached.job and cached.job ~= "" then
-        local playerJob = GetPlayerJobName(source)
-        if playerJob == cached.job then
-            local grade = GetPlayerJobGrade(source)
-            local grades = GetJobGrades(cached.job)
-            local maxGrade = 0
-            for _, g in ipairs(grades) do
-                if g.level > maxGrade then maxGrade = g.level end
-            end
-            -- Highest grade = owner (if also identifier match, already handled above)
-            -- Grade >= half of max = manager
-            -- Lower grades = salesperson
-            if grade >= maxGrade then
-                return 'owner'
-            elseif grade >= math.ceil(maxGrade / 2) then
-                return 'manager'
-            else
-                return 'salesperson'
-            end
-        end
-    end
-
-    return nil
+    return GetPlayerDealershipRole(source, cached.id)
 end)

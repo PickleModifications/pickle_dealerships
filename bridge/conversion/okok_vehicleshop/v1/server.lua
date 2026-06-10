@@ -149,12 +149,15 @@ function OkokConversionHelpers.catalogEntity()
         label = 'Wholesale Catalog',
         requires = { 'okokvehicleshop_vehicles' },
         list = function()
-            local rows = MySQL.query.await("SELECT vehicle_id, vehicle_name, category, type, owner_buy_price FROM okokvehicleshop_vehicles") or {}
+            local rows = MySQL.query.await("SELECT vehicle_id, vehicle_name, category, type, price, owner_buy_price FROM okokvehicleshop_vehicles") or {}
             local out = {}
             for _, r in ipairs(rows) do
+                -- Show the sticker price players actually pay so the picker
+                -- reflects what the imported listing will cost.
+                local sticker = tonumber(r.price) or tonumber(r.owner_buy_price) or 0
                 out[#out + 1] = {
                     id = r.vehicle_id,
-                    label = (r.vehicle_name or r.vehicle_id) .. ' — $' .. (r.owner_buy_price or 0),
+                    label = (r.vehicle_name or r.vehicle_id) .. ' — $' .. math.floor(sticker),
                     meta = { class = r.category, type = r.type },
                 }
             end
@@ -168,7 +171,18 @@ function OkokConversionHelpers.catalogEntity()
                 if not r then
                     res.notFound[#res.notFound + 1] = id
                 else
-                    local wholesale = tonumber(r.owner_buy_price) or 50000
+                    -- okok's `price` is the sticker players pay; `owner_buy_price`
+                    -- is the owner's restock cost. Reproduce the player price by
+                    -- back-deriving wholesale from it (pickle re-applies the ×1.3
+                    -- markup on seed/order). Fall back to the owner buy price when
+                    -- no sticker is recorded so the row is never zero-cost.
+                    local sticker = tonumber(r.price)
+                    local wholesale
+                    if sticker and sticker > 0 then
+                        wholesale = math.max(1, math.floor(sticker / 1.3))
+                    else
+                        wholesale = tonumber(r.owner_buy_price) or 50000
+                    end
                     local sql = policy == 'overwrite'
                         and "INSERT INTO pickle_wholesale_catalog (model, label, wholesale, tier, class, vehicle_type) VALUES (?, ?, ?, 'basic', ?, ?) ON DUPLICATE KEY UPDATE wholesale = VALUES(wholesale), label = VALUES(label), class = VALUES(class), vehicle_type = VALUES(vehicle_type)"
                         or  "INSERT IGNORE INTO pickle_wholesale_catalog (model, label, wholesale, tier, class, vehicle_type) VALUES (?, ?, ?, 'basic', ?, ?)"

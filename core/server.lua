@@ -845,43 +845,103 @@ end
 
 -- ─── Permission Checking ─────────────────────────────────────────────────────
 
+-- Privilege ordering so we can compare roles resolved from different sources
+-- (employee roster vs framework job grade) and keep the stronger one.
+local ROLE_RANK = { salesperson = 1, manager = 2, owner = 3 }
+local function RoleRank(role) return ROLE_RANK[role] or 0 end
+
+--- The job grade at or above which an employee counts as a manager. The owner
+--- sets this per-dealership from the Settings tab (stored as
+--- metadata.managerMinGrade). Until they set it, we fall back to the old
+--- half-of-max heuristic so existing dealerships behave exactly as before.
+--- `maxGrade` is the highest grade level in the faction, used to clamp a stale
+--- stored value and to compute the default.
+function ResolveManagerMinGrade(dealership, maxGrade)
+    maxGrade = tonumber(maxGrade) or 0
+    local meta = dealership and dealership.metadata
+    if type(meta) == "string" then meta = json.decode(meta) or {} end
+    local configured = type(meta) == "table" and tonumber(meta.managerMinGrade) or nil
+    if configured then
+        -- Clamp into [1, maxGrade] so a stored value left over from a job whose
+        -- grades later shrank can't accidentally lock everyone to one role.
+        return math.max(1, math.min(maxGrade, math.floor(configured)))
+    end
+    return math.max(1, math.ceil(maxGrade / 2))
+end
+
+--- Maps a player's framework job grade within the dealership's faction to a
+--- dealership role. Mirrors the mapping the client uses to decide whether to
+--- open the menu, so the client gate and the server gates never disagree:
+---   highest grade            → owner (the faction boss always owns the store)
+---   >= configured manager min → manager
+---   anything lower           → salesperson
+--- Returns nil when the dealership isn't job-backed or the player isn't in it.
+local function JobGradeToRole(source, dealership)
+    if not dealership.job or dealership.job == "" then return nil end
+    if GetPlayerJobName(source) ~= dealership.job then return nil end
+    local grade = GetPlayerJobGrade(source) or 0
+    local maxGrade = 0
+    for _, g in ipairs(GetJobGrades(dealership.job) or {}) do
+        if g.level > maxGrade then maxGrade = g.level end
+    end
+    -- The top grade is always the owner so a job-backed store always has someone
+    -- who can reach the owner-only settings (including this very threshold).
+    if grade >= maxGrade then return "owner" end
+    if grade >= ResolveManagerMinGrade(dealership, maxGrade) then return "manager" end
+    return "salesperson"
+end
+
 function GetPlayerDealershipRole(source, dealershipId)
     local source = tonumber(source)
     dealershipId = tonumber(dealershipId)
     if not source or not dealershipId then return nil end
 
-    -- Check if the player is the owner
     local dealership = GetDealership(dealershipId)
     if not dealership then return nil end
 
     local identifier = GetIdentifier(source)
     if not identifier then return nil end
 
-    -- Owner check via dealership table
+    -- A registered owner identifier always wins outright.
     if dealership.owner_identifier == identifier then
         return "owner"
     end
 
-    -- Employee check via pickle_dealership_employees table
+    -- Otherwise resolve from BOTH the employee roster and the framework job
+    -- grade, and keep whichever grants the higher privilege. Resolving only one
+    -- source was the bug behind "the menu opens but everything is denied":
+    -- job-graded staff were invisible to the server gates, and roster-hired
+    -- staff were invisible to the client gate.
+    local best = nil
     local rows = MySQL.query.await(
         "SELECT `role` FROM `pickle_dealership_employees` WHERE `dealership_id` = ? AND `identifier` = ? LIMIT 1",
         { dealershipId, identifier }
     )
+    if rows and rows[1] then best = rows[1].role end
 
-    if rows and rows[1] then
-        return rows[1].role
-    end
+    local jobRole = JobGradeToRole(source, dealership)
+    if jobRole and RoleRank(jobRole) > RoleRank(best) then best = jobRole end
 
-    return nil
+    return best
 end
 
 function CanPlayerManage(source, dealershipId)
-    -- Management rights are strictly limited to the dealership owner and server
-    -- admins. Managers are still employees — they can sell via the sales tablet
-    -- but cannot touch funds, stock ordering, hires, commissions, etc.
+    -- Owner-level rights: money (withdraw/deposit/tier), hiring/firing,
+    -- commissions, and store settings. Managers explicitly do NOT pass this gate
+    -- — they get operational access through CanPlayerManageOps instead.
     if IsPlayerAdmin(source) then return true end
     local role = GetPlayerDealershipRole(source, dealershipId)
     return role == "owner"
+end
+
+function CanPlayerManageOps(source, dealershipId)
+    -- Operational management: the owner plus managers (and admins). Managers run
+    -- day-to-day operations — stock, pricing, coupons, auctions, and viewing the
+    -- dashboard/reports/finances — but cannot touch funds, hires, commissions or
+    -- settings, which stay behind CanPlayerManage.
+    if IsPlayerAdmin(source) then return true end
+    local role = GetPlayerDealershipRole(source, dealershipId)
+    return role == "owner" or role == "manager"
 end
 
 function CanPlayerSell(source, dealershipId)

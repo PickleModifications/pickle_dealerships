@@ -49,19 +49,21 @@ interface NavItem {
   hideForNpc?: boolean
 }
 
-// The management menu is owner/admin only — managers and salespersons are still
-// employees and can sell from the sales tablet, but cannot touch anything in
-// here.
+// Role groups for tab visibility. Managers get day-to-day operations (dashboard,
+// stock, ordering, coupons) plus read-only finances; owner-only tabs cover money
+// withdrawal, hiring, commissions, financing terms and store settings. Every tab
+// is also re-checked server-side, so this only controls what's shown.
 const OWNER_ADMIN: string[] = ['owner', 'admin']
+const OWNER_MANAGER_ADMIN: string[] = ['owner', 'manager', 'admin']
 
 const navItems: NavItem[] = [
-  { id: 'dashboard', labelKey: 'tab_dashboard', icon: <LayoutDashboard className="h-4 w-4" />, minRole: OWNER_ADMIN, hideForNpc: true },
-  { id: 'stock', labelKey: 'tab_stock', icon: <Package className="h-4 w-4" />, minRole: OWNER_ADMIN },
-  { id: 'catalog', labelKey: 'tab_order_vehicles', icon: <Truck className="h-4 w-4" />, minRole: OWNER_ADMIN, hideForNpc: true },
+  { id: 'dashboard', labelKey: 'tab_dashboard', icon: <LayoutDashboard className="h-4 w-4" />, minRole: OWNER_MANAGER_ADMIN, hideForNpc: true },
+  { id: 'stock', labelKey: 'tab_stock', icon: <Package className="h-4 w-4" />, minRole: OWNER_MANAGER_ADMIN },
+  { id: 'catalog', labelKey: 'tab_order_vehicles', icon: <Truck className="h-4 w-4" />, minRole: OWNER_MANAGER_ADMIN, hideForNpc: true },
   { id: 'employees', labelKey: 'tab_employees', icon: <Users className="h-4 w-4" />, minRole: OWNER_ADMIN },
-  { id: 'finances', labelKey: 'tab_finances', icon: <LineChart className="h-4 w-4" />, minRole: OWNER_ADMIN, hideForNpc: true },
+  { id: 'finances', labelKey: 'tab_finances', icon: <LineChart className="h-4 w-4" />, minRole: OWNER_MANAGER_ADMIN, hideForNpc: true },
   { id: 'commission', labelKey: 'tab_commission', icon: <Percent className="h-4 w-4" />, minRole: OWNER_ADMIN },
-  { id: 'coupons', labelKey: 'tab_coupons', icon: <Ticket className="h-4 w-4" />, minRole: OWNER_ADMIN, feature: 'coupons' },
+  { id: 'coupons', labelKey: 'tab_coupons', icon: <Ticket className="h-4 w-4" />, minRole: OWNER_MANAGER_ADMIN, feature: 'coupons' },
   { id: 'financing', labelKey: 'tab_financing', icon: <CreditCard className="h-4 w-4" />, minRole: OWNER_ADMIN },
   { id: 'settings', labelKey: 'tab_settings', icon: <SettingsIcon className="h-4 w-4" />, minRole: OWNER_ADMIN },
 ]
@@ -429,15 +431,22 @@ function CommissionSettings({ dealershipId }: { dealershipId: number }) {
   )
 }
 
+type FactionGrade = { level: number; label?: string }
+
 function DealershipSettings({ dealershipId }: { dealershipId: number }) {
   const [loading, setLoading] = useState(true)
   const [disableSelfPurchase, setDisableSelfPurchase] = useState(false)
+  const [grades, setGrades] = useState<FactionGrade[]>([])
+  const [managerMinGrade, setManagerMinGrade] = useState<number | null>(null)
   const [saving, setSaving] = useState(false)
+  const [savingGrade, setSavingGrade] = useState(false)
 
   useEffect(() => {
-    fetchNui<{ disableSelfPurchase?: boolean } | null>('getDealershipSettings', { dealershipId })
+    fetchNui<{ disableSelfPurchase?: boolean; grades?: FactionGrade[]; managerMinGrade?: number } | null>('getDealershipSettings', { dealershipId })
       .then((res) => {
         setDisableSelfPurchase(res?.disableSelfPurchase === true)
+        setGrades(Array.isArray(res?.grades) ? res!.grades! : [])
+        setManagerMinGrade(typeof res?.managerMinGrade === 'number' ? res!.managerMinGrade! : null)
         setLoading(false)
       })
       .catch(() => setLoading(false))
@@ -451,6 +460,16 @@ function DealershipSettings({ dealershipId }: { dealershipId: number }) {
       .finally(() => setSaving(false))
   }
 
+  const changeManagerGrade = (next: number) => {
+    const prev = managerMinGrade
+    setManagerMinGrade(next)
+    setSavingGrade(true)
+    fetchNui<{ success: boolean }>('setManagerMinGrade', { dealershipId, grade: next })
+      .then((res) => { if (!res?.success) setManagerMinGrade(prev ?? null) })
+      .catch(() => setManagerMinGrade(prev ?? null))
+      .finally(() => setSavingGrade(false))
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-48 text-muted-foreground">
@@ -458,6 +477,9 @@ function DealershipSettings({ dealershipId }: { dealershipId: number }) {
       </div>
     )
   }
+
+  // Grades sorted high→low so the boss (owner) sits at the top of the list.
+  const sortedGrades = [...grades].sort((a, b) => b.level - a.level)
 
   return (
     <ScrollArea className="h-full">
@@ -486,6 +508,27 @@ function DealershipSettings({ dealershipId }: { dealershipId: number }) {
             </div>
           </div>
         </label>
+
+        {sortedGrades.length > 0 && (
+          <div className="rounded-md border border-border p-3">
+            <div className="text-sm font-medium">{t('settings_manager_rank')}</div>
+            <div className="text-xs text-muted-foreground mt-0.5 mb-2">
+              {t('settings_manager_rank_desc')}
+            </div>
+            <select
+              className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm disabled:opacity-50"
+              value={managerMinGrade ?? ''}
+              disabled={savingGrade}
+              onChange={(e) => changeManagerGrade(Number(e.target.value))}
+            >
+              {sortedGrades.map((g) => (
+                <option key={g.level} value={g.level}>
+                  {g.label ? `${g.label} (${g.level})` : `Grade ${g.level}`}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
     </ScrollArea>
   )

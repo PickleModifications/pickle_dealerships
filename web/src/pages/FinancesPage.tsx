@@ -83,7 +83,9 @@ export default function FinancesPage({ data, onClose }: Props) {
     upgrade: 'text-purple-400',
   }
 
-  const canWithdraw = data.role === 'owner' || data.role === 'admin'
+  // Managers can view the finances tab but moving money in or out is owner-only
+  // (the server enforces the same on withdraw/deposit).
+  const canManageFunds = data.role === 'owner' || data.role === 'admin'
 
   return (
     <>
@@ -113,14 +115,16 @@ export default function FinancesPage({ data, onClose }: Props) {
               <p className="text-sm text-muted-foreground">{data.dealershipName}</p>
             </div>
             <div className="flex gap-2">
-              {canWithdraw && (
+              {canManageFunds && (
                 <Button variant="outline" size="sm" className="gap-1" onClick={() => { setWithdrawOpen(true); setAmount('') }}>
                   <ArrowUpRight className="h-4 w-4" /> {t('finances_withdraw')}
                 </Button>
               )}
-              <Button variant="outline" size="sm" className="gap-1" onClick={() => { setDepositOpen(true); setAmount('') }}>
-                <ArrowDownLeft className="h-4 w-4" /> {t('finances_deposit')}
-              </Button>
+              {canManageFunds && (
+                <Button variant="outline" size="sm" className="gap-1" onClick={() => { setDepositOpen(true); setAmount('') }}>
+                  <ArrowDownLeft className="h-4 w-4" /> {t('finances_deposit')}
+                </Button>
+              )}
             </div>
           </div>
           <Separator />
@@ -143,13 +147,11 @@ export default function FinancesPage({ data, onClose }: Props) {
                     </p>
                     <p className="text-3xl font-bold mt-1">{formatCurrency(finances.balance)}</p>
                   </div>
-                  {!data.embedded && (
+                  {!data.embedded && canManageFunds && (
                     <div className="flex gap-2">
-                      {canWithdraw && (
-                        <Button variant="outline" size="sm" className="gap-1" onClick={() => { setWithdrawOpen(true); setAmount('') }}>
-                          <ArrowUpRight className="h-4 w-4" /> {t('finances_withdraw')}
-                        </Button>
-                      )}
+                      <Button variant="outline" size="sm" className="gap-1" onClick={() => { setWithdrawOpen(true); setAmount('') }}>
+                        <ArrowUpRight className="h-4 w-4" /> {t('finances_withdraw')}
+                      </Button>
                       <Button variant="outline" size="sm" className="gap-1" onClick={() => { setDepositOpen(true); setAmount('') }}>
                         <ArrowDownLeft className="h-4 w-4" /> {t('finances_deposit')}
                       </Button>

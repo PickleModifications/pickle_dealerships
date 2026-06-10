@@ -194,6 +194,15 @@ RegisterNUICallback("setDisableSelfPurchase", function(data, cb)
     cb(result or { success = false })
 end)
 
+RegisterNUICallback("setManagerMinGrade", function(data, cb)
+    local result = lib.callback.await("pickle_dealerships:setManagerMinGrade", false, {
+        dealershipId = data.dealershipId,
+        grade = data.grade,
+    })
+    if result and result.message then ShowNotification(result.message) end
+    cb(result or { success = false })
+end)
+
 RegisterNUICallback("setSocietyAllowlist", function(data, cb)
     local result = lib.callback.await("pickle_dealerships:setSocietyAllowlist", false, {
         dealershipId = data.dealershipId,

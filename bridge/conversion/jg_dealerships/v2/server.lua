@@ -40,10 +40,11 @@ local catalogEntity = {
             if not r then
                 res.notFound[#res.notFound + 1] = id
             else
+                -- `price` is jg's sticker price. Back-derive wholesale from it so
+                -- pickle's ×1.3 markup reproduces the same listing on seed/order,
+                -- rather than marking it down to 70%.
                 local price = math.floor(tonumber(r.price) or 0)
-                local minPrice = tonumber(r.min_price)
-                local wholesale = (r.price_limits_enabled == 1 and minPrice) and math.floor(minPrice)
-                    or math.max(1000, math.floor(price * 0.7))
+                local wholesale = math.max(1000, math.floor(price / 1.3))
                 local label = r.model or r.spawn_code
                 if r.brand and r.brand ~= '' then label = r.brand .. ' ' .. label end
                 local class = r.category or 'sedan'
@@ -102,9 +103,12 @@ local stockEntity = {
                         "SELECT label, wholesale FROM pickle_wholesale_catalog WHERE model = ? LIMIT 1",
                         { vehicle }
                     )
-                    local wholesale = (catalogRow and catalogRow.wholesale) or 50000
                     local label = (catalogRow and catalogRow.label) or vehicle
-                    local retail = math.floor(tonumber(r.price) or wholesale * 1.3)
+                    -- The per-dealership stock row carries its own sticker price —
+                    -- preserve it exactly and back-derive wholesale to match, so the
+                    -- imported listing equals what jg charged.
+                    local retail = math.floor(tonumber(r.price) or (catalogRow and catalogRow.wholesale or 50000) * 1.3)
+                    local wholesale = math.max(1, math.floor(retail / 1.3))
                     local qty = math.max(1, tonumber(r.stock) or 1)
                     local newId = MySQL.insert.await(
                         "INSERT INTO pickle_dealership_stock (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, quantity, ordered_at, delivered_at, acquired_from) VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW(), 'jg_v2_import')",

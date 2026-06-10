@@ -18,11 +18,14 @@ local catalogEntity = {
         for _, r in ipairs(rows) do
             local model = r.model and tostring(r.model) or ''
             if model ~= '' then
+                -- ESX's `price` is the sticker players pay; back-derive wholesale
+                -- so pickle's ×1.3 markup reproduces it on seed/order.
                 local price = tonumber(r.price) or 0
+                local wholesale = price > 0 and math.max(1, math.floor(price / 1.3)) or 0
                 out[#out + 1] = {
                     id = model,
                     label = (r.name or model) .. ' — $' .. price,
-                    meta = { class = r.category, type = 'car', wholesale = price },
+                    meta = { class = r.category, type = 'car', wholesale = wholesale },
                 }
             end
         end
@@ -50,10 +53,14 @@ local catalogEntity = {
                 local sql = policy == 'overwrite'
                     and "INSERT INTO pickle_wholesale_catalog (model, label, wholesale, tier, class, vehicle_type) VALUES (?, ?, ?, 'basic', ?, ?) ON DUPLICATE KEY UPDATE wholesale = VALUES(wholesale), label = VALUES(label), class = VALUES(class), vehicle_type = VALUES(vehicle_type)"
                     or  "INSERT IGNORE INTO pickle_wholesale_catalog (model, label, wholesale, tier, class, vehicle_type) VALUES (?, ?, ?, 'basic', ?, ?)"
+                -- Back-derive wholesale from ESX's sticker `price` so pickle's
+                -- ×1.3 markup reproduces the original listing on seed/order.
+                local price = tonumber(r.price) or 0
+                local wholesale = price > 0 and math.max(1, math.floor(price / 1.3)) or 0
                 local affected = MySQL.update.await(sql, {
                     tostring(r.model),
                     prefix .. (r.name or tostring(r.model)),
-                    tonumber(r.price) or 0,
+                    wholesale,
                     r.category or 'sedan',
                     'car',
                 })

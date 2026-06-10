@@ -357,7 +357,7 @@ lib.callback.register('pickle_dealerships:getStock', function(source, locationKe
     -- (managers see everything, customers only see public).
     local scope = opts.scope
     if scope ~= 'manager' and scope ~= 'public' then
-        scope = CanPlayerManage(source, dealership.id) and 'manager' or 'public'
+        scope = CanPlayerManageOps(source, dealership.id) and 'manager' or 'public'
     end
 
     local page = math.max(1, math.floor(tonumber(opts.page) or 1))
@@ -614,17 +614,11 @@ lib.callback.register('pickle_dealerships:orderVehicle', function(source, locati
     )
     if not dealership then return false, 'Dealership not found.' end
 
-    -- Check role
-    local isOwner = dealership.owner_identifier == identifier
-    local employee = nil
-    if not isOwner and not IsPlayerAdmin(source) then
-        employee = MySQL.single.await(
-            'SELECT role FROM pickle_dealership_employees WHERE dealership_id = ? AND identifier = ?',
-            { dealership.id, identifier }
-        )
-        if not employee or employee.role ~= 'manager' then
-            return false, 'You do not have permission to order vehicles.'
-        end
+    -- Owner + managers (by roster OR job grade) may order stock. Resolving via
+    -- the shared gate means job-graded managers aren't locked out the way the
+    -- old roster-only check left them.
+    if not CanPlayerManageOps(source, dealership.id) then
+        return false, 'You do not have permission to order vehicles.'
     end
 
     -- Verify the model is in the DB catalog
@@ -812,16 +806,9 @@ lib.callback.register('pickle_dealerships:setRetailPrice', function(source, loca
     )
     if not dealership then return false, 'Dealership not found.' end
 
-    -- Verify permission
-    local isOwner = dealership.owner_identifier == identifier
-    if not isOwner and not IsPlayerAdmin(source) then
-        local employee = MySQL.single.await(
-            'SELECT role FROM pickle_dealership_employees WHERE dealership_id = ? AND identifier = ?',
-            { dealership.id, identifier }
-        )
-        if not employee or employee.role ~= 'manager' then
-            return false, 'You do not have permission.'
-        end
+    -- Verify permission: owner + managers (roster or job grade).
+    if not CanPlayerManageOps(source, dealership.id) then
+        return false, 'You do not have permission.'
     end
 
     if not retailPrice or retailPrice < 0 then
@@ -859,7 +846,7 @@ lib.callback.register('pickle_dealerships:setStockMinGrade', function(source, lo
         { locationKey }
     )
     if not dealership then return false, 'Dealership not found.' end
-    if not CanPlayerManage(source, dealership.id) then return false, 'You do not have permission.' end
+    if not CanPlayerManageOps(source, dealership.id) then return false, 'You do not have permission.' end
 
     local stock = MySQL.single.await(
         'SELECT id, metadata, vehicle_label FROM pickle_dealership_stock WHERE id = ? AND dealership_id = ? AND sold_at IS NULL',
@@ -897,7 +884,7 @@ lib.callback.register('pickle_dealerships:toggleUnlisted', function(source, loca
         { locationKey }
     )
     if not dealership then return false, 'Dealership not found.' end
-    if not CanPlayerManage(source, dealership.id) then return false, 'You do not have permission.' end
+    if not CanPlayerManageOps(source, dealership.id) then return false, 'You do not have permission.' end
 
     local stock = MySQL.single.await(
         'SELECT id, unlisted, vehicle_label, auction_id FROM pickle_dealership_stock WHERE id = ? AND dealership_id = ? AND sold_at IS NULL',
@@ -967,16 +954,9 @@ lib.callback.register('pickle_dealerships:setDisplaySpot', function(source, loca
     )
     if not dealership then return false, 'Dealership not found.' end
 
-    -- Verify permission
-    local isOwner = dealership.owner_identifier == identifier
-    if not isOwner and not IsPlayerAdmin(source) then
-        local employee = MySQL.single.await(
-            'SELECT role FROM pickle_dealership_employees WHERE dealership_id = ? AND identifier = ?',
-            { dealership.id, identifier }
-        )
-        if not employee or employee.role ~= 'manager' then
-            return false, 'You do not have permission.'
-        end
+    -- Verify permission: owner + managers (roster or job grade).
+    if not CanPlayerManageOps(source, dealership.id) then
+        return false, 'You do not have permission.'
     end
 
     -- Verify stock belongs to this dealership and is delivered
@@ -1043,7 +1023,7 @@ lib.callback.register('pickle_dealerships:setStockColor', function(source, data)
     local dealershipId = tonumber(data and data.dealershipId)
     if not stockId or not dealershipId then return { success = false, message = 'Invalid request.' } end
 
-    if not CanPlayerManage(source, dealershipId) then
+    if not CanPlayerManageOps(source, dealershipId) then
         return { success = false, message = _L('no_permission') }
     end
 
@@ -1124,7 +1104,7 @@ lib.callback.register('pickle_dealerships:getTradeInSuggestion', function(source
 
     local dealership = MySQL.single.await('SELECT id FROM pickle_dealerships WHERE location = ?', { locationKey })
     if not dealership then return nil end
-    if not CanPlayerManage(source, dealership.id) then DenyAccess(source) return nil end
+    if not CanPlayerManageOps(source, dealership.id) then DenyAccess(source) return nil end
 
     local owned = GetOwnedVehicleFromPlate(plate)
     if not owned then return { ownerless = true } end
@@ -1167,7 +1147,7 @@ lib.callback.register('pickle_dealerships:tradeInVehicle', function(source, loca
 
     local dealership = MySQL.single.await('SELECT * FROM pickle_dealerships WHERE location = ?', { locationKey })
     if not dealership then return false, 'Dealership not found.' end
-    if not CanPlayerManage(source, dealership.id) then return false, 'You do not have permission.' end
+    if not CanPlayerManageOps(source, dealership.id) then return false, 'You do not have permission.' end
 
     -- Look up owner + model of the plate from the framework record (server-trusted)
     local owned = GetOwnedVehicleFromPlate(plate)
@@ -1277,7 +1257,7 @@ lib.callback.register('pickle_dealerships:getSeizeDealerships', function(source)
 
     local result = {}
     for _, d in ipairs(dealerships) do
-        if CanPlayerManage(source, d.id) then
+        if CanPlayerManageOps(source, d.id) then
             result[#result + 1] = { id = d.id, name = d.name, location = d.location }
         end
     end
@@ -1299,7 +1279,7 @@ lib.callback.register('pickle_dealerships:seizeVehicle', function(source, data)
     local dealership = MySQL.single.await('SELECT * FROM pickle_dealerships WHERE id = ?', { dealershipId })
     if not dealership then return false, 'Dealership not found.' end
     if not dealership.seize_enabled or dealership.seize_enabled == 0 or dealership.seize_enabled == false then return false, 'Seize mode is not enabled for this dealership.' end
-    if not CanPlayerManage(source, dealership.id) then return false, 'You do not have permission.' end
+    if not CanPlayerManageOps(source, dealership.id) then return false, 'You do not have permission.' end
 
     -- Only player-owned vehicles can be seized. NPC / unregistered vehicles are rejected.
     local owned = GetOwnedVehicleFromPlate(plate)

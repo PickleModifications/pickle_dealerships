@@ -310,9 +310,11 @@ function OpenManagementMenu(locationKey)
         end
     end
 
-    -- Only owners and admins may open the management menu. Managers/salespersons
-    -- are employees — they sell via the sales tablet but have no management rights.
-    if role ~= 'owner' and role ~= 'admin' then
+    -- Owners, managers and admins may open the management menu. Salespersons are
+    -- sell-only (they use the sales tablet), so they're still turned away here.
+    -- The tabs/actions a manager actually sees are gated per-role in the NUI and
+    -- re-checked server-side on every callback.
+    if role ~= 'owner' and role ~= 'manager' and role ~= 'admin' then
         ShowNotification(_L("no_permission"))
         return
     end

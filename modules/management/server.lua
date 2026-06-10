@@ -1,6 +1,8 @@
 --- Get dealership financial overview
 lib.callback.register("pickle_dealerships:getDealershipFinances", function(source, dealershipId)
-    if not CanPlayerManage(source, dealershipId) then
+    -- Read-only finances overview: owner + managers may view the balance/ledger.
+    -- Withdraw/deposit/tier remain owner-only (see those callbacks below).
+    if not CanPlayerManageOps(source, dealershipId) then
         DenyAccess(source)
         return nil
     end
@@ -185,7 +187,7 @@ end)
 lib.callback.register("pickle_dealerships:createCoupon", function(source, data)
     local dealershipId = data.dealershipId
 
-    if not CanPlayerManage(source, dealershipId) then
+    if not CanPlayerManageOps(source, dealershipId) then
         return { success = false, message = "You do not have permission to create coupons." }
     end
 
@@ -235,7 +237,7 @@ lib.callback.register("pickle_dealerships:deleteCoupon", function(source, data)
     local dealershipId = data.dealershipId
     local couponId = data.couponId
 
-    if not CanPlayerManage(source, dealershipId) then
+    if not CanPlayerManageOps(source, dealershipId) then
         return { success = false, message = "You do not have permission to delete coupons." }
     end
 
@@ -261,7 +263,7 @@ lib.callback.register("pickle_dealerships:printCoupon", function(source, data)
     if not dealershipId or not couponId then
         return { success = false, message = "Invalid request." }
     end
-    if not CanPlayerManage(source, dealershipId) then
+    if not CanPlayerManageOps(source, dealershipId) then
         return { success = false, message = _L("no_permission") }
     end
     if not Config or type(Config.CouponItem) ~= 'string' or Config.CouponItem == '' then
@@ -348,7 +350,7 @@ end)
 
 --- Get all coupons for a dealership
 lib.callback.register("pickle_dealerships:getCoupons", function(source, dealershipId)
-    if not CanPlayerManage(source, dealershipId) then
+    if not CanPlayerManageOps(source, dealershipId) then
         DenyAccess(source)
         return nil
     end
@@ -449,7 +451,9 @@ end)
 --- job definition) and the saved rate table keyed by numeric grade. Dealerships with no job
 --- configured return an empty grades list and rely solely on Config.DefaultCommission.
 lib.callback.register("pickle_dealerships:getCommissionRates", function(source, dealershipId)
-    if not CanPlayerManage(source, dealershipId) then
+    -- Read-only: owner + managers may view rates (the Stock min-grade editor
+    -- needs the faction grade list). Editing rates stays owner-only below.
+    if not CanPlayerManageOps(source, dealershipId) then
         DenyAccess(source)
         return nil
     end
@@ -612,9 +616,54 @@ lib.callback.register("pickle_dealerships:getDealershipSettings", function(sourc
     if type(meta) == "string" then meta = json.decode(meta) or {} end
     if type(meta) ~= "table" then meta = {} end
 
+    -- Job grade list (mirrors exactly what JobGradeToRole reads) so the owner can
+    -- pick which rank becomes a manager. Empty for non-job dealerships, in which
+    -- case the NUI hides the selector.
+    local grades = (dealership.job and dealership.job ~= "" and GetJobGrades and GetJobGrades(dealership.job)) or {}
+    local maxGrade = 0
+    for _, g in ipairs(grades) do if g.level > maxGrade then maxGrade = g.level end end
+
     return {
         disableSelfPurchase = meta.disableSelfPurchase == true,
+        job = dealership.job or nil,
+        grades = grades,                                          -- [{ level, label }, ...]
+        managerMinGrade = ResolveManagerMinGrade(dealership, maxGrade),
+        maxGrade = maxGrade,
     }
+end)
+
+--- Owner-only: set the job grade at/above which an employee is treated as a
+--- manager (and below which they're a salesperson). The top grade always
+--- remains the owner. Stored in metadata.managerMinGrade.
+lib.callback.register("pickle_dealerships:setManagerMinGrade", function(source, data)
+    local dealershipId = data and data.dealershipId
+    if not dealershipId then return { success = false, message = "Invalid request." } end
+    if not CanPlayerManage(source, dealershipId) then
+        return { success = false, message = _L("no_permission") }
+    end
+
+    local dealership = GetDealership(dealershipId)
+    if not dealership then return { success = false, message = "Dealership not found." } end
+
+    local grades = (dealership.job and dealership.job ~= "" and GetJobGrades and GetJobGrades(dealership.job)) or {}
+    local maxGrade = 0
+    for _, g in ipairs(grades) do if g.level > maxGrade then maxGrade = g.level end end
+
+    local grade = math.floor(tonumber(data.grade) or 0)
+    if maxGrade <= 0 or grade < 1 or grade > maxGrade then
+        return { success = false, message = _L("settings_invalid_grade") }
+    end
+
+    local meta = dealership.metadata
+    if type(meta) == "string" then meta = json.decode(meta) or {} end
+    if type(meta) ~= "table" then meta = {} end
+
+    meta.managerMinGrade = grade
+
+    MySQL.update.await("UPDATE pickle_dealerships SET metadata = ? WHERE id = ?", { json.encode(meta), dealershipId })
+    UpdateDealershipCache(dealershipId, { metadata = meta })
+
+    return { success = true, message = _L("settings_updated") }
 end)
 
 lib.callback.register("pickle_dealerships:setDisableSelfPurchase", function(source, data)
@@ -796,7 +845,7 @@ end)
 
 --- Get comprehensive dashboard stats
 lib.callback.register("pickle_dealerships:getDashboardStats", function(source, dealershipId)
-    if not CanPlayerManage(source, dealershipId) then
+    if not CanPlayerManageOps(source, dealershipId) then
         DenyAccess(source)
         return nil
     end
@@ -908,7 +957,7 @@ lib.callback.register("pickle_dealerships:getRevenueReport", function(source, da
     if days > 90 then days = 90 end
 
     if not dealershipId then return nil end
-    if not CanPlayerManage(source, dealershipId) then DenyAccess(source) return nil end
+    if not CanPlayerManageOps(source, dealershipId) then DenyAccess(source) return nil end
 
     -- Bucket sales by UTC date for the last N days. Days with no sales get a
     -- zero row via the client-side fill; we only return actual data here to

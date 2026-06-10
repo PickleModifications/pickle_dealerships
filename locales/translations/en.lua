@@ -482,6 +482,10 @@ Language["en"] = {
     settings_updated = "Settings updated.",
     settings_disable_self_purchase = "Disable self-purchase",
     settings_disable_self_purchase_desc = "Customers can't buy from the kiosk or showroom UI. They must speak to an employee, who completes the sale via the tablet.",
+    settings_manager_rank = "Manager rank",
+    settings_manager_rank_desc = "Employees at this job rank and above get manager access (stock, ordering, coupons, dashboard). Lower ranks are sell-only salespeople. The top rank is always the owner.",
+    settings_manager_rank_na = "This dealership isn't tied to a job, so manager access is set per-employee instead.",
+    settings_invalid_grade = "That rank doesn't exist for this job.",
     sales_speak_to_employee = "Speak to an employee on the lot to purchase this vehicle.",
     error_self_purchase_disabled = "Customers can't self-purchase here. Speak to an employee.",
 
