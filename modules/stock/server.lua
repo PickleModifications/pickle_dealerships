@@ -266,7 +266,7 @@ local function buildStockSummary(dealership, scope)
         or  ''
 
     local newCount = MySQL.scalar.await(
-        ('SELECT COUNT(*) FROM (SELECT 1 FROM pickle_dealership_stock ds LEFT JOIN pickle_wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.is_used = 0 %s GROUP BY ds.vehicle_model, ds.retail_price) sub'):format(scopePredicate),
+        ('SELECT COUNT(*) FROM (SELECT 1 FROM pickle_dealership_stock ds LEFT JOIN pickle_wholesale_catalog wc ON wc.model = ds.vehicle_model WHERE ds.dealership_id = ? AND ds.sold_at IS NULL AND ds.is_used = 0 %s GROUP BY ds.dealership_id, ds.vehicle_model, ds.retail_price) sub'):format(scopePredicate),
         { dealership.id }
     ) or 0
 
@@ -1305,8 +1305,16 @@ lib.callback.register('pickle_dealerships:seizeVehicle', function(source, data)
     local engine = tonumber(props.engineHealth) or 1000
     local condition = math.max(0, math.min(100, ((body + engine) / 2) / 10))
 
-    local catalog = MySQL.single.await('SELECT label FROM pickle_wholesale_catalog WHERE model = ?', { model })
+    local catalog = MySQL.single.await('SELECT label, wholesale FROM pickle_wholesale_catalog WHERE model = ?', { model })
     local label = (catalog and catalog.label) or (data.label and data.label ~= '' and data.label) or model
+
+    -- Derive a default wholesale/retail from the catalog so seized vehicles
+    -- don't appear with $0 prices in the manager's Used tab. If the model
+    -- is not in the catalog both values stay 0 and a manager must set them
+    -- before listing the vehicle.
+    local catalogWholesale = (catalog and tonumber(catalog.wholesale)) or 0
+    local seizeWholesale   = catalogWholesale
+    local seizeRetail      = (catalogWholesale > 0) and math.floor(catalogWholesale * 1.3) or 0
 
     -- Remove ownership if the vehicle is registered
     local previousOwner = nil
@@ -1335,11 +1343,13 @@ lib.callback.register('pickle_dealerships:seizeVehicle', function(source, data)
         end
     end
 
-    -- Insert as unlisted pre-owned stock (no cost to dealership)
+    -- Insert as unlisted pre-owned stock (no cost to dealership).
+    -- wholesale_cost and retail_price are seeded from the catalog so managers
+    -- see a sensible starting price rather than $0 in the Used tab.
     local stockId = MySQL.insert.await(
-        'INSERT INTO pickle_dealership_stock (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, ordered_at, delivered_at, quantity, is_used, unlisted, metadata, plate, acquired_from, `condition`) VALUES (?, ?, ?, 0, 0, NOW(), NOW(), 1, 1, 1, ?, ?, ?, ?)',
+        'INSERT INTO pickle_dealership_stock (dealership_id, vehicle_model, vehicle_label, wholesale_cost, retail_price, ordered_at, delivered_at, quantity, is_used, unlisted, metadata, plate, acquired_from, `condition`) VALUES (?, ?, ?, ?, ?, NOW(), NOW(), 1, 1, 1, ?, ?, ?, ?)',
         {
-            dealership.id, model, label,
+            dealership.id, model, label, seizeWholesale, seizeRetail,
             json.encode(props), plate, previousOwner or 'seized', condition,
         }
     )
