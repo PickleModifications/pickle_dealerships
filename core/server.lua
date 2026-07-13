@@ -319,6 +319,15 @@ CreateThread(function()
             ADD COLUMN IF NOT EXISTS `payment_method` VARCHAR(16) NOT NULL DEFAULT 'bank'
         ]])
 
+        -- Older installs already have pickle_dealership_stock without the
+        -- `quantity` column that was added later. DEFAULT 1 gives every
+        -- existing row a sane unit count so SUM(ds.quantity) reads correctly
+        -- instead of returning NULL and showing 0's in the NUI stock list.
+        MySQL.Async.execute([[
+            ALTER TABLE `pickle_dealership_stock`
+            ADD COLUMN IF NOT EXISTS `quantity` INT UNSIGNED NOT NULL DEFAULT 1
+        ]])
+
         -- Catalog Groups: many-to-many replacement for the rigid tier hierarchy.
         -- A vehicle can live in any number of groups; a dealership can be assigned
         -- to any number of groups; a vehicle appears in a dealership's catalog
