@@ -1154,6 +1154,12 @@ lib.callback.register('pickle_dealerships:tradeInVehicle', function(source, loca
     if not owned or not owned.owner then return false, 'This vehicle is not registered to anyone.' end
     local sellerIdentifier = owned.owner
     local model = owned.model
+    -- Fall back to the client-supplied model name (resolved from the entity hash)
+    -- when the framework bridge didn't persist a model string in the DB record.
+    -- This mirrors the identical fallback in seizeVehicle (lines ~1292-1296).
+    if (not model or model == '') and payload.modelName and payload.modelName ~= '' then
+        model = tostring(payload.modelName):lower()
+    end
     if not model then return false, 'Could not resolve vehicle model.' end
 
     -- Require consent from the online owner before taking their vehicle

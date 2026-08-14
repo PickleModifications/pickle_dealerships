@@ -778,12 +778,19 @@ local function StartTradeIn(vehicle)
     -- which is why traded-in cars kept lingering on the street.
     local netId = NetworkGetNetworkIdFromEntity(vehicle)
 
+    -- Resolve the model name client-side from the entity hash so the server has
+    -- a fallback when the framework database record doesn't store the model name
+    -- (mirrors the same pattern used by seizeVehicle).
+    local modelHash = GetEntityModel(vehicle)
+    local modelName = tostring(GetDisplayNameFromVehicleModel(modelHash)):lower()
+
     local ok, err = lib.callback.await('pickle_dealerships:tradeInVehicle', false, currentDealership, {
         plate = plate,
         properties = properties,
         buyPrice = buyPrice,
         retailPrice = retailPrice,
         netId = netId,
+        modelName = modelName,
     })
     if not ok then
         ShowNotification(err or _L('trade_in_failed'))
