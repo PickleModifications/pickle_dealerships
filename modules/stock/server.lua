@@ -94,6 +94,27 @@ lib.callback.register('pickle_dealerships:getCatalog', function(source, data)
     }
 end)
 
+--- Returns the catalog groups assigned to a dealership so the catalog page can
+--- offer a group filter. Available to any player (no admin check needed) because
+--- the catalog itself is already player-accessible.
+lib.callback.register('pickle_dealerships:getCatalogGroups', function(source, locationKey)
+    if not locationKey then return {} end
+    local dealership = MySQL.single.await(
+        'SELECT id FROM pickle_dealerships WHERE location = ?',
+        { locationKey }
+    )
+    if not dealership then return {} end
+
+    local rows = MySQL.query.await([[
+        SELECT g.id, g.name, g.label
+        FROM pickle_catalog_groups g
+        JOIN pickle_dealership_groups dg ON dg.group_id = g.id
+        WHERE dg.dealership_id = ?
+        ORDER BY g.label ASC
+    ]], { dealership.id }) or {}
+    return rows
+end)
+
 -- ─── In-transit + orders summary ───────────────────────────────────────────
 --
 -- The "in-transit" cards rendered above the available grid in StockPage come
