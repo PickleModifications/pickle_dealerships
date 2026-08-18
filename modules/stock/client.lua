@@ -531,8 +531,16 @@ RegisterNUICallback("getCatalog", function(data, cb)
         search = data.search or '',
         classFilter = data.classFilter or 'all',
         tierFilter = data.tierFilter or 'all',
+        groupFilter = data.groupFilter,
     })
     cb(result or { items = {}, total = 0, page = 1, pageSize = 50 })
+end)
+
+RegisterNUICallback("getCatalogGroups", function(data, cb)
+    local location = ResolveLocation(data)
+    if not location then cb({}) return end
+    local rows = lib.callback.await('pickle_dealerships:getCatalogGroups', false, location)
+    cb(rows or {})
 end)
 
 RegisterNUICallback("orderVehicle", function(data, cb)

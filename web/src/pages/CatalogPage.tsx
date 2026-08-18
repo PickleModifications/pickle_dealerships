@@ -13,6 +13,12 @@ import { X, Search, ShoppingCart, Truck, Lock, Loader2, Car, SlidersHorizontal }
 import VehicleImg from '../components/VehicleImg'
 import type { DealershipData, CatalogItem } from '../types'
 
+interface CatalogGroup {
+  id: number
+  name: string
+  label: string
+}
+
 interface Props {
   data: DealershipData
   onClose: () => void
@@ -39,6 +45,8 @@ export default function CatalogPage({ data, onClose }: Props) {
   const [page, setPage] = useState(1)
   const [search, setSearch] = useState('')
   const [classFilter, setClassFilter] = useState('all')
+  const [groupFilter, setGroupFilter] = useState<number | null>(null)
+  const [catalogGroups, setCatalogGroups] = useState<CatalogGroup[]>([])
   // tierFilter retired with the tier system; group filtering lives admin-side.
   // Keeping the plumbing as a no-op constant means the existing fetchPage
   // signature and cache-key rules don't need to change.
@@ -59,7 +67,7 @@ export default function CatalogPage({ data, onClose }: Props) {
 
   const hasMore = items.length < total
 
-  const fetchPage = useCallback((p: number, s: string, cf: string, tf: string, append: boolean) => {
+  const fetchPage = useCallback((p: number, s: string, cf: string, tf: string, gf: number | null, append: boolean) => {
     if (append) {
       setLoadingMore(true)
     } else {
@@ -74,12 +82,13 @@ export default function CatalogPage({ data, onClose }: Props) {
       search: s,
       classFilter: cf,
       tierFilter: tf,
+      groupFilter: gf ?? undefined,
     }).then((res) => {
       const loadedItems = res && Array.isArray(res.items) ? res.items : []
       setItems(prev => append ? [...prev, ...loadedItems] : loadedItems)
       setTotal(res?.total ?? 0)
       setPage(res?.page ?? 1)
-      if (p === 1 && s === '' && cf === 'all' && tf === 'all') {
+      if (p === 1 && s === '' && cf === 'all' && tf === 'all' && gf === null) {
         setClasses([...new Set(loadedItems.map((v) => v.class))].sort())
       }
       setLoading(false)
@@ -87,21 +96,31 @@ export default function CatalogPage({ data, onClose }: Props) {
     }).catch(() => { setLoading(false); setLoadingMore(false) })
   }, [data.dealershipId, data.location, data.type])
 
-  useEffect(() => { fetchPage(1, '', 'all', 'all', false) }, [data.dealershipId])
+  useEffect(() => {
+    fetchPage(1, '', 'all', 'all', null, false)
+    fetchNui<CatalogGroup[]>('getCatalogGroups', { location: data.location }).then((rows) => {
+      setCatalogGroups(Array.isArray(rows) ? rows : [])
+    }).catch(() => {})
+  }, [data.dealershipId])
 
   const handleSearchChange = (value: string) => {
     setSearch(value)
     clearTimeout(searchTimer.current)
     searchTimer.current = setTimeout(() => {
-      fetchPage(1, value, classFilter, tierFilter, false)
+      fetchPage(1, value, classFilter, tierFilter, groupFilter, false)
     }, 300)
   }
 
-  const activeFilterCount = classFilter !== 'all' ? 1 : 0
+  const activeFilterCount = (classFilter !== 'all' ? 1 : 0) + (groupFilter !== null ? 1 : 0)
 
   const handleClassChange = (value: string) => {
     setClassFilter(value)
-    fetchPage(1, search, value, tierFilter, false)
+    fetchPage(1, search, value, tierFilter, groupFilter, false)
+  }
+
+  const handleGroupChange = (value: number | null) => {
+    setGroupFilter(value)
+    fetchPage(1, search, classFilter, tierFilter, value, false)
   }
 
   // handleTierChange removed with the tier selector in the filter bar.
@@ -120,7 +139,7 @@ export default function CatalogPage({ data, onClose }: Props) {
       if (!lastRow) return
       const lastItemIndex = (lastRow.index + 1) * COLUMNS
       if (lastItemIndex >= items.length - 10 && hasMore && !loadingMore) {
-        fetchPage(page + 1, search, classFilter, tierFilter, true)
+        fetchPage(page + 1, search, classFilter, tierFilter, groupFilter, true)
       }
     },
   })
@@ -194,6 +213,17 @@ export default function CatalogPage({ data, onClose }: Props) {
                 <button onClick={() => handleClassChange('all')} className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${classFilter === 'all' ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>{t('label_all')}</button>
                 {classes.map((c) => (
                   <button key={c} onClick={() => handleClassChange(c)} className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${classFilter === c ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>{formatClass(c)}</button>
+                ))}
+              </div>
+            </div>
+          )}
+          {catalogGroups.length > 1 && (
+            <div className="flex-1 min-w-[140px]">
+              <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">{t('label_group') || 'Group'}</p>
+              <div className="flex flex-wrap gap-1">
+                <button onClick={() => handleGroupChange(null)} className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${groupFilter === null ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>{t('label_all')}</button>
+                {catalogGroups.map((g) => (
+                  <button key={g.id} onClick={() => handleGroupChange(g.id)} className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${groupFilter === g.id ? 'bg-accent text-accent-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}>{g.label}</button>
                 ))}
               </div>
             </div>
